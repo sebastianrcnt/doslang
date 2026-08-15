@@ -1,50 +1,473 @@
 #include "types.h"
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
+{
+    FeType *t;
+    unsigned i;
+    t = (FeType *)fe_arena_alloc(ctx->arena, sizeof(FeType));
+    if (!t) return 0;
+    for (i = 0; i + 1U < sizeof(t->name) && name && name[i]; ++i)
+        t->name[i] = name[i];
+    t->name[i] = '\0';
+    t->kind = kind;
+    t->cname = 0;
+    t->maker = 0;
+    t->indexer = 0;
+    t->slicer = 0;
+    t->full_slicer = 0;
+    t->tail_slicer = 0;
+    t->bits = 0;
+    t->is_unsigned = 0;
+    t->packed = 0;
+    t->length = 0;
+    t->size = 0;
+    t->align = 1;
+    t->elem = 0;
+    t->ref_mut = 0;
+    t->fields = 0;
+    t->field_count = 0;
+    t->variants = 0;
+    t->variant_count = 0;
+    t->next = ctx->types;
+    t->emit_state = 0;
+    t->cycle_state = 0;
+    ctx->types = t;
+    return t;
+}
 
 void fe_types_init(FeTypeCtx *ctx, FeArena *arena, unsigned pointer_bits)
-{ ctx->arena=arena; ctx->types=0; ctx->pointer_bits=pointer_bits; }
+{
+    ctx->arena = arena;
+    ctx->types = 0;
+    ctx->pointer_bits = pointer_bits;
+    ctx->unit_name = "unit";
+    ctx->generated_serial = 0;
+}
 
 FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
 {
-    FeType *t; unsigned i; unsigned bits=0; int uns=0; FeTypeKind kind=FE_TYPE_UNKNOWN;
-    if (!name) name="<unknown>";
-    for (t=ctx->types;t;t=t->next) if(strcmp(t->name,name)==0) return t;
-    if(strcmp(name,"void")==0) kind=FE_TYPE_VOID;
-    else if(strcmp(name,"bool")==0) kind=FE_TYPE_BOOL;
-    else if(strcmp(name,"i8")==0||strcmp(name,"u8")==0){kind=FE_TYPE_INT;bits=8;uns=name[0]=='u';}
-    else if(strcmp(name,"i16")==0||strcmp(name,"u16")==0){kind=FE_TYPE_INT;bits=16;uns=name[0]=='u';}
-    else if(strcmp(name,"i32")==0||strcmp(name,"u32")==0){kind=FE_TYPE_INT;bits=32;uns=name[0]=='u';}
-    else if(strcmp(name,"usize")==0||strcmp(name,"isize")==0){kind=FE_TYPE_INT;bits=ctx->pointer_bits;uns=name[0]=='u';}
-    t=(FeType *)fe_arena_alloc(ctx->arena,sizeof(FeType)); if(!t)return 0;
-    for(i=0;i<sizeof(t->name)-1 && name[i];i++) t->name[i]=name[i];
-    t->name[i]='\0';
-    t->kind=kind;t->bits=bits;t->is_unsigned=uns;t->next=ctx->types;ctx->types=t;return t;
+    FeType *t;
+    unsigned bits = 0;
+    int uns = 0;
+    FeTypeKind kind = FE_TYPE_UNKNOWN;
+    if (!name) name = "<unknown>";
+    for (t = ctx->types; t; t = t->next)
+        if (strcmp(t->name, name) == 0) return t;
+    if (strcmp(name, "void") == 0) kind = FE_TYPE_VOID;
+    else if (strcmp(name, "bool") == 0) kind = FE_TYPE_BOOL;
+    else if (strcmp(name, "char") == 0) kind = FE_TYPE_CHAR;
+    else if (strcmp(name, "str") == 0) kind = FE_TYPE_STR;
+    else if (strcmp(name, "i8") == 0 || strcmp(name, "u8") == 0) {
+        kind = FE_TYPE_INT; bits = 8; uns = name[0] == 'u';
+    } else if (strcmp(name, "i16") == 0 || strcmp(name, "u16") == 0) {
+        kind = FE_TYPE_INT; bits = 16; uns = name[0] == 'u';
+    } else if (strcmp(name, "i32") == 0 || strcmp(name, "u32") == 0) {
+        kind = FE_TYPE_INT; bits = 32; uns = name[0] == 'u';
+    } else if (strcmp(name, "usize") == 0 || strcmp(name, "isize") == 0) {
+        kind = FE_TYPE_INT; bits = ctx->pointer_bits; uns = name[0] == 'u';
+    }
+    t = new_type(ctx, name, kind);
+    if (!t) return 0;
+    t->bits = bits;
+    t->is_unsigned = uns;
+    if (kind == FE_TYPE_STR) {
+        t->cname = fe_arena_strdup(ctx->arena, "fe_str", 6);
+        t->elem = fe_type_intern(ctx, "u8");
+        t->indexer = "fe_idx_str";
+        t->slicer = "fe_slice_str";
+        t->full_slicer = "fe_full_slice_str";
+        t->tail_slicer = "fe_tail_slice_str";
+    }
+    return t;
+}
+
+static char *generated_name(FeTypeCtx *ctx, const char *prefix,
+                            const char *name)
+{
+    char number[24];
+    unsigned long n;
+    char *p;
+    sprintf(number, "%u", ctx->generated_serial++);
+    n = (unsigned long)strlen(prefix) + (unsigned long)strlen(name) +
+        (unsigned long)strlen(number) + 2UL;
+    p = (char *)fe_arena_alloc(ctx->arena, n);
+    if (!p) return 0;
+    strcpy(p, prefix);
+    strcat(p, name);
+    strcat(p, "_");
+    strcat(p, number);
+    return p;
+}
+
+FeType *fe_type_array(FeTypeCtx *ctx, unsigned long length, FeType *elem)
+{
+    char key[96];
+    FeType *t;
+    sprintf(key, "[%lu]%s", length, elem ? elem->name : "?");
+    t = fe_type_intern(ctx, key);
+    if (t->kind == FE_TYPE_UNKNOWN) {
+        t->kind = FE_TYPE_ARRAY;
+        t->length = length;
+        t->elem = elem;
+        t->cname = generated_name(ctx, "struct fe_arr_", "type");
+        t->maker = generated_name(ctx, "fe_make_arr_", "type");
+        t->indexer = generated_name(ctx, "fe_idx_arr_", "type");
+        t->slicer = generated_name(ctx, "fe_slice_arr_", "type");
+        t->full_slicer = generated_name(ctx, "fe_full_arr_", "type");
+        t->tail_slicer = generated_name(ctx, "fe_tail_arr_", "type");
+    }
+    return t;
+}
+
+FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem)
+{
+    char key[96];
+    FeType *t;
+    sprintf(key, "[]%s", elem ? elem->name : "?");
+    t = fe_type_intern(ctx, key);
+    if (t->kind == FE_TYPE_UNKNOWN) {
+        t->kind = FE_TYPE_SLICE;
+        t->elem = elem;
+        t->cname = generated_name(ctx, "fe_slice_", "type");
+        t->maker = generated_name(ctx, "fe_make_slice_", "type");
+        t->indexer = generated_name(ctx, "fe_idx_slice_", "type");
+        t->slicer = generated_name(ctx, "fe_slice_slice_", "type");
+        t->full_slicer = generated_name(ctx, "fe_full_slice_", "type");
+        t->tail_slicer = generated_name(ctx, "fe_tail_slice_", "type");
+    }
+    return t;
+}
+
+FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable)
+{
+    char key[128];
+    FeType *t;
+    sprintf(key,"%s%s",mutable ? "&mut " : "&",elem ? elem->name : "?");
+    t=fe_type_intern(ctx,key);
+    if(t->kind==FE_TYPE_UNKNOWN) {
+        t->kind=FE_TYPE_REF;
+        t->elem=elem;
+        t->ref_mut=mutable;
+    }
+    return t;
+}
+
+FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed)
+{
+    FeType *t;
+    FeNode *f;
+    unsigned count = 0;
+    unsigned i = 0;
+    char *cname;
+    if (!node || !node->text) return 0;
+    t = fe_type_intern(ctx, node->text);
+    if (t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_STRUCT) return t;
+    if (t->kind == FE_TYPE_STRUCT) return t;
+    t->kind = FE_TYPE_STRUCT;
+    t->packed = packed;
+    cname = (char *)fe_arena_alloc(ctx->arena,
+        (unsigned long)strlen("struct fe_") + strlen(ctx->unit_name) +
+        strlen(node->text) + 2UL);
+    if (!cname) return t;
+    strcpy(cname, "struct fe_");
+    strcat(cname, ctx->unit_name);
+    strcat(cname, "_");
+    strcat(cname, node->text);
+    t->cname = cname;
+    t->maker = generated_name(ctx, "fe_make_", node->text);
+    for (f = node->children; f; f = f->next)
+        if (f->kind == FE_N_FIELD) ++count;
+    t->field_count = count;
+    if (count) {
+        t->fields = (FeFieldType *)fe_arena_alloc(ctx->arena,
+                                                  count * sizeof(FeFieldType));
+        if (!t->fields) return t;
+        for (f = node->children; f; f = f->next) if (f->kind == FE_N_FIELD) {
+            t->fields[i].name = f->text;
+            t->fields[i].type = 0;
+            t->fields[i].offset = 0;
+            t->fields[i].ast_node = f;
+            ++i;
+        }
+    }
+    return t;
+}
+
+FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node)
+{
+    FeType *t;
+    FeNode *v;
+    unsigned count = 0;
+    unsigned i = 0;
+    char *cname;
+    if (!node || !node->text) return 0;
+    t = fe_type_intern(ctx, node->text);
+    if (t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_ENUM) return t;
+    if (t->kind == FE_TYPE_ENUM) return t;
+    t->kind = FE_TYPE_ENUM;
+    cname = (char *)fe_arena_alloc(ctx->arena,
+        (unsigned long)strlen("struct fe_") + strlen(ctx->unit_name) +
+        strlen(node->text) + 2UL);
+    if (!cname) return t;
+    strcpy(cname, "struct fe_");
+    strcat(cname, ctx->unit_name);
+    strcat(cname, "_");
+    strcat(cname, node->text);
+    t->cname = cname;
+    for (v = node->children; v; v = v->next) ++count;
+    t->variant_count = count;
+    if (count) {
+        t->variants = (FeVariantType *)fe_arena_alloc(ctx->arena,
+                                      count * sizeof(FeVariantType));
+        if (!t->variants) return t;
+        for (v = node->children; v; v = v->next) {
+            t->variants[i].name = v->text;
+            t->variants[i].fields = 0;
+            t->variants[i].field_count = 0;
+            t->variants[i].tag = i;
+            t->variants[i].ast_node = v;
+            t->variants[i].maker = generated_name(ctx, "fe_make_variant_", v->text ? v->text : "variant");
+            if (v->a && v->a->kind == FE_N_TYPE) {
+                t->variants[i].field_count = 1;
+                t->variants[i].fields = (FeFieldType *)fe_arena_alloc(ctx->arena, sizeof(FeFieldType));
+                if (t->variants[i].fields) {
+                    t->variants[i].fields[0].name = "value";
+                    t->variants[i].fields[0].type = fe_type_from_ast(ctx, v->a);
+                    t->variants[i].fields[0].offset = 0;
+                    t->variants[i].fields[0].ast_node = v;
+                }
+            }
+            if (!v->a) {
+                FeNode *f;
+                unsigned fc = 0;
+                unsigned j = 0;
+                for (f = v->children; f; f = f->next)
+                    if (f->kind == FE_N_FIELD) ++fc;
+                t->variants[i].field_count = fc;
+                if (fc) {
+                    t->variants[i].fields = (FeFieldType *)fe_arena_alloc(
+                        ctx->arena, fc * sizeof(FeFieldType));
+                    if (t->variants[i].fields) for (f = v->children; f; f = f->next)
+                        if (f->kind == FE_N_FIELD) {
+                            t->variants[i].fields[j].name = f->text;
+                            t->variants[i].fields[j].type = 0;
+                            t->variants[i].fields[j].offset = 0;
+                            t->variants[i].fields[j].ast_node = f;
+                            ++j;
+                        }
+                }
+            }
+            ++i;
+        }
+    }
+    return t;
+}
+
+static unsigned long round_up(unsigned long x, unsigned a)
+{
+    unsigned long rem;
+    if (a <= 1U) return x;
+    rem = x % (unsigned long)a;
+    return rem ? x + (unsigned long)a - rem : x;
+}
+
+unsigned long fe_type_size(const FeType *t)
+{
+    return t ? t->size : 0;
+}
+
+unsigned fe_type_align(const FeType *t)
+{
+    return t && t->align ? t->align : 1U;
+}
+
+static void layout_type(FeTypeCtx *ctx, FeType *t)
+{
+    unsigned i;
+    unsigned align;
+    unsigned long off;
+    unsigned long max_size;
+    unsigned max_align;
+    if (!t || t->size) return;
+    if (t->cycle_state == 1) {
+        /* The checker reports this as an invalid by-value cycle.  Give the
+           layout walk a sentinel size so error recovery cannot recurse. */
+        t->size = 1;
+        t->align = 1;
+        return;
+    }
+    t->cycle_state = 1;
+    if (t->kind == FE_TYPE_VOID || t->kind == FE_TYPE_UNKNOWN ||
+        t->kind == FE_TYPE_ERROR) { t->size = 0; t->align = 1; t->cycle_state = 2; return; }
+    if (t->kind == FE_TYPE_BOOL || t->kind == FE_TYPE_CHAR) {
+        t->size = 1; t->align = 1; t->cycle_state = 2; return;
+    }
+    if (t->kind == FE_TYPE_INT) {
+        t->size = (t->bits + 7U) / 8U;
+        t->align = ctx->pointer_bits == 16 ? 1U : t->size;
+        if (t->size > 4UL) t->size = ctx->pointer_bits == 16 ? 2UL : 4UL;
+        t->cycle_state = 2; return;
+    }
+    if (t->kind == FE_TYPE_REF) {
+        t->size = ctx->pointer_bits == 16 ? 2UL : 4UL;
+        t->align = ctx->pointer_bits == 16 ? 1U : 4U;
+        t->cycle_state = 2; return;
+    }
+    if (t->kind == FE_TYPE_SLICE || t->kind == FE_TYPE_STR) {
+        t->size = ctx->pointer_bits == 16 ? 4UL : 8UL;
+        t->align = ctx->pointer_bits == 16 ? 1U : 4U;
+        t->cycle_state = 2; return;
+    }
+    if (t->kind == FE_TYPE_ARRAY) {
+        layout_type(ctx, t->elem);
+        t->align = t->packed || ctx->pointer_bits == 16 ? 1U : fe_type_align(t->elem);
+        t->size = t->length * fe_type_size(t->elem);
+        t->cycle_state = 2; return;
+    }
+    if (t->kind == FE_TYPE_STRUCT) {
+        off = 0; max_align = 1;
+        for (i = 0; i < t->field_count; ++i) {
+            if (!t->fields[i].type && t->fields[i].ast_node)
+                t->fields[i].type = fe_type_from_ast(ctx, t->fields[i].ast_node->a);
+            layout_type(ctx, t->fields[i].type);
+            align = t->packed || ctx->pointer_bits == 16 ? 1U : fe_type_align(t->fields[i].type);
+            if (align > max_align) max_align = align;
+            off = round_up(off, align);
+            t->fields[i].offset = off;
+            off += fe_type_size(t->fields[i].type);
+        }
+        t->align = max_align;
+        t->size = round_up(off, max_align);
+        t->cycle_state = 2;
+        return;
+    }
+    if (t->kind == FE_TYPE_ENUM) {
+        max_size = 0; max_align = 1;
+        for (i = 0; i < t->variant_count; ++i) {
+            unsigned j;
+            off = 0;
+            for (j = 0; j < t->variants[i].field_count; ++j) {
+                if (!t->variants[i].fields[j].type && t->variants[i].fields[j].ast_node)
+                    t->variants[i].fields[j].type = fe_type_from_ast(
+                        ctx, t->variants[i].fields[j].ast_node->a);
+                layout_type(ctx, t->variants[i].fields[j].type);
+                if (fe_type_align(t->variants[i].fields[j].type) > max_align)
+                    max_align = fe_type_align(t->variants[i].fields[j].type);
+                off += fe_type_size(t->variants[i].fields[j].type);
+            }
+            if (off > max_size) max_size = off;
+        }
+        t->bits = t->variant_count > 256U ? 16U : 8U;
+        off = ctx->pointer_bits == 16 ? t->bits / 8U : round_up(t->bits / 8U, max_align);
+        t->size = round_up(off + max_size, ctx->pointer_bits == 16 ? 1U : max_align);
+        t->align = ctx->pointer_bits == 16 ? 1U : max_align;
+        t->cycle_state = 2;
+    }
+}
+
+void fe_type_layout_all(FeTypeCtx *ctx)
+{
+    FeType *t;
+    for (t = ctx->types; t; t = t->next) layout_type(ctx, t);
+}
+
+FeFieldType *fe_type_field(FeType *t, const char *name)
+{
+    unsigned i;
+    if (!t || t->kind != FE_TYPE_STRUCT || !name) return 0;
+    for (i = 0; i < t->field_count; ++i)
+        if (strcmp(t->fields[i].name, name) == 0) return &t->fields[i];
+    return 0;
+}
+
+FeVariantType *fe_type_variant(FeType *t, const char *name)
+{
+    unsigned i;
+    if (!t || t->kind != FE_TYPE_ENUM || !name) return 0;
+    for (i = 0; i < t->variant_count; ++i)
+        if (strcmp(t->variants[i].name, name) == 0) return &t->variants[i];
+    return 0;
 }
 
 FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
 {
-    if(!node)return fe_type_intern(ctx,"<unknown>");
-    if(node->kind!=FE_N_TYPE)return fe_type_intern(ctx,"<unknown>");
-    if(node->text && (strcmp(node->text,"?")==0||strcmp(node->text,"!")==0||strcmp(node->text,"^")==0||strcmp(node->text,"&")==0||strcmp(node->text,"*")==0||strcmp(node->text,"far")==0))return fe_type_intern(ctx,"<unknown>");
-    if(node->text && strcmp(node->text,"as")==0)return fe_type_from_ast(ctx,node->b);
-    if(node->text && strcmp(node->text,"fn")==0)return fe_type_intern(ctx,"<unknown>");
-    return fe_type_intern(ctx,node->text);
+    unsigned long length = 0;
+    if (!node) return fe_type_intern(ctx, "<unknown>");
+    if (node->kind != FE_N_TYPE) return fe_type_intern(ctx, "<unknown>");
+    if (node->text && strcmp(node->text, "as") == 0)
+        return fe_type_from_ast(ctx, node->b);
+    if (node->text && strcmp(node->text, "str") == 0)
+        return fe_type_intern(ctx, "str");
+    if (node->text && (strcmp(node->text, "&") == 0 ||
+                       strcmp(node->text, "&mut") == 0))
+        return fe_type_ref(ctx, fe_type_from_ast(ctx,node->a),
+                           strcmp(node->text,"&mut") == 0);
+    if (node->text && strcmp(node->text, "[") == 0) {
+        if (node->a) {
+            if (node->a->kind == FE_N_LITERAL && node->a->text)
+                length = strtoul(node->a->text, 0, 0);
+            return fe_type_array(ctx, length, fe_type_from_ast(ctx, node->b));
+        }
+        return fe_type_slice(ctx, fe_type_from_ast(ctx, node->b));
+    }
+    if (node->text && (strcmp(node->text, "?") == 0 ||
+                       strcmp(node->text, "!") == 0 ||
+                       strcmp(node->text, "^") == 0 ||
+                       strcmp(node->text, "&") == 0 ||
+                       strcmp(node->text, "&mut") == 0 ||
+                       strcmp(node->text, "*") == 0 ||
+                       strcmp(node->text, "far") == 0))
+        return fe_type_intern(ctx, "<unknown>");
+    if (node->text && strcmp(node->text, "fn") == 0)
+        return fe_type_intern(ctx, "<unknown>");
+    return fe_type_intern(ctx, node->text);
 }
-int fe_type_equal(const FeType *a,const FeType *b){return a==b || (a&&b&&strcmp(a->name,b->name)==0);}
-int fe_type_is_integer(const FeType *t){return t&&t->kind==FE_TYPE_INT;}
-const char *fe_type_c_name(const FeType *t,unsigned pointer_bits)
+
+int fe_type_equal(const FeType *a, const FeType *b)
 {
-    if(!t)return "int";
-    if(t->kind==FE_TYPE_VOID)return "void";
-    if(t->kind==FE_TYPE_BOOL)return "unsigned char";
-    if(t->kind!=FE_TYPE_INT)return "int";
-    if(strcmp(t->name,"usize")==0)return pointer_bits==16?"unsigned short":"unsigned long";
-    if(strcmp(t->name,"isize")==0)return pointer_bits==16?"short":"long";
-    if(strcmp(t->name,"i8")==0)return "signed char";
-    if(strcmp(t->name,"u8")==0)return "unsigned char";
-    if(strcmp(t->name,"i16")==0)return "short";
-    if(strcmp(t->name,"u16")==0)return "unsigned short";
-    if(strcmp(t->name,"i32")==0)return "long";
-    if(strcmp(t->name,"u32")==0)return "unsigned long";
-    return "int";
+    return a == b || (a && b && strcmp(a->name, b->name) == 0);
+}
+
+int fe_type_is_integer(const FeType *t)
+{
+    return t && t->kind == FE_TYPE_INT;
+}
+
+int fe_type_is_indexable(const FeType *t)
+{
+    return t && (t->kind == FE_TYPE_ARRAY || t->kind == FE_TYPE_SLICE ||
+                 t->kind == FE_TYPE_STR);
+}
+
+const char *fe_type_c_name(const FeType *t, unsigned pointer_bits)
+{
+    if (!t) return "long";
+    if (t->cname) return t->cname;
+    if (t->kind == FE_TYPE_VOID) return "void";
+    if (t->kind == FE_TYPE_BOOL || t->kind == FE_TYPE_CHAR) return "unsigned char";
+    if (t->kind == FE_TYPE_REF) {
+        static char ref_name[128];
+        if (t->ref_mut) {
+            strcpy(ref_name,fe_type_c_name(t->elem,pointer_bits));
+            strcat(ref_name," *");
+        } else {
+            strcpy(ref_name,"const ");
+            strcat(ref_name,fe_type_c_name(t->elem,pointer_bits));
+            strcat(ref_name," *");
+        }
+        return ref_name;
+    }
+    if (t->kind != FE_TYPE_INT) return "long";
+    if (strcmp(t->name, "usize") == 0) return pointer_bits == 16 ? "unsigned short" : "unsigned long";
+    if (strcmp(t->name, "isize") == 0) return pointer_bits == 16 ? "short" : "long";
+    if (strcmp(t->name, "i8") == 0) return "signed char";
+    if (strcmp(t->name, "u8") == 0) return "unsigned char";
+    if (strcmp(t->name, "i16") == 0) return "short";
+    if (strcmp(t->name, "u16") == 0) return "unsigned short";
+    if (strcmp(t->name, "i32") == 0) return "long";
+    if (strcmp(t->name, "u32") == 0) return "unsigned long";
+    return "long";
 }

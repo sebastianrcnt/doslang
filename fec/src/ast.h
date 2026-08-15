@@ -11,7 +11,7 @@ typedef enum FeNodeKind {
     FE_N_EXPR_STMT, FE_N_ASSIGN, FE_N_IF, FE_N_WHILE, FE_N_FOR, FE_N_MATCH, FE_N_ARM,
     FE_N_RETURN, FE_N_BREAK, FE_N_CONTINUE, FE_N_DEFER, FE_N_UNSAFE, FE_N_ASM,
     FE_N_TYPE, FE_N_EXPR, FE_N_BINARY, FE_N_UNARY, FE_N_CALL, FE_N_INDEX, FE_N_MEMBER,
-    FE_N_LITERAL, FE_N_IDENT, FE_N_STRUCT_INIT, FE_N_ERROR_NODE
+    FE_N_LITERAL, FE_N_IDENT, FE_N_STRUCT_INIT, FE_N_ARRAY_INIT, FE_N_ERROR_NODE
 } FeNodeKind;
 
 typedef struct FeNode FeNode;
@@ -27,7 +27,10 @@ struct FeNode {
     FeNode *next;
     /* Semantic information filled by checking; kept out of AST dumps. */
     char *cname;
+    char *aux_text;
+    char *aux_cname;
     FeType *sem_type;
+    unsigned flags;
 };
 
 typedef struct FeAst {

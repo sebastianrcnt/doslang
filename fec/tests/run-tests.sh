@@ -40,3 +40,24 @@ for f in bad-condition bad-cast bad-assign bad-unknown bad-arity bad-types bad-r
     fi
 done
 echo "M2 tests: integer control-flow smoke passed"
+
+m3tmp=$(mktemp -d)
+trap 'rm -rf "$m2tmp" "$m3tmp"' EXIT HUP INT TERM
+for f in struct enum array arrayctx str for nested char; do
+    "$root"/fec --target=bits32 --emit-c "$root"/tests/m3/$f.fe -o "$m3tmp/$f.c"
+    ${CC:-cc} -std=c89 -pedantic "$m3tmp/$f.c" -o "$m3tmp/$f"
+    "$m3tmp/$f"
+done
+"$root"/fec --target=bits32 --emit-c "$root"/tests/m3/bounds.fe -o "$m3tmp/bounds.c"
+${CC:-cc} -std=c89 -pedantic "$m3tmp/bounds.c" -o "$m3tmp/bounds"
+if "$m3tmp/bounds"; then
+    echo "FAIL (bounds trap did not fire): tests/m3/bounds.fe"
+    exit 1
+fi
+for f in badfld badmat badarr badcycle badstr badchar badfield badindex; do
+    if "$root"/fec --target=bits32 --emit-c "$root"/tests/m3/$f.fe -o "$m3tmp/$f.c" >/dev/null 2>/dev/null; then
+        echo "FAIL (accepted M3 semantic error): $f.fe"
+        exit 1
+    fi
+done
+echo "M3 tests: structs, enums, arrays, slices, str, match, and bounds passed"

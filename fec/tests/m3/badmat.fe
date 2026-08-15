@@ -1,0 +1,6 @@
+unit fail_m3_match;
+enum Shape { Empty, Circle(i32), }
+fn main() -> i32 {
+    match Shape.Empty { Empty => 0; }
+    return 0;
+}

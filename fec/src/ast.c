@@ -8,7 +8,7 @@ FeNode *fe_node(FeAst *a, FeNodeKind k, FeLoc loc, const char *text, unsigned lo
     FeNode *n=(FeNode *)fe_arena_alloc(&a->arena,sizeof(FeNode));
     if (!n) return 0;
     n->kind=k; n->loc=loc; n->text=text?fe_arena_strdup(&a->arena,text,len):0;
-    n->a=n->b=n->c=n->children=n->next=0; n->cname=0; n->sem_type=0; return n;
+    n->a=n->b=n->c=n->children=n->next=0; n->cname=0; n->aux_text=0; n->aux_cname=0; n->sem_type=0; n->flags=0; return n;
 }
 void fe_node_add(FeNode *parent, FeNode *child)
 {
@@ -33,7 +33,7 @@ void fe_ast_dump(const FeNode *n, int indent, FILE *out)
 }
 const char *fe_node_name(FeNodeKind k)
 {
-    static const char *names[] = {"unit","import","fn","struct","enum","error","const","global","field","param","variant","block","let","var","expr-stmt","assign","if","while","for","match","arm","return","break","continue","defer","unsafe","asm","type","expr","binary","unary","call","index","member","literal","ident","struct-init","error"};
+    static const char *names[] = {"unit","import","fn","struct","enum","error","const","global","field","param","variant","block","let","var","expr-stmt","assign","if","while","for","match","arm","return","break","continue","defer","unsafe","asm","type","expr","binary","unary","call","index","member","literal","ident","struct-init","array-init","error"};
     if ((unsigned)k >= sizeof(names)/sizeof(names[0])) return "node";
     return names[k];
 }

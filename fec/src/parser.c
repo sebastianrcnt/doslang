@@ -11,13 +11,14 @@ static int want(FeParser *p, FeTokKind k, const char *what)
 { if(eat(p,k)) return 1; error(p,what); return 0; }
 static int is_name(FeParser *p) { return is(p,FE_TOK_IDENT)||is(p,FE_TOK_SELF)||is(p,FE_TOK_SELFTYPE); }
 static FeNode *expr(FeParser *p, int minprec);
+static FeNode *delimited_expr(FeParser *p);
 static FeNode *type(FeParser *p);
 static FeNode *statement(FeParser *p);
 static FeNode *block(FeParser *p);
 
 void fe_parser_init(FeParser *p, FeAst *ast, const char *src, unsigned long length, const char *file, FeDiags *d)
 {
-    p->ast=ast; p->diags=d; fe_lexer_init(&p->lexer,src,length,file,d);
+    p->ast=ast; p->diags=d; p->forbid_struct_literal=0; fe_lexer_init(&p->lexer,src,length,file,d);
     p->previous=p->current=fe_lexer_next(&p->lexer);
 }
 
@@ -81,10 +82,19 @@ static int precedence(FeTokKind k)
 static FeNode *primary(FeParser *p)
 {
     FeToken t=p->current; FeNode *n;
+    if (is(p,FE_TOK_LBRACKET)) {
+        FeNode *a=toknode(p,FE_N_ARRAY_INIT,t); next(p);
+        while(!is(p,FE_TOK_RBRACKET)&&!is(p,FE_TOK_EOF)) {
+            fe_node_add(a,delimited_expr(p));
+            if(!eat(p,FE_TOK_COMMA)) break;
+        }
+        want(p,FE_TOK_RBRACKET,"expected ']' after array literal");
+        return a;
+    }
     if(is(p,FE_TOK_INT)||is(p,FE_TOK_CHAR)||is(p,FE_TOK_STRING)||is(p,FE_TOK_TRUE)||is(p,FE_TOK_FALSE)||is(p,FE_TOK_NULL)||is(p,FE_TOK_UNDEFINED)) {next(p);return toknode(p,FE_N_LITERAL,t);}
     if(is_name(p) || is(p,FE_TOK_ERROR_KW)) {
         next(p); n=toknode(p,FE_N_IDENT,t);
-        if(is(p,FE_TOK_LBRACE)) {
+        if(is(p,FE_TOK_LBRACE) && !p->forbid_struct_literal) {
             FeNode *s=toknode(p,FE_N_STRUCT_INIT,t); next(p);
             while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)) { FeNode *f;
                 if(!is_name(p)){error(p,"expected field name");recover(p);break;} f=toknode(p,FE_N_FIELD,p->current);next(p);want(p,FE_TOK_COLON,"expected ':' after field");f->a=expr(p,0);fe_node_add(s,f);if(!eat(p,FE_TOK_COMMA))break;
@@ -92,11 +102,11 @@ static FeNode *primary(FeParser *p)
         }
         return n;
     }
-    if(eat(p,FE_TOK_LPAREN)) { n=expr(p,0); want(p,FE_TOK_RPAREN,"expected ')'"); return n; }
+    if(eat(p,FE_TOK_LPAREN)) { int old=p->forbid_struct_literal; p->forbid_struct_literal=0; n=expr(p,0); p->forbid_struct_literal=old; want(p,FE_TOK_RPAREN,"expected ')'"); return n; }
     if(eat(p,FE_TOK_AT)) {
         FeToken name=p->current; if(!is_name(p)){error(p,"expected builtin name after '@'");return fe_node(p->ast,FE_N_ERROR_NODE,t.loc,"builtin",7);} next(p);
         n=toknode(p,FE_N_CALL,name); n->text=fe_arena_strdup(&p->ast->arena,name.begin-1,name.length+1);
-        if(eat(p,FE_TOK_LPAREN)){while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n,expr(p,0));if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RPAREN,"expected ')' after builtin");}
+        if(eat(p,FE_TOK_LPAREN)){while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n,delimited_expr(p));if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RPAREN,"expected ')' after builtin");}
         return n;
     }
     error(p,"expected expression"); next(p); return fe_node(p->ast,FE_N_ERROR_NODE,t.loc,"expression",10);
@@ -106,9 +116,29 @@ static FeNode *postfix(FeParser *p)
     FeNode *n=primary(p);
     for(;;) {
         FeToken t=p->current; FeNode *m;
-        if(eat(p,FE_TOK_LPAREN)) { m=toknode(p,FE_N_CALL,t); m->a=n; while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(m,expr(p,0));if(!eat(p,FE_TOK_COMMA))break;} want(p,FE_TOK_RPAREN,"expected ')' after call"); n=m; }
-        else if(eat(p,FE_TOK_LBRACKET)) { m=toknode(p,FE_N_INDEX,t);m->a=n;m->b=expr(p,0);if(eat(p,FE_TOK_DOTDOT)){m->c=expr(p,0);}want(p,FE_TOK_RBRACKET,"expected ']' after index");n=m; }
-        else if(eat(p,FE_TOK_DOT)) { m=toknode(p,FE_N_MEMBER,t);m->a=n;if(is_name(p)){m->b=toknode(p,FE_N_IDENT,p->current);next(p);}else if(eat(p,FE_TOK_QUESTION)){m->text=fe_arena_strdup(&p->ast->arena,".?",2);}else error(p,"expected member name");n=m; }
+        if(eat(p,FE_TOK_LPAREN)) { m=toknode(p,FE_N_CALL,t); m->a=n; while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(m,delimited_expr(p));if(!eat(p,FE_TOK_COMMA))break;} want(p,FE_TOK_RPAREN,"expected ')' after call"); n=m; }
+        else if(eat(p,FE_TOK_LBRACKET)) {
+            m=toknode(p,FE_N_INDEX,t);m->a=n;
+            if(is(p,FE_TOK_DOTDOT)) m->b=0; else m->b=delimited_expr(p);
+            if(eat(p,FE_TOK_DOTDOT)) { if(!is(p,FE_TOK_RBRACKET)) m->c=delimited_expr(p); }
+            want(p,FE_TOK_RBRACKET,"expected ']' after index");n=m;
+        }
+        else if(eat(p,FE_TOK_DOT)) {
+            m=toknode(p,FE_N_MEMBER,t);m->a=n;
+            if(is_name(p)){m->b=toknode(p,FE_N_IDENT,p->current);next(p);}
+            else if(eat(p,FE_TOK_QUESTION)){m->text=fe_arena_strdup(&p->ast->arena,".?",2);}
+            else if(eat(p,FE_TOK_XOR)){m->text=fe_arena_strdup(&p->ast->arena,".^",2);m->b=fe_node(p->ast,FE_N_IDENT,p->previous.loc,"^",1);}
+            else error(p,"expected member name");
+            n=m;
+            if(is(p,FE_TOK_LBRACE) && !p->forbid_struct_literal) {
+                FeNode *s=toknode(p,FE_N_STRUCT_INIT,t); s->a=n; next(p);
+                while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)) { FeNode *f;
+                    if(!is_name(p)){error(p,"expected variant field");recover(p);break;}
+                    f=toknode(p,FE_N_FIELD,p->current);next(p);want(p,FE_TOK_COLON,"expected ':' after variant field");f->a=expr(p,0);fe_node_add(s,f);if(!eat(p,FE_TOK_COMMA))break;
+                }
+                want(p,FE_TOK_RBRACE,"expected '}' in variant constructor");n=s;
+            }
+        }
         else if(eat(p,FE_TOK_AS)) { m=toknode(p,FE_N_TYPE,t);m->a=n;m->b=type(p);n=m; }
         else break;
     }
@@ -121,6 +151,29 @@ static FeNode *expr(FeParser *p, int minprec)
     else left=postfix(p);
     for(;;) { t=p->current;prec=precedence(t.kind);if(prec<=minprec)break;next(p);n=toknode(p,FE_N_BINARY,t);n->a=left;if(t.kind==FE_TOK_CATCH && eat(p,FE_TOK_OR)){if(is_name(p))n->b=toknode(p,FE_N_IDENT,p->current),next(p);else error(p,"expected catch binding");want(p,FE_TOK_OR,"expected '|' after catch binding");n->c=block(p);}else n->b=expr(p,prec);left=n; }
     return left;
+}
+
+/* A control-flow header is followed by a body '{'.  Do not let that body
+   brace be consumed as the postfix struct-literal brace; callers can use
+   parentheses when a struct literal is intended in the header. */
+static FeNode *header_expr(FeParser *p)
+{
+    FeNode *n;
+    int old=p->forbid_struct_literal;
+    p->forbid_struct_literal=1;
+    n=expr(p,0);
+    p->forbid_struct_literal=old;
+    return n;
+}
+
+static FeNode *delimited_expr(FeParser *p)
+{
+    FeNode *n;
+    int old=p->forbid_struct_literal;
+    p->forbid_struct_literal=0;
+    n=expr(p,0);
+    p->forbid_struct_literal=old;
+    return n;
 }
 
 static FeNode *params(FeParser *p)
@@ -147,7 +200,7 @@ static FeNode *field(FeParser *p)
 }
 static FeNode *decl(FeParser *p)
 {
-    int pub=0, external=0, interrupt=0, interrupt_safe=0, shared=0, atomic=0; FeToken t=p->current; FeNode *n;
+    int pub=0, external=0, interrupt=0, interrupt_safe=0, shared=0, atomic=0; FeToken t=p->current; FeNode *n; FeTokKind before;
     (void)shared; (void)atomic;
     if(eat(p,FE_TOK_PUB)) pub=1;
     if(eat(p,FE_TOK_EXTERN)) { external=1; if(is(p,FE_TOK_STRING)) next(p); }
@@ -156,12 +209,14 @@ static FeNode *decl(FeParser *p)
     if(!is(p,FE_TOK_PACKED)) t=p->current;
     if(is(p,FE_TOK_FN)) return fn_decl(p,pub,external,interrupt,interrupt_safe);
     if(eat(p,FE_TOK_PACKED)) t=p->previous;
-    if(eat(p,FE_TOK_STRUCT)) { n=toknode(p,FE_N_STRUCT,t);if(!is_name(p)){error(p,"expected struct name");return n;}next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);if(eat(p,FE_TOK_LPAREN)){while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n,type(p));if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RPAREN,"expected ')' after generic parameters");}want(p,FE_TOK_LBRACE,"expected '{' in struct");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){if(is(p,FE_TOK_PUB))next(p);if(is(p,FE_TOK_FN))fe_node_add(n,fn_decl(p,0,0,0,0));else fe_node_add(n,field(p));}want(p,FE_TOK_RBRACE,"expected '}' after struct");return n; }
+    if(eat(p,FE_TOK_STRUCT)) { n=toknode(p,FE_N_STRUCT,t);if(t.kind==FE_TOK_PACKED)n->flags|=1U;if(!is_name(p)){error(p,"expected struct name");return n;}next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);if(eat(p,FE_TOK_LPAREN)){while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n,type(p));if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RPAREN,"expected ')' after generic parameters");}want(p,FE_TOK_LBRACE,"expected '{' in struct");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){if(is(p,FE_TOK_PUB))next(p);if(is(p,FE_TOK_FN))fe_node_add(n,fn_decl(p,0,0,0,0));else fe_node_add(n,field(p));}want(p,FE_TOK_RBRACE,"expected '}' after struct");return n; }
     if(eat(p,FE_TOK_ENUM)) { n=toknode(p,FE_N_ENUM,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected enum name");want(p,FE_TOK_LBRACE,"expected '{' in enum");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){FeNode *v=toknode(p,FE_N_VARIANT,p->current);if(is_name(p))next(p);else{error(p,"expected variant name");recover(p);break;}if(eat(p,FE_TOK_LPAREN)){v->a=type(p);want(p,FE_TOK_RPAREN,"expected ')' in variant");}else if(eat(p,FE_TOK_LBRACE)){while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF))fe_node_add(v,field(p));want(p,FE_TOK_RBRACE,"expected '}' in variant");}fe_node_add(n,v);if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RBRACE,"expected '}' after enum");return n; }
     if(eat(p,FE_TOK_ERROR_KW)) { n=toknode(p,FE_N_ERROR_DECL,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected error name");want(p,FE_TOK_LBRACE,"expected '{' in error declaration");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){FeNode *v=toknode(p,FE_N_VARIANT,p->current);if(is_name(p))next(p);else{error(p,"expected error member");recover(p);break;}want(p,FE_TOK_EQ,"expected '=' in error member");v->a=expr(p,0);want(p,FE_TOK_COMMA,"expected ',' in error declaration");fe_node_add(n,v);}want(p,FE_TOK_RBRACE,"expected '}' after error");return n; }
     if(eat(p,FE_TOK_SHARED)) { shared=1; if(eat(p,FE_TOK_ATOMIC)) atomic=1; if(!is(p,FE_TOK_VAR)) error(p,"expected 'var' after shared"); }
     if(is(p,FE_TOK_CONST)||is(p,FE_TOK_STATIC)||is(p,FE_TOK_VAR)) { FeTokKind kk=p->current.kind;next(p);n=toknode(p,kk==FE_TOK_CONST?FE_N_CONST:FE_N_GLOBAL,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected declaration name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in declaration");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';' after declaration");return n; }
-    error(p,"expected declaration"); recover(p); return 0;
+    error(p,"expected declaration"); before=p->current.kind; recover(p);
+    if (p->current.kind==before && p->current.kind!=FE_TOK_EOF) next(p);
+    return 0;
 }
 
 static FeNode *block(FeParser *p)
@@ -175,11 +230,42 @@ static FeNode *statement(FeParser *p)
     if(eat(p,FE_TOK_LET)) { n=toknode(p,FE_N_LET,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected variable name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in let");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
     if(eat(p,FE_TOK_VAR)) { n=toknode(p,FE_N_VAR,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected variable name");if(eat(p,FE_TOK_COLON))n->a=type(p);if(eat(p,FE_TOK_EQ))n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
     if(eat(p,FE_TOK_CONST)) { n=toknode(p,FE_N_CONST,t);if(is_name(p))next(p);else error(p,"expected constant name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in const");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
-    if(eat(p,FE_TOK_IF)) { n=toknode(p,FE_N_IF,t);if(eat(p,FE_TOK_LET)){n->text=fe_arena_strdup(&p->ast->arena,"if let",6);if(is_name(p))next(p);if(eat(p,FE_TOK_LPAREN)){if(is_name(p))next(p);want(p,FE_TOK_RPAREN,"expected ')' in if let pattern");}want(p,FE_TOK_EQ,"expected '=' in if let");}n->a=expr(p,0);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
-    if(eat(p,FE_TOK_COMPTIME)) { n=toknode(p,FE_N_IF,t);want(p,FE_TOK_IF,"expected 'if' after comptime");n->text=fe_arena_strdup(&p->ast->arena,"comptime if",11);n->a=expr(p,0);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
-    if(eat(p,FE_TOK_WHILE)) {n=toknode(p,FE_N_WHILE,t);n->a=expr(p,0);n->b=block(p);return n;}
-    if(eat(p,FE_TOK_FOR)) {n=toknode(p,FE_N_FOR,t);if(is_name(p))next(p);else error(p,"expected loop variable");if(eat(p,FE_TOK_COMMA)){if(is_name(p))next(p);else error(p,"expected second loop variable");}want(p,FE_TOK_IN,"expected 'in' in for");n->a=expr(p,0);if(eat(p,FE_TOK_DOTDOT))n->c=expr(p,0);n->b=block(p);return n;}
-    if(eat(p,FE_TOK_MATCH)) { n=toknode(p,FE_N_MATCH,t);n->a=expr(p,0);want(p,FE_TOK_LBRACE,"expected '{' after match expression");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){FeNode *arm=toknode(p,FE_N_ARM,p->current);if(is_name(p)||is(p,FE_TOK_INT)||is(p,FE_TOK_CHAR)||is(p,FE_TOK_NULL)||is(p,FE_TOK_TRUE)||is(p,FE_TOK_FALSE)||is(p,FE_TOK_IDENT)){arm->text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}else{error(p,"expected match pattern");recover(p);continue;}while(is(p,FE_TOK_LPAREN)||is(p,FE_TOK_LBRACE)){FeTokKind close=is(p,FE_TOK_LPAREN)?FE_TOK_RPAREN:FE_TOK_RBRACE;next(p);while(!is(p,close)&&!is(p,FE_TOK_EOF))next(p);want(p,close,"expected end of match pattern");}want(p,FE_TOK_FATARROW,"expected '=>' in match arm");if(is(p,FE_TOK_LBRACE))arm->a=block(p);else{arm->a=expr(p,0);want(p,FE_TOK_SEMI,"expected ';' in match arm");}fe_node_add(n,arm);}want(p,FE_TOK_RBRACE,"expected '}' after match");return n;}
+    if(eat(p,FE_TOK_IF)) { n=toknode(p,FE_N_IF,t);if(eat(p,FE_TOK_LET)){n->text=fe_arena_strdup(&p->ast->arena,"if let",6);if(is_name(p))next(p);if(eat(p,FE_TOK_LPAREN)){if(is_name(p))next(p);want(p,FE_TOK_RPAREN,"expected ')' in if let pattern");}want(p,FE_TOK_EQ,"expected '=' in if let");}n->a=header_expr(p);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
+    if(eat(p,FE_TOK_COMPTIME)) { n=toknode(p,FE_N_IF,t);want(p,FE_TOK_IF,"expected 'if' after comptime");n->text=fe_arena_strdup(&p->ast->arena,"comptime if",11);n->a=header_expr(p);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
+    if(eat(p,FE_TOK_WHILE)) {n=toknode(p,FE_N_WHILE,t);n->a=header_expr(p);n->b=block(p);return n;}
+    if(eat(p,FE_TOK_FOR)) {n=toknode(p,FE_N_FOR,t);if(is_name(p)){n->text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}else error(p,"expected loop variable");if(eat(p,FE_TOK_COMMA)){if(is_name(p)){n->aux_text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}else error(p,"expected second loop variable");}want(p,FE_TOK_IN,"expected 'in' in for");n->a=header_expr(p);if(eat(p,FE_TOK_DOTDOT))n->c=header_expr(p);n->b=block(p);return n;}
+    if(eat(p,FE_TOK_MATCH)) {
+        int old=p->forbid_struct_literal;
+        n=toknode(p,FE_N_MATCH,t); p->forbid_struct_literal=1; n->a=header_expr(p); p->forbid_struct_literal=old;
+        want(p,FE_TOK_LBRACE,"expected '{' after match expression");
+        while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)) {
+            FeNode *arm=toknode(p,FE_N_ARM,p->current);
+            FeToken pt=p->current;
+            if(is_name(p)||is(p,FE_TOK_INT)||is(p,FE_TOK_CHAR)||is(p,FE_TOK_NULL)||is(p,FE_TOK_TRUE)||is(p,FE_TOK_FALSE)) {
+                arm->text=fe_arena_strdup(&p->ast->arena,pt.begin,pt.length); next(p);
+            } else { error(p,"expected match pattern"); recover(p); continue; }
+            if(eat(p,FE_TOK_LPAREN)) {
+                while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)) {
+                    if(is_name(p)) { fe_node_add(arm,toknode(p,FE_N_IDENT,p->current)); next(p); }
+                    else { error(p,"expected pattern binding"); recover(p); break; }
+                    if(!eat(p,FE_TOK_COMMA)) break;
+                }
+                want(p,FE_TOK_RPAREN,"expected ')' after match pattern");
+            } else if(eat(p,FE_TOK_LBRACE)) {
+                while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)) {
+                    if(is_name(p)) { fe_node_add(arm,toknode(p,FE_N_IDENT,p->current)); next(p); }
+                    else { error(p,"expected field binding"); recover(p); break; }
+                    if(!eat(p,FE_TOK_COMMA)) break;
+                }
+                want(p,FE_TOK_RBRACE,"expected '}' after match pattern");
+            }
+            want(p,FE_TOK_FATARROW,"expected '=>' in match arm");
+            if(is(p,FE_TOK_LBRACE)) arm->a=block(p);
+            else { arm->a=expr(p,0); want(p,FE_TOK_SEMI,"expected ';' in match arm"); }
+            fe_node_add(n,arm);
+        }
+        want(p,FE_TOK_RBRACE,"expected '}' after match"); return n;
+    }
     if(eat(p,FE_TOK_RETURN)) {n=toknode(p,FE_N_RETURN,t);if(!is(p,FE_TOK_SEMI))n->a=expr(p,0);want(p,FE_TOK_SEMI,"expected ';' after return");return n;}
     if(eat(p,FE_TOK_BREAK)){n=toknode(p,FE_N_BREAK,t);want(p,FE_TOK_SEMI,"expected ';'");return n;}
     if(eat(p,FE_TOK_CONTINUE)){n=toknode(p,FE_N_CONTINUE,t);want(p,FE_TOK_SEMI,"expected ';'");return n;}

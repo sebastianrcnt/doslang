@@ -6,16 +6,10 @@ if exist BUILD.OK del BUILD.OK
 if exist BUILD.FAIL del BUILD.FAIL
 if exist fec.exe del fec.exe
 if exist __wcl__.lnk del __wcl__.lnk
-if exist arena.obj del arena.obj
-if exist diag.obj del diag.obj
-if exist lexer.obj del lexer.obj
-if exist ast.obj del ast.obj
-if exist parser.obj del parser.obj
-if exist types.obj del types.obj
-if exist check.obj del check.obj
-if exist emitc.obj del emitc.obj
-if exist emit_c.obj del emit_c.obj
-if exist driver.obj del driver.obj
+rem WCL writes test objects into the current directory. Remove all prior build
+rem artifacts before the wildcard link so 32-bit test objects cannot enter the
+rem 16-bit compiler executable.
+if exist *.obj del *.obj
 
 if "%WATCOM%"=="" set WATCOM=C:\DEVEL\WATCOMC
 if not exist %WATCOM%\BINW\WCL.EXE goto build_fail

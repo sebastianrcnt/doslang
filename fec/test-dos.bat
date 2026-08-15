@@ -93,6 +93,102 @@ if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M2\BAD-VO.FE -o TESTS\M2\BAD-VO.C > nul
 if not errorlevel 1 goto test_fail
 
+if exist TESTS\M3\STRUCT.C del TESTS\M3\STRUCT.C
+if exist TESTS\M3\STRUCT.EXE del TESTS\M3\STRUCT.EXE
+if exist TESTS\M3\ENUM.C del TESTS\M3\ENUM.C
+if exist TESTS\M3\ENUM.EXE del TESTS\M3\ENUM.EXE
+if exist TESTS\M3\ARRAY.C del TESTS\M3\ARRAY.C
+if exist TESTS\M3\ARRAY.EXE del TESTS\M3\ARRAY.EXE
+if exist TESTS\M3\STR.C del TESTS\M3\STR.C
+if exist TESTS\M3\STR.EXE del TESTS\M3\STR.EXE
+if exist TESTS\M3\FOR.C del TESTS\M3\FOR.C
+if exist TESTS\M3\FOR.EXE del TESTS\M3\FOR.EXE
+if exist TESTS\M3\NESTED.C del TESTS\M3\NESTED.C
+if exist TESTS\M3\NESTED.EXE del TESTS\M3\NESTED.EXE
+if exist TESTS\M3\CHAR.C del TESTS\M3\CHAR.C
+if exist TESTS\M3\CHAR.EXE del TESTS\M3\CHAR.EXE
+if exist TESTS\M3\ARRAYCTX.C del TESTS\M3\ARRAYCTX.C
+if exist TESTS\M3\ARRAYCTX.EXE del TESTS\M3\ARRAYCTX.EXE
+if exist TESTS\M3\BOUNDS.C del TESTS\M3\BOUNDS.C
+if exist TESTS\M3\BOUNDS.EXE del TESTS\M3\BOUNDS.EXE
+if exist TESTS\M3\BOUNDS-N.C del TESTS\M3\BOUNDS-N.C
+if exist TESTS\M3\BOUNDS-N.EXE del TESTS\M3\BOUNDS-N.EXE
+
+fec.exe --target=bits32 --emit-c TESTS\M3\STRUCT.FE -o TESTS\M3\STRUCT.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\STRUCT.EXE TESTS\M3\STRUCT.C
+if errorlevel 1 goto test_fail
+TESTS\M3\STRUCT.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\ENUM.FE -o TESTS\M3\ENUM.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\ENUM.EXE TESTS\M3\ENUM.C
+if errorlevel 1 goto test_fail
+TESTS\M3\ENUM.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\ARRAY.FE -o TESTS\M3\ARRAY.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\ARRAY.EXE TESTS\M3\ARRAY.C
+if errorlevel 1 goto test_fail
+TESTS\M3\ARRAY.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\STR.FE -o TESTS\M3\STR.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\STR.EXE TESTS\M3\STR.C
+if errorlevel 1 goto test_fail
+TESTS\M3\STR.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\FOR.FE -o TESTS\M3\FOR.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\FOR.EXE TESTS\M3\FOR.C
+if errorlevel 1 goto test_fail
+TESTS\M3\FOR.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\NESTED.FE -o TESTS\M3\NESTED.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\NESTED.EXE TESTS\M3\NESTED.C
+if errorlevel 1 goto test_fail
+TESTS\M3\NESTED.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\CHAR.FE -o TESTS\M3\CHAR.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\CHAR.EXE TESTS\M3\CHAR.C
+if errorlevel 1 goto test_fail
+TESTS\M3\CHAR.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\ARRAYCTX.FE -o TESTS\M3\ARRAYCTX.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\ARRAYCTX.EXE TESTS\M3\ARRAYCTX.C
+if errorlevel 1 goto test_fail
+TESTS\M3\ARRAYCTX.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BOUNDS.FE -o TESTS\M3\BOUNDS.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\BOUNDS.EXE TESTS\M3\BOUNDS.C
+if errorlevel 1 goto test_fail
+TESTS\M3\BOUNDS.EXE
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --no-checks --emit-c TESTS\M3\BOUNDS.FE -o TESTS\M3\BOUNDS-N.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\BOUNDS-N.EXE TESTS\M3\BOUNDS-N.C
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADFLD.FE -o TESTS\M3\BADFLD.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADMAT.FE -o TESTS\M3\BADMAT.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADARR.FE -o TESTS\M3\BADARR.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADCYCLE.FE -o TESTS\M3\BADCYCLE.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADSTR.FE -o TESTS\M3\BADSTR.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADCHAR.FE -o TESTS\M3\BADCHAR.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADFIELD.FE -o TESTS\M3\BADFIELD.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BADINDEX.FE -o TESTS\M3\BADINDEX.C > nul
+if not errorlevel 1 goto test_fail
+
 echo OK>TEST.OK
 cd C:\FEC
 goto test_done

@@ -1,0 +1,18 @@
+unit m3_for;
+
+fn main() -> i32 {
+    var total: i32 = 0;
+    let a: [3]i32 = [1, 2, 3];
+    let s: []i32 = a[..];
+    var m: [1]i32 = [1];
+    let ready: bool = true;
+    if ready { total += 0; }
+    while false { total += 100; }
+    for x in a { total += x.^; }
+    for i, x in a { if i == 1 and x.^ == 2 { total += 1; } }
+    for x in "ab" { if x.^ == ('a' as u8) { total += 1; } }
+    for x in s { if x.^ == 3 { total += 1; } }
+    for x in m { x.^ = 2; }
+    if total == 9 and m[0] == 2 { return 0; }
+    return 1;
+}

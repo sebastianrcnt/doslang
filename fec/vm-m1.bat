@@ -7,6 +7,7 @@ if not exist C:\FEC\TESTS md C:\FEC\TESTS
 if not exist C:\FEC\TESTS\PASS md C:\FEC\TESTS\PASS
 if not exist C:\FEC\TESTS\FAIL md C:\FEC\TESTS\FAIL
 if not exist C:\FEC\TESTS\M2 md C:\FEC\TESTS\M2
+if not exist C:\FEC\TESTS\M3 md C:\FEC\TESTS\M3
 if exist C:\FEC\VM.FAIL del C:\FEC\VM.FAIL
 if exist C:\FEC\STAGE.FAIL del C:\FEC\STAGE.FAIL
 
@@ -104,6 +105,41 @@ if errorlevel 1 goto stage_fail
 copy D:\FEC\TESTS\M2\BAD-VOID.FE C:\FEC\TESTS\M2\BAD-VO.FE > nul
 if errorlevel 1 goto stage_fail
 copy D:\FEC\TESTS\M2\CAST-W~1.FE C:\FEC\TESTS\M2\CAST-W.FE > nul
+if errorlevel 1 goto stage_fail
+
+copy D:\FEC\TESTS\M3\STRUCT.FE C:\FEC\TESTS\M3\STRUCT.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\ENUM.FE C:\FEC\TESTS\M3\ENUM.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\ARRAY.FE C:\FEC\TESTS\M3\ARRAY.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\STR.FE C:\FEC\TESTS\M3\STR.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\FOR.FE C:\FEC\TESTS\M3\FOR.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\NESTED.FE C:\FEC\TESTS\M3\NESTED.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\CHAR.FE C:\FEC\TESTS\M3\CHAR.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\ARRAYCTX.FE C:\FEC\TESTS\M3\ARRAYCTX.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BOUNDS.FE C:\FEC\TESTS\M3\BOUNDS.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADFLD.FE C:\FEC\TESTS\M3\BADFLD.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADMAT.FE C:\FEC\TESTS\M3\BADMAT.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADARR.FE C:\FEC\TESTS\M3\BADARR.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADCYCLE.FE C:\FEC\TESTS\M3\BADCYCLE.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADSTR.FE C:\FEC\TESTS\M3\BADSTR.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADCHAR.FE C:\FEC\TESTS\M3\BADCHAR.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADFIELD.FE C:\FEC\TESTS\M3\BADFIELD.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M3\BADINDEX.FE C:\FEC\TESTS\M3\BADINDEX.FE > nul
 if errorlevel 1 goto stage_fail
 
 call C:\FEC\TEST-DOS.BAT

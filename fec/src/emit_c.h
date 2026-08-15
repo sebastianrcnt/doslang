@@ -8,9 +8,12 @@ typedef struct FeEmitter {
     FeCheck *check;
     unsigned pointer_bits;
     int indent;
+    int no_checks;
+    unsigned temp_serial;
 } FeEmitter;
 
-void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check, unsigned pointer_bits);
+void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check,
+                    unsigned pointer_bits, int no_checks);
 void fe_emit_c_program(FeEmitter *e);
 
 #endif

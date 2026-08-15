@@ -1,0 +1,7 @@
+unit fail_m3_let_index;
+
+fn main() -> i32 {
+    let a: [2]i32 = [1, 2];
+    a[0] = 3;
+    return a[0];
+}

@@ -9,6 +9,7 @@ typedef struct FeParser {
     FeToken previous;
     FeAst *ast;
     FeDiags *diags;
+    int forbid_struct_literal;
 } FeParser;
 
 void fe_parser_init(FeParser *p, FeAst *ast, const char *src, unsigned long length, const char *file, FeDiags *d);

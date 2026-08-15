@@ -1,0 +1,7 @@
+unit m3_arrayctx;
+
+fn main() -> i32 {
+    let bytes: [3]u8 = [1, 2, 3];
+    if bytes[0] == 1 and bytes[2] == 3 { return 0; }
+    return 1;
+}
