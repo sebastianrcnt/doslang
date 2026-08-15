@@ -1,4 +1,4 @@
-# Ferro 언어 명세 v0.1.2
+# Ferro 언어 명세 v0.1.3
 
 DOS용 시스템 프로그래밍 언어. C만큼 빠르고, 메모리 안전성을 함수 단위 지역 검사만으로 보장한다.
 파일 확장자 `.fe`, 컴파일러 이름 `fec`, 심볼 파일 `.fei`.
@@ -62,7 +62,8 @@ and or not orelse
 
 - 정수: `i8 i16 i32 u8 u16 u32 usize isize`
 - `bool` (1바이트, 정수와 상호 변환 없음)
-- `char` (u8과 크기 같지만 별개 타입)
+- `char` (`u8`과 크기 같지만 별개 타입). `char`와 `u8` 사이의 저장·대입·비교에는
+  반드시 명시적인 `as` 변환이 필요하며, 리터럴에도 문맥 기반 암묵 변환을 적용하지 않는다.
 - `void` (반환 타입으로만)
 - `type` (comptime 파라미터에서만, §9)
 
@@ -415,7 +416,7 @@ fn count_lines(path: str) -> !usize {
         let got = try f.read(buf[..]);
         if got == 0 { break; }
         for c in buf[0..got] {
-            if c.^ == '\n' { n += 1; }
+            if c.^ == '\n' as u8 { n += 1; }
         }
     }
     return n;
