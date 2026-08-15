@@ -1,0 +1,31 @@
+# QEMU runtime state, downloaded media, and generated captures
+.qemu/*
+!.qemu/*.ps1
+!.qemu/*.mjs
+!.qemu/*.txt
+!.qemu/share/
+!.qemu/share/*.c
+
+.qemu/*.qcow2
+.qemu/*.img
+.qemu/*.iso
+.qemu/*.zip
+.qemu/*.png
+.qemu/*.ppm
+.qemu/*.tmp
+
+# Local logs and editor/OS metadata
+*.log
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Node/tool caches
+node_modules/
+.npm/
+.cache/
+
+# Temporary DOS build sources
+.qemu/share/dosag*.c
