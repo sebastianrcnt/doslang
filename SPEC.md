@@ -306,7 +306,35 @@ type        := ident ['.' ident]
 @volatile_load(p) @volatile_store(p, v)  (unsafe)
 @trap() -> never              @unreachable() -> never  (unsafe)
 @line() @file()                          // 진단용
+
+@print(fmt, ...)                         // stdout
+@fprint(w, fmt, ...)                     // 임의 Writer
+@sprint(buf: []u8, fmt, ...) -> usize    // 버퍼에 기록, 쓴 바이트 수 반환
 ```
+
+### 6.3.1 포매팅 빌트인
+
+가변 인자를 언어에 도입하지 않는다. `@print` 계열은 **컴파일 단계에서 여러 호출로 전개되는 빌트인**이다.
+
+```fe
+@print("x={} y={x} name={s}\n", a, b, s);
+```
+→ lower 단계에서 다음으로 전개:
+```
+fmt.write_str(out, "x=");   fmt.write_int_i32(out, a);
+fmt.write_str(out, " y=");  fmt.write_hex_u16(out, b);
+fmt.write_str(out, " name="); fmt.write_str(out, s);
+fmt.write_str(out, "\n");
+```
+
+규칙:
+- 포맷 문자열은 **컴파일타임 문자열 리터럴 또는 `const`만**. 런타임 값이면 에러.
+- verb: `{}` 기본(정수/bool/char/str 자동), `{x}` 16진, `{c}` 문자, `{s}` 문자열/슬라이스, `{b}` 불린. `{{`는 `{` 이스케이프.
+- `{}` 개수와 인자 개수 불일치 → 컴파일 에러.
+- 인자 타입에 대응하는 `fmt.write_*` 함수가 없으면 컴파일 에러(메시지에 타입명 표시).
+- 자릿수/폭/정렬 지정자는 v0.1에 없음. 필요하면 `fmt.write_int_pad`를 직접 호출.
+- `@fprint`의 첫 인자는 `&mut io.Writer`(§10의 함수 포인터 struct).
+- 전개 결과의 모든 호출은 `!void`를 반환하므로 `@print`도 `!void`. 무시하려면 `_ = @print(...)`.
 
 ### 6.4 예제
 
@@ -464,8 +492,25 @@ var xs: List(u8) = List(u8).new();
 - **str**: `eq`, `find`, `starts_with`, `split_at`, `parse_int`, `trim`, `to_cstr(buf, s)`, `from_cstr(p)`.
 - **list**: `List(T)`.
 - **map**: `Map(K, V)` (오픈 어드레싱, `K`는 정수/str).
-- **fmt**: `print_str`, `print_int`, `print_hex`, `format(buf, ...)`. 제네릭 도입 후 `print(fmt, args)` 추가.
-- **io**: `File{ open, create, read, write, seek, size, close(=drop) }`, `stdin`, `stdout`, `stderr`.
+- **fmt**: `@print` 계열이 전개해 호출하는 저수준 함수 모음.
+  `write_str(w, s)`, `write_int_i8/i16/i32/u8/u16/u32(w, v)`, `write_hex_u8/u16/u32(w, v)`,
+  `write_char(w, c)`, `write_bool(w, b)`, `write_int_pad(w, v, width, pad)`.
+  전부 `fn(w: &mut io.Writer, ...) -> !void` 시그니처. 사용자가 직접 호출해도 된다.
+- **io**:
+  - `File{ open, create, read, write, seek, size, close(=drop) }`, `stdin`, `stdout`, `stderr`.
+  - `Writer` — 함수 포인터 struct (인터페이스 도입 전까지의 동적 디스패치 수단):
+    ```fe
+    pub struct Writer {
+        ctx: *void,
+        write_fn: fn(*void, []u8) -> !usize,
+    }
+    ```
+    `File.writer(&mut self) -> Writer`, `buf_writer(buf: &mut []u8) -> Writer`, `null_writer()` 제공.
+  - `Reader` — 같은 형태, `read_fn: fn(*void, []u8) -> !usize`.
+  - `Writer`/`Reader`는 `*void`를 담으므로 필드 저장이 가능(2급 참조 아님). 대신 대상보다 오래 살면
+    dangling이므로 **`Writer`를 만든 지역 스코프 밖으로 내보내지 않는 것**이 사용자 책임이며,
+    `writer()` 메서드는 R8(참조 반환) 대상이 아니라 값 반환이라 컴파일러가 막지 않는다.
+    v0.2에서 `dyn Writer`로 대체되면 이 구멍이 닫힌다.
 - **sys**: `exit`, `args`, `env`, `ticks`, `int21(regs)`, `dpmi_*`(bits32), `port_in/out`, `far_copy`(bits16).
 
 `io.File`은 `drop`에서 핸들을 닫는다. 이중 닫기는 소유권 규칙이 막는다.
@@ -544,6 +589,7 @@ fec/
 - **조건부 이동**: 이동 여부가 분기에 따라 다르면 `unsigned char fe_live_<var> = 1;` 플래그 삽입, drop 전에 검사.
 - **`match`**: `switch (x.tag)`. 페이로드 바인딩은 지역 변수로 복사 또는 포인터.
 - **`asm`**: Intel 문법으로 고정 저장. Watcom/Borland는 그대로, gcc는 `__asm__(".intel_syntax noprefix\n" ...)`로 감싼다.
+- **`@print` 계열**: emit 단계에는 도달하지 않는다. lower 단계에서 이미 `fmt.write_*` 호출 나열로 전개되므로 emit_c는 일반 함수 호출로만 본다. 포맷 문자열 조각은 각각 static const 문자열 리터럴로 방출하고 동일 문자열은 중복 제거.
 - **방출 순서**: typedef 전방선언 → struct 정의(의존 위상 정렬) → 전역 → 함수 프로토타입 → 함수 본문.
 - 유닛 하나당 `.c` 하나, `.fei`에서 필요한 부분은 `.h`로 생성.
 
@@ -573,18 +619,22 @@ Uninit | Owned | Moved | MaybeMoved | Shared(n) | Exclusive
 | M1 | lexer, parser, AST 덤프 | `--dump-ast`가 std 소스 전체를 파싱 |
 | M2 | 타입 검사 + C 방출: 정수, 함수, if, while | bits32 hello world 실행 |
 | M3 | struct, enum, match, 배열, 슬라이스, 경계 검사, str | 문자열 처리 예제 통과 |
-| M4 | `^T`, drop, defer, 이동 검사 | 누수/이중해제 테스트 통과 |
-| M5 | `&`, `&mut`, 배타성 검사 (own.c 전체) | R1~R8 실패 테스트 통과 |
-| M6 | `?T`, `E!T`, try/catch | io 유닛 동작 |
-| M7 | 유닛/import/.fei, 분리 컴파일, std 초안 | 다중 유닛 프로그램 빌드 |
-| M8 | **제네릭** (모노모피제이션) | `List(T)`, `Map(K,V)`를 Ferro로 재작성 |
-| M9 | bits16 타깃: far, `@seg_ptr`, 메모리 모델, asm, interrupt fn | DOSBox에서 VGA 데모 실행 |
-| M10 | 컴파일러 B를 Ferro로 작성, A로 빌드 | B가 M1~M9 테스트 통과 |
-| M11 | 셀프호스팅 fixpoint | B(B(B)) == B(B) 바이트 동일, A 폐기 |
-| M12 | 386 네이티브 백엔드 | gcc 없이 빌드, 컴파일 속도 10배 |
-| M13 | 8086 네이티브 백엔드 | Watcom 없이 bits16 빌드 |
+| M4 | **`@print`/`@fprint`/`@sprint` 빌트인** (§6.3.1), `io.Writer` 함수 포인터 struct | 포맷 출력 동작, 인자 개수·타입 불일치가 컴파일 에러 |
+| M5 | `^T`, drop, defer, 이동 검사 | 누수/이중해제 테스트 통과 |
+| M6 | `&`, `&mut`, 배타성 검사 (own.c 전체) | R1~R8 실패 테스트 통과 |
+| M7 | `?T`, `E!T`, try/catch | io 유닛 동작 |
+| M8 | 유닛/import/.fei, 분리 컴파일, std 초안 | 다중 유닛 프로그램 빌드 |
+| M9 | **제네릭** (모노모피제이션) | `List(T)`, `Map(K,V)`를 Ferro로 재작성 |
+| M10 | bits16 타깃: far, `@seg_ptr`, 메모리 모델, asm, interrupt fn | DOSBox에서 VGA 데모 실행 |
+| M11 | 컴파일러 B를 Ferro로 작성, A로 빌드 | B가 M1~M10 테스트 통과 |
+| M12 | 셀프호스팅 fixpoint | B(B(B)) == B(B) 바이트 동일, A 폐기 |
+| M13 | 386 네이티브 백엔드 | gcc 없이 빌드, 컴파일 속도 10배 |
+| M14 | 8086 네이티브 백엔드 | Watcom 없이 bits16 빌드 |
 
-M8은 M9보다 앞이다(제네릭 없이 표준 라이브러리를 쓰는 기간을 최소화).
+배치 근거:
+- **M4(포매팅)를 앞에 두는 이유**: 구현이 작고(check + lower 합쳐 300줄 안팎) 언어 표면에 새 개념을 추가하지 않는다. 이후 모든 마일스톤의 디버깅과 M11의 컴파일러 B 에러 출력이 여기에 의존한다.
+- **M9(제네릭)가 M10보다 앞인 이유**: 제네릭 없이 표준 라이브러리를 쓰는 기간을 최소화한다.
+- **인터페이스(`dyn`)는 마일스톤에 없다**: 부트스트랩 경로에 불필요하고(컴파일러 B는 인터페이스 없이 작성 가능), 타입 시스템 전반에 영향을 준다. §13의 v0.2 1순위로 미룬다. 그때까지 `io.Writer`/`io.Reader` 함수 포인터 struct로 대체한다.
 
 ---
 
@@ -599,6 +649,8 @@ tests/
 ```
 
 - `fail/`은 규칙별 최소 3개: R1(이동 후 사용), R3(직접 drop 호출), R4(필드에 참조), R5(스코프 초과), R6(배타성 위반), R7(무효화), R8(참조 반환 바인딩), R9(unsafe 밖 raw 역참조), match 완전성, 암묵 변환, 타입 불일치.
+- 포매팅(§6.3.1) 전용 `fail/` 케이스: `{}` 개수 > 인자 개수, 인자 개수 > `{}` 개수, 미지원 verb(`{q}`), 런타임 값 포맷 문자열, 대응 `write_*` 없는 타입(예: struct), 닫히지 않은 `{`.
+- 포매팅 `pass/` 케이스: 각 verb 1개 이상, `{{` 이스케이프, 인자 0개, `@sprint` 반환 길이 검증, `@fprint`를 `io.buf_writer`로 호출.
 - 각 마일스톤은 해당 기능의 pass/fail 테스트와 함께 완료한다.
 - 회귀 실행: `make test` — 전 타깃 전 테스트.
 
@@ -606,18 +658,47 @@ tests/
 
 ## 13. 의도적으로 제외한 기능
 
-| 기능 | 제외 이유 | 대체 수단 |
-|---|---|---|
-| 라이프타임 표기 (`'a`) | 전역 분석 필요 | R4 (2급 참조) |
-| 트레잇/인터페이스 | 복잡도 대비 이득 낮음 | 함수 포인터 struct: `struct Writer { ctx: *void, write: fn(*void, []u8) -> !usize }` |
-| 클로저 | 캡처 = 참조 저장 = R4 위반 | 콜백에 `ctx: *void` 전달 |
-| 매크로 / 전처리기 | 도구 지원과 컴파일 속도 파괴 | `const`, `comptime if`, 제네릭 |
-| 예외 | 언와인딩 기반 시설 없음, 비용 큼 | 에러 유니온 |
-| GC | 결정적 비용 원칙 위반 | 소유권 + RAII + 아레나 |
-| 연산자 오버로딩 | 숨은 비용 | 메서드 |
-| 가변 인자 | ABI 복잡, 타입 안전 불가 | 제네릭 `comptime` 파라미터 |
-| 튜플 / 다중 반환 | 이름 없는 필드는 가독성 손해 | struct |
-| 암묵 형변환 | 버그 원인 1위 | `as` |
-| 스레드 | DOS에 없음 | — |
-| 상속 | — | 합성 |
+**등급 정의**
+- `영구` — §1 철학과 정면 충돌. v2.0에서도 넣지 않는다.
+- `구조적 불가` — 넣으면 R4를 풀어야 하고 전역 분석이 생겨 셀프호스팅 목표가 깨진다. 이 언어의 정의상 불가.
+- `v0.2` — 넣을 예정. 순서 문제일 뿐 원칙 위반 아님.
+- `편의` — 원칙 위반 없음, 구현도 쉬움. 여유 생기면 아무 때나.
 
+| 기능 | 등급 | 제외 이유 | 대체 수단 |
+|---|---|---|---|
+| 트레잇/인터페이스 (`dyn`) | **v0.2 (1순위)** | 부트스트랩에 불필요, 타입 시스템 전반에 영향 | 함수 포인터 struct (`io.Writer`, §10) |
+| 클로저 | v0.2 | 캡처 = 참조 저장 = R4 위반 소지 | 콜백에 `ctx: *void` 전달 |
+| 연산자 오버로딩 | v0.2 (인터페이스 이후) | 숨은 비용. 넣더라도 특정 인터페이스 구현으로만 제한 | 메서드 |
+| 튜플 / 다중 반환 | 편의 | 이름 없는 필드는 가독성 손해 | struct |
+| 레이블 있는 break | 편의 | — | 플래그 변수 |
+| 슬라이스 패턴 매칭 | 편의 | — | 인덱스 비교 |
+| `inline fn` | 편의 | — | C 방출 시 `static inline` |
+| 라이프타임 표기 (`'a`) | **구조적 불가** | 전역 분석 필요, R4를 풀어야 함 | R4 (2급 참조), 인덱스 핸들 |
+| 스레드 | 구조적 불가 | DOS에 없음 | — |
+| 매크로 / 전처리기 | **영구** | 도구 지원과 컴파일 속도 파괴 | `const`, `comptime if`, 제네릭, `@print` |
+| 예외 | 영구 | 언와인딩 기반 시설 없음, 숨은 비용 | 에러 유니온 |
+| GC | 영구 | 결정적 비용 원칙 위반 | 소유권 + RAII + 아레나 |
+| 암묵 형변환 | 영구 | 버그 원인 1위 | `as` |
+| 상속 | 영구 | 숨은 vtable, 취약한 기반 클래스 | 합성 |
+
+### 13.1 인터페이스 설계 스케치 (v0.2 예정)
+
+지금 구현하지 않되, 나중에 `io.Writer` 함수 포인터 struct를 무리 없이 대체할 수 있도록 방향만 고정해 둔다.
+
+```fe
+pub interface Writer {
+    fn write(self: &mut Self, buf: []u8) -> !usize;
+}
+impl Writer for File { ... }
+
+fn dump(w: &mut dyn Writer, data: []u8) -> !void { ... }
+dump(&mut file, buf);          // &mut File → &mut dyn Writer 자동 변환
+```
+
+- `dyn I`의 표현은 `(ctx, vtable)` 팻 포인터. vtable은 `(인터페이스, 구현 타입)` 쌍마다 `static const` 하나.
+- **동적 디스패치 전용.** 제네릭 타입 제약(trait bound)으로는 쓸 수 없다 — 그걸 허용하면 전역 분석이 생긴다.
+- `&dyn I`는 참조이므로 R4가 적용된다(필드 저장 불가). 필드에 담으려면 `^dyn I`(힙 박싱).
+- `^dyn I`의 drop은 vtable 경유. 이 때문에 `?^dyn I`, drop 전개, 제네릭 인자로서의 `dyn` 등 타입 시스템 여러 곳에 케이스가 추가되므로 독립 마일스톤으로 다룬다.
+- 도입 시 `io.Writer`/`io.Reader`는 `dyn`으로 교체하고, 함수 포인터 struct 버전은 제거한다(`*void`가 만드는 dangling 구멍이 닫힌다).
+
+위 표에 없는 항목(링크타임 최적화, 디버그 정보 포맷, 언어 서버 등)은 도구 영역이며 v0.2 이후 별도 검토.
