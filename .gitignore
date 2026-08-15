@@ -5,6 +5,7 @@
 !.qemu/*.txt
 !.qemu/share/
 !.qemu/share/*.c
+.qemu/share/fec/
 
 .qemu/*.qcow2
 .qemu/*.img

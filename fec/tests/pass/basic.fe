@@ -1,0 +1,25 @@
+unit basic;
+import core;
+
+/* outer comment /* nested comment */ still active */
+const LIMIT: u16 = 1_000;
+pub struct Point {
+    pub x: i32,
+    y: i32,
+    pub fn new(x: i32, y: i32) -> Point { return Point{ x: x, y: y }; }
+    pub fn shift(self: &mut Self, dx: i32) { self.x += dx; }
+}
+pub enum Shape {
+    Empty,
+    Circle(i32),
+    Rect{ w: i32, h: i32 },
+}
+pub error IoError { NotFound = 1, Denied = 2, }
+
+pub fn main() -> !void {
+    let p: Point = Point{ x: 1, y: 2 };
+    if p.x > 0 and true { p.shift(1); } else { p.x = 0; }
+    while p.x < 10 { p.x += 1; if p.x == 5 { continue; } }
+    for i, x in p.x..10 { let _n: usize = i; let _q = x; }
+    return;
+}

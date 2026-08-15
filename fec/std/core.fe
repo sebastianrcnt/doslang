@@ -1,0 +1,5 @@
+unit core;
+
+pub error Error { Invalid = 1, Io = 2, }
+pub fn panic(msg: str, file: str, line: u32) { }
+pub fn assert(ok: bool) { }

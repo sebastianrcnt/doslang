@@ -1,0 +1,2 @@
+unit sys;
+pub fn exit(code: u16);

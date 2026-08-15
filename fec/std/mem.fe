@@ -1,0 +1,11 @@
+unit mem;
+
+pub fn create(T: type) -> !^T;
+pub fn destroy(p: *void);
+pub fn copy(dst: []u8, src: []u8);
+pub struct Arena {
+    ptr: *void,
+    pub fn init() -> Arena { return Arena{ ptr: null }; }
+    pub fn reset(self: &mut Self) { }
+    pub fn drop(self: &mut Self) { }
+}

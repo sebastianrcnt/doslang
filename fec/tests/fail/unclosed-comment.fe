@@ -1,0 +1,3 @@
+// ERROR:unterminated block comment
+unit broken;
+/* no ending delimiter

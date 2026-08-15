@@ -1,0 +1,6 @@
+unit list;
+pub struct List(T) {
+    items: ^[]T,
+    len: usize,
+    pub fn at(self: &Self, i: usize) -> &T;
+}

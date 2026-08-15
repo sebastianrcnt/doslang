@@ -1,0 +1,4 @@
+unit fmt;
+pub fn write_str(w: &mut io.Writer, s: str) -> !void;
+pub fn write_int_i32(w: &mut io.Writer, v: i32) -> !void;
+pub fn write_bool(w: &mut io.Writer, v: bool) -> !void;

@@ -1,0 +1,4 @@
+unit map;
+pub struct Map(K, V) {
+    len: usize,
+}

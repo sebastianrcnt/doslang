@@ -1,0 +1,3 @@
+unit str;
+pub fn eq(a: str, b: str) -> bool;
+pub fn trim(s: str) -> str;

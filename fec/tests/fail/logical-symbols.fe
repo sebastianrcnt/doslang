@@ -1,0 +1,3 @@
+// ERROR:logical operator
+unit old_logic;
+fn main() { let x = true && false; }

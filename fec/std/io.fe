@@ -1,0 +1,9 @@
+unit io;
+pub struct Writer {
+    ctx: *void,
+    write_fn: fn(*void, []u8) -> !usize,
+}
+pub struct File {
+    handle: u16,
+    pub fn close(self: &mut Self) { }
+}

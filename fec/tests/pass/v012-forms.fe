@@ -1,0 +1,20 @@
+unit v012_forms;
+
+shared atomic var ticks: u16 = 0;
+packed struct Packet {
+    tag: u8,
+    value: u16,
+}
+interrupt_safe fn poll() { }
+interrupt fn timer() { }
+fn invoke(p: far fn()) { }
+
+pub fn demo() {
+    var count = undefined;
+    count = 1;
+    critical { ticks += 1; }
+    let x = true and not false or false;
+    let y = x orelse true;
+    let e = error.NotFound;
+    @call_far(@as_far_fn(timer));
+}

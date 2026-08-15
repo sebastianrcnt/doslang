@@ -1,0 +1,12 @@
+unit literals;
+const A: u32 = 0xFF;
+const B: u16 = 0b1010;
+const C: u16 = 0o17;
+const D: u32 = 1_000_000;
+pub fn strings() {
+    let a = "hello\\nworld";
+    let b = '\x41';
+    let c = true;
+    let d = null;
+    let e = a orelse "fallback";
+}

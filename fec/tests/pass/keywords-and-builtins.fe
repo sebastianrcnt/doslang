@@ -1,0 +1,9 @@
+unit keywords_and_builtins;
+
+pub fn demo() {
+    let a = true and not false;
+    let b = a or false;
+    @print("selected branch");
+    let p = @as_far_fn(handler);
+    @call_far(p);
+}

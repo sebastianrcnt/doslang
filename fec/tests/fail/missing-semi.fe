@@ -1,0 +1,3 @@
+// ERROR:expected ';'
+unit broken;
+fn main() { let x: i32 = 1 }
