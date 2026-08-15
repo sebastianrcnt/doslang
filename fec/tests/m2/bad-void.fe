@@ -1,0 +1,10 @@
+unit bad_void;
+
+fn noop() {
+    return;
+}
+
+fn main() -> i32 {
+    let value: i32 = noop();
+    return value;
+}

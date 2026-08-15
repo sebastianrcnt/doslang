@@ -15,6 +15,7 @@ typedef enum FeNodeKind {
 } FeNodeKind;
 
 typedef struct FeNode FeNode;
+typedef struct FeType FeType;
 struct FeNode {
     FeNodeKind kind;
     FeLoc loc;
@@ -24,6 +25,9 @@ struct FeNode {
     FeNode *c;
     FeNode *children;
     FeNode *next;
+    /* Semantic information filled by checking; kept out of AST dumps. */
+    char *cname;
+    FeType *sem_type;
 };
 
 typedef struct FeAst {

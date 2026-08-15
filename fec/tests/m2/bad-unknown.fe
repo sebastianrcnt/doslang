@@ -1,0 +1,5 @@
+unit bad_unknown;
+
+fn main() -> i32 {
+    return missing_name;
+}
