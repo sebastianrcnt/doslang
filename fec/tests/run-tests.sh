@@ -61,3 +61,33 @@ for f in badfld badmat badarr badcycle badstr badchar badfield badindex; do
     fi
 done
 echo "M3 tests: structs, enums, arrays, slices, str, match, and bounds passed"
+
+m4tmp=$(mktemp -d)
+trap 'rm -rf "$m2tmp" "$m3tmp" "$m4tmp"' EXIT HUP INT TERM
+for f in format; do
+    "$root"/fec --target=bits32 --emit-c "$root"/tests/m4/$f.fe -o "$m4tmp/$f.c"
+    ${CC:-cc} -std=c89 -pedantic "$m4tmp/$f.c" -o "$m4tmp/$f"
+    "$m4tmp/$f" >"$m4tmp/$f.out"
+done
+for f in try-fprint; do
+    "$root"/fec --target=bits32 --emit-c "$root"/tests/m4/$f.fe -o "$m4tmp/$f.c"
+    ${CC:-cc} -std=c89 -pedantic "$m4tmp/$f.c" -o "$m4tmp/$f"
+    "$m4tmp/$f"
+done
+"$root"/fec --target=bits32 --emit-c "$root"/tests/m4/prop.fe -o "$m4tmp/prop.c"
+cp "$root"/tests/m4/proptest.c "$m4tmp/proptest.c"
+${CC:-cc} -std=c89 -pedantic "$m4tmp/proptest.c" -o "$m4tmp/prop"
+"$m4tmp/prop"
+for f in bad-arity bad-verb bad-runtime bad-type bad-try bad-writer; do
+    if "$root"/fec --target=bits32 --emit-c "$root"/tests/m4/$f.fe -o "$m4tmp/$f.c" >/dev/null 2>/dev/null; then
+        echo "FAIL (accepted M4 semantic error): $f.fe"
+        exit 1
+    fi
+done
+for f in bad-many bad-open bad-cls; do
+    if "$root"/fec --target=bits32 --emit-c "$root"/tests/m4/$f.fe -o "$m4tmp/$f.c" >/dev/null 2>/dev/null; then
+        echo "FAIL (accepted M4 format-brace error): $f.fe"
+        exit 1
+    fi
+done
+echo "M4 tests: formatting builtins passed"

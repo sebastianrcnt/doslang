@@ -189,6 +189,45 @@ if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M3\BADINDEX.FE -o TESTS\M3\BADINDEX.C > nul
 if not errorlevel 1 goto test_fail
 
+if exist TESTS\M4\FORMAT.C del TESTS\M4\FORMAT.C
+if exist TESTS\M4\FORMAT.EXE del TESTS\M4\FORMAT.EXE
+fec.exe --target=bits32 --emit-c TESTS\M4\FORMAT.FE -o TESTS\M4\FORMAT.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\M4\FORMAT.EXE TESTS\M4\FORMAT.C
+if errorlevel 1 goto test_fail
+TESTS\M4\FORMAT.EXE > nul
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\TRY-FPR.FE -o TESTS\M4\TRY-FPR.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\M4\TRY-FPR.EXE TESTS\M4\TRY-FPR.C
+if errorlevel 1 goto test_fail
+TESTS\M4\TRY-FPR.EXE > nul
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\PROP.FE -o TESTS\M4\PROP.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\M4\PROP.EXE TESTS\M4\PROPTEST.C
+if errorlevel 1 goto test_fail
+TESTS\M4\PROP.EXE > nul
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-ARI.FE -o TESTS\M4\BAD-ARI.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-VERB.FE -o TESTS\M4\BAD-VERB.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-RUN.FE -o TESTS\M4\BAD-RUN.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-TYP.FE -o TESTS\M4\BAD-TYP.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-TRY.FE -o TESTS\M4\BAD-TRY.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-WRI.FE -o TESTS\M4\BAD-WRI.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-MANY.FE -o TESTS\M4\BAD-MANY.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-OPEN.FE -o TESTS\M4\BAD-OPEN.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-CLS.FE -o TESTS\M4\BAD-CLS.C > nul
+if not errorlevel 1 goto test_fail
+
 echo OK>TEST.OK
 cd C:\FEC
 goto test_done

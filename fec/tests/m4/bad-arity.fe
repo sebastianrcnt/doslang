@@ -1,0 +1,6 @@
+unit m4_bad_arity;
+
+fn main() -> i32 {
+    @print("{} {}", 1);
+    return 0;
+}

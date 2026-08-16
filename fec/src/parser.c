@@ -58,7 +58,14 @@ static FeNode *type(FeParser *p)
     }
     if (is_name(p) || is(p,FE_TOK_TYPE)) {
         next(p); n=toknode(p,FE_N_TYPE,t);
-        if (eat(p,FE_TOK_DOT)) { if(is_name(p)){FeNode *m=toknode(p,FE_N_IDENT,p->previous); n->a=m; next(p);} else error(p,"expected type name after '.'"); }
+        if (eat(p,FE_TOK_DOT)) {
+            if(is_name(p)) {
+                FeToken mt=p->current;
+                FeNode *m=toknode(p,FE_N_IDENT,mt);
+                n->a=m;
+                next(p);
+            } else error(p,"expected type name after '.'");
+        }
         if (eat(p,FE_TOK_BANG)) { FeNode *e=toknode(p,FE_N_TYPE,p->previous); e->a=n; e->b=type(p); return e; }
         if (eat(p,FE_TOK_LPAREN)) { while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n,type(p));if(!eat(p,FE_TOK_COMMA))break;} want(p,FE_TOK_RPAREN,"expected ')' in generic type"); }
         return n;
@@ -147,7 +154,7 @@ static FeNode *postfix(FeParser *p)
 static FeNode *expr(FeParser *p, int minprec)
 {
     FeToken t=p->current; FeNode *left,*n; int prec;
-    if(is(p,FE_TOK_MINUS)||is(p,FE_TOK_NOT)||is(p,FE_TOK_XOR)||is(p,FE_TOK_AND)||is(p,FE_TOK_STAR)||is(p,FE_TOK_TRY)) { next(p); n=toknode(p,FE_N_UNARY,t); n->a=expr(p,11); left=n; }
+    if(is(p,FE_TOK_MINUS)||is(p,FE_TOK_NOT)||is(p,FE_TOK_XOR)||is(p,FE_TOK_AND)||is(p,FE_TOK_STAR)||is(p,FE_TOK_TRY)) { next(p); n=toknode(p,FE_N_UNARY,t); if(t.kind==FE_TOK_AND && eat(p,FE_TOK_MUT)) n->text=fe_arena_strdup(&p->ast->arena,"&mut",4); n->a=expr(p,11); left=n; }
     else left=postfix(p);
     for(;;) { t=p->current;prec=precedence(t.kind);if(prec<=minprec)break;next(p);n=toknode(p,FE_N_BINARY,t);n->a=left;if(t.kind==FE_TOK_CATCH && eat(p,FE_TOK_OR)){if(is_name(p))n->b=toknode(p,FE_N_IDENT,p->current),next(p);else error(p,"expected catch binding");want(p,FE_TOK_OR,"expected '|' after catch binding");n->c=block(p);}else n->b=expr(p,prec);left=n; }
     return left;
@@ -229,7 +236,7 @@ static FeNode *statement(FeParser *p)
     if(is(p,FE_TOK_LBRACE)) return block(p);
     if(eat(p,FE_TOK_LET)) { n=toknode(p,FE_N_LET,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected variable name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in let");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
     if(eat(p,FE_TOK_VAR)) { n=toknode(p,FE_N_VAR,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected variable name");if(eat(p,FE_TOK_COLON))n->a=type(p);if(eat(p,FE_TOK_EQ))n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
-    if(eat(p,FE_TOK_CONST)) { n=toknode(p,FE_N_CONST,t);if(is_name(p))next(p);else error(p,"expected constant name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in const");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
+    if(eat(p,FE_TOK_CONST)) { n=toknode(p,FE_N_CONST,t);if(is_name(p)){n->text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}else error(p,"expected constant name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in const");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
     if(eat(p,FE_TOK_IF)) { n=toknode(p,FE_N_IF,t);if(eat(p,FE_TOK_LET)){n->text=fe_arena_strdup(&p->ast->arena,"if let",6);if(is_name(p))next(p);if(eat(p,FE_TOK_LPAREN)){if(is_name(p))next(p);want(p,FE_TOK_RPAREN,"expected ')' in if let pattern");}want(p,FE_TOK_EQ,"expected '=' in if let");}n->a=header_expr(p);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
     if(eat(p,FE_TOK_COMPTIME)) { n=toknode(p,FE_N_IF,t);want(p,FE_TOK_IF,"expected 'if' after comptime");n->text=fe_arena_strdup(&p->ast->arena,"comptime if",11);n->a=header_expr(p);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
     if(eat(p,FE_TOK_WHILE)) {n=toknode(p,FE_N_WHILE,t);n->a=header_expr(p);n->b=block(p);return n;}

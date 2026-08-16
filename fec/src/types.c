@@ -22,10 +22,12 @@ static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
     t->bits = 0;
     t->is_unsigned = 0;
     t->packed = 0;
+    t->is_error = 0;
     t->length = 0;
     t->size = 0;
     t->align = 1;
     t->elem = 0;
+    t->error_value = 0;
     t->ref_mut = 0;
     t->fields = 0;
     t->field_count = 0;
@@ -60,6 +62,9 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
     else if (strcmp(name, "bool") == 0) kind = FE_TYPE_BOOL;
     else if (strcmp(name, "char") == 0) kind = FE_TYPE_CHAR;
     else if (strcmp(name, "str") == 0) kind = FE_TYPE_STR;
+    else if (strcmp(name, "io.Writer") == 0) {
+        kind = FE_TYPE_STRUCT;
+    }
     else if (strcmp(name, "i8") == 0 || strcmp(name, "u8") == 0) {
         kind = FE_TYPE_INT; bits = 8; uns = name[0] == 'u';
     } else if (strcmp(name, "i16") == 0 || strcmp(name, "u16") == 0) {
@@ -73,6 +78,12 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
     if (!t) return 0;
     t->bits = bits;
     t->is_unsigned = uns;
+    if (strcmp(name,"io.Writer")==0) {
+        t->cname=fe_arena_strdup(ctx->arena,"fe_writer",10);
+        t->size=4;
+        t->align=1;
+        return t;
+    }
     if (kind == FE_TYPE_STR) {
         t->cname = fe_arena_strdup(ctx->arena, "fe_str", 6);
         t->elem = fe_type_intern(ctx, "u8");
@@ -155,6 +166,19 @@ FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable)
     return t;
 }
 
+FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value)
+{
+    char key[128];
+    FeType *t;
+    sprintf(key,"!%s",value ? value->name : "?");
+    t=fe_type_intern(ctx,key);
+    if(t->kind==FE_TYPE_UNKNOWN) {
+        t->kind=FE_TYPE_ERROR_UNION;
+        t->error_value=value;
+    }
+    return t;
+}
+
 FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed)
 {
     FeType *t;
@@ -227,7 +251,10 @@ FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node)
             t->variants[i].name = v->text;
             t->variants[i].fields = 0;
             t->variants[i].field_count = 0;
-            t->variants[i].tag = i;
+            if (node->kind==FE_N_ERROR_DECL && v->a &&
+                v->a->kind==FE_N_LITERAL && v->a->text)
+                t->variants[i].tag=(unsigned)strtoul(v->a->text,0,0);
+            else t->variants[i].tag = i;
             t->variants[i].ast_node = v;
             t->variants[i].maker = generated_name(ctx, "fe_make_variant_", v->text ? v->text : "variant");
             if (v->a && v->a->kind == FE_N_TYPE) {
@@ -263,6 +290,13 @@ FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node)
             ++i;
         }
     }
+    return t;
+}
+
+FeType *fe_type_declare_error(FeTypeCtx *ctx, const FeNode *node)
+{
+    FeType *t=fe_type_declare_enum(ctx,node);
+    if (t) t->is_error=1;
     return t;
 }
 
@@ -302,6 +336,10 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
     t->cycle_state = 1;
     if (t->kind == FE_TYPE_VOID || t->kind == FE_TYPE_UNKNOWN ||
         t->kind == FE_TYPE_ERROR) { t->size = 0; t->align = 1; t->cycle_state = 2; return; }
+    if (t->kind == FE_TYPE_ERROR_UNION) {
+        t->size = 2; t->align = ctx->pointer_bits == 16 ? 1U : 2U;
+        t->cycle_state = 2; return;
+    }
     if (t->kind == FE_TYPE_BOOL || t->kind == FE_TYPE_CHAR) {
         t->size = 1; t->align = 1; t->cycle_state = 2; return;
     }
@@ -395,12 +433,18 @@ FeVariantType *fe_type_variant(FeType *t, const char *name)
 FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
 {
     unsigned long length = 0;
+    char qualified[128];
     if (!node) return fe_type_intern(ctx, "<unknown>");
     if (node->kind != FE_N_TYPE) return fe_type_intern(ctx, "<unknown>");
     if (node->text && strcmp(node->text, "as") == 0)
         return fe_type_from_ast(ctx, node->b);
     if (node->text && strcmp(node->text, "str") == 0)
         return fe_type_intern(ctx, "str");
+    if (node->a && node->a->kind==FE_N_IDENT && node->text &&
+        strcmp(node->text,"io")==0 && node->a->text) {
+        sprintf(qualified,"%s.%s",node->text,node->a->text);
+        return fe_type_intern(ctx,qualified);
+    }
     if (node->text && (strcmp(node->text, "&") == 0 ||
                        strcmp(node->text, "&mut") == 0))
         return fe_type_ref(ctx, fe_type_from_ast(ctx,node->a),
@@ -413,8 +457,12 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
         }
         return fe_type_slice(ctx, fe_type_from_ast(ctx, node->b));
     }
+    if (node->text && strcmp(node->text, "!") == 0)
+        /* Prefix !T stores T in a; the E!T spelling stores its success
+           type in b and the error type in a. */
+        return fe_type_error_union(ctx, fe_type_from_ast(
+            ctx, node->b ? node->b : node->a));
     if (node->text && (strcmp(node->text, "?") == 0 ||
-                       strcmp(node->text, "!") == 0 ||
                        strcmp(node->text, "^") == 0 ||
                        strcmp(node->text, "&") == 0 ||
                        strcmp(node->text, "&mut") == 0 ||
@@ -447,6 +495,7 @@ const char *fe_type_c_name(const FeType *t, unsigned pointer_bits)
     if (!t) return "long";
     if (t->cname) return t->cname;
     if (t->kind == FE_TYPE_VOID) return "void";
+    if (t->kind == FE_TYPE_ERROR_UNION) return "unsigned short";
     if (t->kind == FE_TYPE_BOOL || t->kind == FE_TYPE_CHAR) return "unsigned char";
     if (t->kind == FE_TYPE_REF) {
         static char ref_name[128];

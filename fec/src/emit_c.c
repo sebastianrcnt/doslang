@@ -40,6 +40,7 @@ static void emit_type_deps(FeEmitter *e, FeType *t)
 static void emit_one_type(FeEmitter *e, FeType *t)
 {
     unsigned i,j;
+    if (t && strcmp(t->name,"io.Writer")==0) return;
     if (!t || t->emit_state ||
         (t->kind != FE_TYPE_STRUCT && t->kind != FE_TYPE_ENUM &&
          t->kind != FE_TYPE_ARRAY && t->kind != FE_TYPE_SLICE)) return;
@@ -114,12 +115,12 @@ static void emit_type_helpers(FeEmitter *e)
                     fe_type_c_name(t->elem,e->pointer_bits),t->indexer,t->cname);
             if(!e->no_checks) fprintf(e->out,"if (i >= %lu) fe_trap_bounds(); ",t->length);
             fprintf(e->out,"return x.a[i]; }\n");
-            fprintf(e->out,"static %s %s(%s x, unsigned long a, unsigned long b) { ",
+            fprintf(e->out,"static %s %s(%s *x, unsigned long a, unsigned long b) { ",
                     fe_type_c_name(fe_type_slice(&e->check->types,t->elem),e->pointer_bits),t->slicer,t->cname);
             if(!e->no_checks) fputs("if (a > b || b > ",e->out), fprintf(e->out,"%lu",t->length), fputs(") fe_trap_bounds(); ",e->out);
-            fprintf(e->out,"return %s(x.a+a,b-a); }\n",fe_type_slice(&e->check->types,t->elem)->maker);
-            fprintf(e->out,"static %s %s(%s x) { return %s(x,0,%lu); }\n",fe_type_c_name(fe_type_slice(&e->check->types,t->elem),e->pointer_bits),t->full_slicer,t->cname,t->slicer,t->length);
-            fprintf(e->out,"static %s %s(%s x, unsigned long a) { return %s(x,a,%lu); }\n",fe_type_c_name(fe_type_slice(&e->check->types,t->elem),e->pointer_bits),t->tail_slicer,t->cname,t->slicer,t->length);
+            fprintf(e->out,"return %s(x->a+a,b-a); }\n",fe_type_slice(&e->check->types,t->elem)->maker);
+            fprintf(e->out,"static %s %s(%s *x) { return %s(x,0,%lu); }\n",fe_type_c_name(fe_type_slice(&e->check->types,t->elem),e->pointer_bits),t->full_slicer,t->cname,t->slicer,t->length);
+            fprintf(e->out,"static %s %s(%s *x, unsigned long a) { return %s(x,a,%lu); }\n",fe_type_c_name(fe_type_slice(&e->check->types,t->elem),e->pointer_bits),t->tail_slicer,t->cname,t->slicer,t->length);
         } else if (t->kind==FE_TYPE_SLICE && t->indexer) {
             fprintf(e->out,"static %s %s(%s x, unsigned long i) { ",
                     fe_type_c_name(t->elem,e->pointer_bits),t->indexer,t->cname);
@@ -141,6 +142,49 @@ static void emit_type_helpers(FeEmitter *e)
     fputs("return fe_make_str(x.p+a,b-a); }\n",e->out);
     fputs("static fe_str fe_full_slice_str(fe_str x) { return fe_slice_str(x,0,x.n); }\n",e->out);
     fputs("static fe_str fe_tail_slice_str(fe_str x, unsigned long a) { return fe_slice_str(x,a,x.n); }\n",e->out);
+}
+
+static void emit_m4_runtime(FeEmitter *e)
+{
+    fputs("typedef struct { unsigned char *p; unsigned long n; } fe_m4_slice;\n",e->out);
+    fputs("typedef struct { void *ctx; unsigned short (*write_fn)(void *, const unsigned char *, unsigned long); } fe_writer;\n",e->out);
+    fputs("unsigned short fe_m4_error;\n",e->out);
+    fputs("unsigned short fe_m4_stdout_write(void *ctx, const unsigned char *p, unsigned long n) { (void)ctx; return fwrite(p,1,(size_t)n,stdout)==(size_t)n ? 0 : 1; }\n",e->out);
+    fputs("unsigned short fe_m4_null_write(void *ctx, const unsigned char *p, unsigned long n) { (void)ctx; (void)p; (void)n; return 0; }\n",e->out);
+    fputs("unsigned short fe_m4_buf_write(void *ctx, const unsigned char *p, unsigned long n) { fe_m4_slice *b=(fe_m4_slice*)ctx; unsigned long k=n<b->n?n:b->n; if(k) memcpy(b->p,p,(size_t)k); b->p+=k; b->n-=k; return 0; }\n",e->out);
+    fputs("fe_writer fe_m4_stdout_writer(void) { fe_writer w; w.ctx=0; w.write_fn=fe_m4_stdout_write; return w; }\n",e->out);
+    fputs("fe_writer fe_m4_null_writer(void) { fe_writer w; w.ctx=0; w.write_fn=fe_m4_null_write; return w; }\n",e->out);
+    fputs("fe_writer fe_m4_buf_writer(fe_m4_slice *b) { fe_writer w; w.ctx=b; w.write_fn=fe_m4_buf_write; return w; }\n",e->out);
+    fputs("/* bounded sprint stack; overflow traps instead of corrupting an outer call */\n#define FE_M4_SPRINT_DEPTH 8\n",e->out);
+    fputs("typedef struct { fe_m4_slice b; unsigned long start_n; } fe_m4_sprint_frame;\n",e->out);
+    fputs("static fe_m4_sprint_frame fe_m4_sprint_stack[FE_M4_SPRINT_DEPTH];\n",e->out);
+    fputs("static unsigned fe_m4_sprint_depth;\n",e->out);
+    fputs("void fe_m4_sprint_begin(fe_m4_slice *b) { if (fe_m4_sprint_depth>=FE_M4_SPRINT_DEPTH) abort(); fe_m4_sprint_stack[fe_m4_sprint_depth].b=*b; fe_m4_sprint_stack[fe_m4_sprint_depth].start_n=b->n; ++fe_m4_sprint_depth; }\n",e->out);
+    fputs("fe_writer fe_m4_sprint_writer(void) { return fe_m4_buf_writer(&fe_m4_sprint_stack[fe_m4_sprint_depth-1].b); }\n",e->out);
+    fputs("unsigned long fe_m4_sprint_finish(void) { unsigned long result; if (!fe_m4_sprint_depth) abort(); --fe_m4_sprint_depth; result=fe_m4_sprint_stack[fe_m4_sprint_depth].start_n-fe_m4_sprint_stack[fe_m4_sprint_depth].b.n; return result; }\n",e->out);
+    fputs("unsigned short fe_m4_write_bytes(fe_writer w, const unsigned char *p, unsigned long n) { return w.write_fn ? w.write_fn(w.ctx,p,n) : 1; }\n",e->out);
+    fputs("unsigned short fe_m4_write_cstr(fe_writer w, const char *p) { return fe_m4_write_bytes(w,(const unsigned char*)p,(unsigned long)strlen(p)); }\n",e->out);
+    fputs("unsigned short fe_m4_write_str(fe_writer w, fe_str s) { return fe_m4_write_bytes(w,s.p,s.n); }\n",e->out);
+    fputs("#define fe_m4_write_slice(w,s) fe_m4_write_bytes((w),(s).p,(s).n)\n",e->out);
+    fputs("unsigned short fe_m4_write_int(fe_writer w, long v) { char b[40]; sprintf(b,\"%ld\",v); return fe_m4_write_cstr(w,b); }\n",e->out);
+    fputs("unsigned short fe_m4_write_hex(fe_writer w, unsigned long v) { char b[40]; sprintf(b,\"%lx\",v); return fe_m4_write_cstr(w,b); }\n",e->out);
+    fputs("unsigned short fe_m4_write_char(fe_writer w, unsigned char v) { return fe_m4_write_bytes(w,&v,1); }\n",e->out);
+    fputs("unsigned short fe_m4_write_bool(fe_writer w, unsigned char v) { return fe_m4_write_cstr(w,v ? \"true\" : \"false\"); }\n",e->out);
+    fputs("unsigned short fe_m4_write_error(fe_writer w, unsigned long v) { char b[40]; sprintf(b,\"error#%lu\",v); return fe_m4_write_cstr(w,b); }\n",e->out);
+}
+
+static int node_uses_m4(FeNode *n)
+{
+    FeNode *x;
+    if (!n) return 0;
+    if (n->kind==FE_N_CALL && n->text &&
+        (strcmp(n->text,"@print")==0 || strcmp(n->text,"@fprint")==0 ||
+         strcmp(n->text,"@sprint")==0)) return 1;
+    if (n->kind==FE_N_CALL && n->a && n->a->kind==FE_N_MEMBER &&
+        n->a->a && n->a->a->text && strcmp(n->a->a->text,"io")==0) return 1;
+    if (node_uses_m4(n->a) || node_uses_m4(n->b) || node_uses_m4(n->c)) return 1;
+    for (x=n->children; x; x=x->next) if (node_uses_m4(x)) return 1;
+    return 0;
 }
 
 static void emit_expr(FeEmitter *e, FeNode *n);
@@ -267,6 +311,187 @@ static void emit_c_literal(FILE *out, const char *text, int string)
     fputc(quote,out);
 }
 
+static void emit_m4_piece(FILE *out, const char *fmt, unsigned long begin,
+                          unsigned long end)
+{
+    unsigned long i;
+    unsigned long cp;
+    int h0,h1,h2,h3;
+    int c;
+    fputc('"',out);
+    for(i=begin;i<end;i++) {
+        c=(unsigned char)fmt[i];
+        if(c=='{' && i+1<end && fmt[i+1]=='{') { fputc('{',out); ++i; continue; }
+        if(c=='}' && i+1<end && fmt[i+1]=='}') { fputc('}',out); ++i; continue; }
+        if(c=='\\' && i+1<end) {
+            ++i; c=(unsigned char)fmt[i];
+            if(c=='n') emit_byte(out,10U);
+            else if(c=='r') emit_byte(out,13U);
+            else if(c=='t') emit_byte(out,9U);
+            else if(c=='0') emit_byte(out,0U);
+            else if(c=='x' && i+2<end &&
+                    (h0=hex_value((unsigned char)fmt[i+1]))>=0 &&
+                    (h1=hex_value((unsigned char)fmt[i+2]))>=0) {
+                emit_byte(out,(unsigned)((h0<<4)|h1)); i+=2;
+            } else if(c=='u' && i+4<end &&
+                      (h0=hex_value((unsigned char)fmt[i+1]))>=0 &&
+                      (h1=hex_value((unsigned char)fmt[i+2]))>=0 &&
+                      (h2=hex_value((unsigned char)fmt[i+3]))>=0 &&
+                      (h3=hex_value((unsigned char)fmt[i+4]))>=0) {
+                cp=(unsigned long)((h0<<12)|(h1<<8)|(h2<<4)|h3);
+                emit_codepoint(out,cp); i+=4;
+            }
+            else if(c=='\\' || c=='"') { fputc('\\',out); fputc(c,out); }
+            else emit_byte(out,(unsigned)c);
+            continue;
+        }
+        if(c=='"' || c=='\\') fputc('\\',out);
+        fputc(c,out);
+    }
+    fputc('"',out);
+}
+
+static void emit_m4_writer(FeEmitter *e, FeNode *arg, int buffer)
+{
+    if (buffer) {
+        fputs("fe_m4_buf_writer((fe_m4_slice*)&",e->out);
+        if (arg && arg->kind==FE_N_UNARY && arg->text &&
+            (strcmp(arg->text,"&")==0 || strcmp(arg->text,"&mut")==0)) emit_expr(e,arg->a);
+        else emit_expr(e,arg);
+        fputs(")",e->out);
+    } else if (arg && arg->kind==FE_N_UNARY && arg->text &&
+               (strcmp(arg->text,"&")==0 || strcmp(arg->text,"&mut")==0)) {
+        emit_expr(e,arg->a);
+    } else if (arg && arg->kind==FE_N_CALL && arg->a &&
+               arg->a->kind==FE_N_MEMBER) {
+        emit_expr(e,arg);
+    } else if (arg && arg->sem_type && arg->sem_type->kind==FE_TYPE_REF) {
+        fputs("(*",e->out); emit_expr(e,arg); fputc(')',e->out);
+    } else {
+        emit_expr(e,arg);
+    }
+}
+
+static void emit_m4_writer_value(FeEmitter *e, FeNode *writer, int buffer)
+{
+    if (!writer) fputs("fe_m4_stdout_writer()",e->out);
+    else if (buffer) fputs("fe_m4_sprint_writer()",e->out);
+    else emit_m4_writer(e,writer,buffer);
+}
+
+static void emit_m4_arg(FeEmitter *e, FeNode *arg, int verb,
+                        FeNode *writer, int buffer, int error_value)
+{
+    FeType *t=arg ? arg->sem_type : 0;
+    if (verb=='x') {
+        fputs("fe_m4_write_hex(",e->out); emit_m4_writer_value(e,writer,buffer); fputs(", (unsigned long)",e->out); emit_expr(e,arg); fputc(')',e->out); return;
+    }
+    if (verb=='c') {
+        fputs("fe_m4_write_char(",e->out); emit_m4_writer_value(e,writer,buffer); fputs(", (unsigned char)",e->out); emit_expr(e,arg); fputc(')',e->out); return;
+    }
+    if (verb=='b') {
+        fputs("fe_m4_write_bool(",e->out); emit_m4_writer_value(e,writer,buffer); fputs(", ",e->out); emit_expr(e,arg); fputc(')',e->out); return;
+    }
+    if (verb=='s' || (verb==' ' && t && (t->kind==FE_TYPE_STR || t->kind==FE_TYPE_SLICE))) {
+        if (t && t->kind==FE_TYPE_STR) fputs("fe_m4_write_str(",e->out);
+        else fputs("fe_m4_write_slice(",e->out);
+        emit_m4_writer_value(e,writer,buffer); fputs(", ",e->out); emit_expr(e,arg); fputc(')',e->out); return;
+    }
+    if (error_value) {
+        fputs("fe_m4_write_error(",e->out); emit_m4_writer_value(e,writer,buffer); fputs(", (unsigned long)",e->out); emit_expr(e,arg); fputs(".tag)",e->out); return;
+    }
+    if (verb==' ' && t && t->kind==FE_TYPE_BOOL) {
+        fputs("fe_m4_write_bool(",e->out); emit_m4_writer_value(e,writer,buffer); fputs(", ",e->out); emit_expr(e,arg); fputc(')',e->out); return;
+    }
+    if (verb==' ' && t && t->kind==FE_TYPE_CHAR) {
+        fputs("fe_m4_write_char(",e->out); emit_m4_writer_value(e,writer,buffer); fputs(", (unsigned char)",e->out); emit_expr(e,arg); fputc(')',e->out); return;
+    }
+    fputs("fe_m4_write_int(",e->out); emit_m4_writer_value(e,writer,buffer); fputs(", (long)",e->out); emit_expr(e,arg); fputc(')',e->out);
+}
+
+static void emit_m4_builtin(FeEmitter *e, FeNode *n)
+{
+    const char *fmt=n->aux_text;
+    FeNode *fmt_node=n->children;
+    FeNode *arg;
+    FeNode *writer_arg=0;
+    FeNode *buffer_arg=0;
+    unsigned long i,j,last=1;
+    unsigned count=0;
+    int verb;
+    int error_value;
+    int first=1;
+    int is_print=strcmp(n->text,"@print")==0;
+    int is_sprint=strcmp(n->text,"@sprint")==0;
+    if (!fmt) { fputs("0",e->out); return; }
+    if (is_print) writer_arg=0;
+    else if (is_sprint) { buffer_arg=fmt_node; fmt_node=fmt_node ? fmt_node->next : 0; }
+    else { writer_arg=fmt_node; fmt_node=fmt_node ? fmt_node->next : 0; }
+    arg=fmt_node ? fmt_node->next : 0;
+    error_value=0;
+    fputc('(',e->out);
+    if (!is_print && !is_sprint) {
+        fputs("fe_m4_error=0",e->out);
+        first=0;
+    }
+    if (is_sprint) {
+        fputs("fe_m4_sprint_begin((fe_m4_slice*)&",e->out); emit_expr(e,buffer_arg); fputs(")",e->out);
+        first=0;
+    }
+    i=1;
+    while(fmt[i] && fmt[i]!='"') {
+        if(fmt[i]=='\\') { ++i; if(fmt[i]) ++i; continue; }
+        if(fmt[i]=='{' && fmt[i+1]=='{') { i+=2; continue; }
+        if(fmt[i]=='}' && fmt[i+1]=='}') { i+=2; continue; }
+        if(fmt[i]=='{') {
+            j=i+1; while(fmt[j] && fmt[j]!='}') ++j;
+            if(!fmt[j]) break;
+            if(i>last) {
+                if(!first) fputs(", ",e->out);
+                if (!is_print && !is_sprint)
+                    fputs("fe_m4_error ? fe_m4_error : (fe_m4_error = ",e->out);
+                if(is_print) { fputs("fe_m4_write_cstr(fe_m4_stdout_writer(), ",e->out); emit_m4_piece(e->out,fmt,last,i); fputc(')',e->out); }
+                else { fputs("fe_m4_write_cstr(",e->out); if(is_sprint) emit_m4_writer_value(e,buffer_arg,1); else emit_m4_writer(e,writer_arg,0); fputs(", ",e->out); emit_m4_piece(e->out,fmt,last,i); fputc(')',e->out); }
+                if (!is_print && !is_sprint) fputc(')',e->out);
+                first=0;
+            }
+            verb=(j==i+1) ? ' ' : (j==i+2 ? (unsigned char)fmt[i+1] : '?');
+            if(arg) {
+                error_value=arg->sem_type && arg->sem_type->kind==FE_TYPE_ENUM &&
+                    arg->sem_type->is_error;
+                if(!first) fputs(", ",e->out);
+                if (!is_print && !is_sprint)
+                    fputs("fe_m4_error ? fe_m4_error : (fe_m4_error = ",e->out);
+                if(is_print) emit_m4_arg(e,arg,verb,0,0,error_value);
+                else {
+                    /* The writer expression is repeated intentionally; it is
+                       a value wrapper and does not re-evaluate source args. */
+                    emit_m4_arg(e,arg,verb, is_sprint ? buffer_arg : writer_arg,
+                                is_sprint,error_value);
+                }
+                if (!is_print && !is_sprint) fputc(')',e->out);
+                first=0; arg=arg->next; ++count;
+            }
+            last=j+1; i=j+1; continue;
+        }
+        ++i;
+    }
+    if(fmt[i]=='"' && i>last) {
+        if(!first) fputs(", ",e->out);
+        if (!is_print && !is_sprint)
+            fputs("fe_m4_error ? fe_m4_error : (fe_m4_error = ",e->out);
+        if(is_print) { fputs("fe_m4_write_cstr(fe_m4_stdout_writer(), ",e->out); emit_m4_piece(e->out,fmt,last,i); fputc(')',e->out); }
+        else { fputs("fe_m4_write_cstr(",e->out); if(is_sprint) emit_m4_writer_value(e,buffer_arg,1); else emit_m4_writer(e,writer_arg,0); fputs(", ",e->out); emit_m4_piece(e->out,fmt,last,i); fputc(')',e->out); }
+        if (!is_print && !is_sprint) fputc(')',e->out);
+        first=0;
+    }
+    if(first) fputs("0",e->out);
+    if(is_print) fputs(", (void)0",e->out);
+    else if(is_sprint) { fputs(", fe_m4_sprint_finish()",e->out); }
+    fputc(')',e->out);
+    (void)count;
+}
+
 static void emit_lvalue(FeEmitter *e, FeNode *n)
 {
     FeType *bt;
@@ -300,14 +525,23 @@ static void emit_slice_call(FeEmitter *e, FeNode *n)
     FeType *bt=n->a ? n->a->sem_type : 0;
     const char *maker=bt && bt->slicer ? bt->slicer : "fe_slice_str";
     if (!n->b && !n->c && bt && bt->full_slicer) {
-        fputs(bt->full_slicer,e->out); fputc('(',e->out); emit_expr(e,n->a); fputc(')',e->out); return;
+        fputs(bt->full_slicer,e->out);
+        if (bt->kind==FE_TYPE_ARRAY) { fputs("(&",e->out); emit_lvalue(e,n->a); }
+        else { fputc('(',e->out); emit_expr(e,n->a); }
+        fputc(')',e->out); return;
     }
     if (!n->c && bt && bt->tail_slicer) {
-        fputs(bt->tail_slicer,e->out); fputc('(',e->out); emit_expr(e,n->a); fputs(", ",e->out);
+        fputs(bt->tail_slicer,e->out);
+        if (bt->kind==FE_TYPE_ARRAY) { fputs("(&",e->out); emit_lvalue(e,n->a); }
+        else { fputc('(',e->out); emit_expr(e,n->a); }
+        fputs(", ",e->out);
         if (n->b) emit_expr(e,n->b); else fputs("0",e->out);
         fputc(')',e->out); return;
     }
-    fputs(maker,e->out); fputc('(',e->out); emit_expr(e,n->a); fputs(", ",e->out);
+    fputs(maker,e->out);
+    if (bt && bt->kind==FE_TYPE_ARRAY) { fputs("(&",e->out); emit_lvalue(e,n->a); }
+    else { fputc('(',e->out); emit_expr(e,n->a); }
+    fputs(", ",e->out);
     if(n->b) emit_expr(e,n->b); else fputs("0",e->out);
     fputs(", ",e->out);
     if(n->c) emit_expr(e,n->c);
@@ -375,6 +609,7 @@ static void emit_expr(FeEmitter *e, FeNode *n)
     }
     case FE_N_UNARY:
         op = n->text ? n->text : "";
+        if (strcmp(op, "try") == 0) { emit_expr(e,n->a); break; }
         if (strcmp(op, "not") == 0) fputs("(!", e->out);
         else {
             fputc('(', e->out);
@@ -405,7 +640,16 @@ static void emit_expr(FeEmitter *e, FeNode *n)
     case FE_N_CALL: {
         FeVariantType *v;
         int special=0;
-        if(!n->a && n->text && strcmp(n->text,"@size_of")==0 && n->children && n->children->kind==FE_N_IDENT) { fprintf(e->out,"%lu",fe_type_size(fe_type_intern(&e->check->types,n->children->text))); special=1; }
+        if(n->text && (strcmp(n->text,"@print")==0 || strcmp(n->text,"@fprint")==0 || strcmp(n->text,"@sprint")==0)) { emit_m4_builtin(e,n); special=1; }
+        else if(n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+                n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+                strcmp(n->a->a->text,"io")==0 && n->a->b && n->a->b->text &&
+                strcmp(n->a->b->text,"buf_writer")==0 && n->children) { emit_m4_writer(e,n->children,1); special=1; }
+        else if(n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+                n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+                strcmp(n->a->a->text,"io")==0 && n->a->b && n->a->b->text &&
+                strcmp(n->a->b->text,"null_writer")==0) { fputs("fe_m4_null_writer()",e->out); special=1; }
+        else if(!n->a && n->text && strcmp(n->text,"@size_of")==0 && n->children && n->children->kind==FE_N_IDENT) { fprintf(e->out,"%lu",fe_type_size(fe_type_intern(&e->check->types,n->children->text))); special=1; }
         else if(!n->a && n->text && strcmp(n->text,"@align_of")==0 && n->children && n->children->kind==FE_N_IDENT) { fprintf(e->out,"%u",fe_type_align(fe_type_intern(&e->check->types,n->children->text))); special=1; }
         else if (n->a && n->a->kind==FE_N_MEMBER && n->a->a && n->a->a->sem_type && n->a->a->sem_type->kind==FE_TYPE_ENUM) {
             v=fe_type_variant(n->a->a->sem_type,n->a->b ? n->a->b->text : "");
@@ -424,7 +668,10 @@ static void emit_expr(FeEmitter *e, FeNode *n)
     }
     case FE_N_MEMBER: {
         FeVariantType *v;
-        if(n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_REF &&
+        if(n->a && n->a->kind==FE_N_IDENT && n->a->text &&
+           strcmp(n->a->text,"io")==0 && n->b && n->b->text &&
+           strcmp(n->b->text,"stdout")==0) fputs("fe_m4_stdout_writer()",e->out);
+        else if(n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_REF &&
            n->b && n->b->text && strcmp(n->b->text,"^")==0) {
             fputs("(*",e->out); emit_expr(e,n->a); fputs(")",e->out);
         } else if(n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_ENUM) { v=fe_type_variant(n->a->sem_type,n->b ? n->b->text : ""); if(v) fputs(v->maker,e->out); else fputs("0",e->out); if(v)fputs("()",e->out); }
@@ -443,6 +690,16 @@ static void emit_decl(FeEmitter *e, FeNode *n)
     fputs(ctype(e, n), e->out);
     fputc(' ', e->out);
     fputs(cname(n, "fe_local"), e->out);
+    if (n->kind==FE_N_CONST && n->b) {
+        fputs(" = ",e->out);
+        if (n->b->kind==FE_N_LITERAL && n->b->text && n->b->text[0]=='"') {
+            fputs("{ (const unsigned char*)",e->out);
+            emit_c_literal(e->out,n->b->text,1);
+            fputs(", sizeof(",e->out);
+            emit_c_literal(e->out,n->b->text,1);
+            fputs(")-1 }",e->out);
+        } else emit_expr(e,n->b);
+    }
     fputs(";\n", e->out);
 }
 
@@ -463,9 +720,15 @@ static void emit_block(FeEmitter *e, FeNode *n)
     ++e->indent;
     /* C89 requires declarations before statements in each actual block. */
     for (x = n->children; x; x = x->next)
-        if (x->kind == FE_N_LET || x->kind == FE_N_VAR) emit_decl(e, x);
+        if (x->kind == FE_N_LET || x->kind == FE_N_VAR ||
+            x->kind == FE_N_CONST) emit_decl(e, x);
     for (x = n->children; x; x = x->next) emit_stmt(e, x);
     --e->indent;
+    if (e->fallthrough_block==n) {
+        pad(e);
+        fputs("return 0;\n",e->out);
+        e->fallthrough_block=0;
+    }
     pad(e);
     fputc('}', e->out);
 }
@@ -531,8 +794,15 @@ static void emit_stmt(FeEmitter *e, FeNode *n)
         break;
     case FE_N_EXPR_STMT:
         pad(e);
-        emit_expr(e, n->a);
-        fputs(";\n", e->out);
+        if (n->a && n->a->kind==FE_N_UNARY && n->a->text &&
+            strcmp(n->a->text,"try")==0 && n->a->a) {
+            fputs("if ((fe_m4_error = ",e->out);
+            emit_expr(e,n->a->a);
+            fputs(") != 0) return fe_m4_error;\n",e->out);
+        } else {
+            emit_expr(e, n->a);
+            fputs(";\n", e->out);
+        }
         break;
     case FE_N_RETURN:
         pad(e);
@@ -630,6 +900,10 @@ static void emit_fn(FeEmitter *e, FeNode *fn, int prototype)
     if (prototype) fputs(";\n", e->out);
     else {
         fputs(" ", e->out);
+        if (fn->sem_type && fn->sem_type->kind==FE_TYPE_ERROR_UNION &&
+            fn->sem_type->error_value &&
+            fn->sem_type->error_value->kind==FE_TYPE_VOID)
+            e->fallthrough_block=fn->c;
         emit_block(e, fn->c);
         fputc('\n', e->out);
     }
@@ -658,19 +932,26 @@ void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check,
     e->indent = 0;
     e->no_checks = no_checks;
     e->temp_serial = 0;
+    e->fallthrough_block = 0;
 }
 
 void fe_emit_c_program(FeEmitter *e)
 {
     FeNode *n;
     FeNode *main_fn = 0;
-    fputs("/* generated by fec M3 */\n#include <stddef.h>\n#include <stdlib.h>\ntypedef char fe_assert_u8[(sizeof(unsigned char)==1) ? 1 : -1];\ntypedef char fe_assert_u16[(sizeof(unsigned short)==2) ? 1 : -1];\ntypedef char fe_assert_u32[(sizeof(unsigned long)==4) ? 1 : -1];\n", e->out);
+    FeType *type;
+    int need_m4;
+    need_m4=node_uses_m4(e->check->ast->root);
+    for (type=e->check->types.types; type; type=type->next)
+        if (strcmp(type->name,"io.Writer")==0) need_m4=1;
+    fputs("/* generated by fec M4 */\n#include <stddef.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\ntypedef char fe_assert_u8[(sizeof(unsigned char)==1) ? 1 : -1];\ntypedef char fe_assert_u16[(sizeof(unsigned short)==2) ? 1 : -1];\ntypedef char fe_assert_u32[(sizeof(unsigned long)==4) ? 1 : -1];\n", e->out);
     if (e->pointer_bits==16)
         fputs("typedef char fe_assert_usize[(sizeof(unsigned short)==2) ? 1 : -1];\n",e->out);
     else
         fputs("typedef char fe_assert_usize[(sizeof(unsigned long)==4) ? 1 : -1];\n",e->out);
     fputs("static void fe_trap_bounds(void) { abort(); }\n\n", e->out);
     emit_type_defs(e);
+    if (need_m4) emit_m4_runtime(e);
     emit_type_helpers(e);
     for (n = e->check->ast->root ? e->check->ast->root->children : 0;
          n; n = n->next) {
@@ -680,7 +961,14 @@ void fe_emit_c_program(FeEmitter *e)
             fputs(cname(n, "fe_global"), e->out);
             if (n->b) {
                 fputs(" = ", e->out);
-                emit_expr(e, n->b);
+                if (n->kind==FE_N_CONST && n->b->kind==FE_N_LITERAL &&
+                    n->b->text && n->b->text[0]=='"') {
+                    fputs("{ (const unsigned char*)",e->out);
+                    emit_c_literal(e->out,n->b->text,1);
+                    fputs(", sizeof(",e->out);
+                    emit_c_literal(e->out,n->b->text,1);
+                    fputs(")-1 }",e->out);
+                } else emit_expr(e, n->b);
             }
             fputs(";\n", e->out);
         }

@@ -12,6 +12,7 @@ struct FeSym {
     FeNode *fn;
     int mutable;
     int initialized;
+    FeNode *decl;
 };
 
 struct FeScope {
@@ -192,6 +193,7 @@ static FeSym *add_symbol(FeCheckerState *s, FeScope *scope,
     sym->fn = fn;
     sym->mutable = mutable;
     sym->initialized = initialized;
+    sym->decl = decl;
     if (decl) {
         decl->cname = cname;
         decl->sem_type = type;
@@ -214,6 +216,128 @@ void fe_check_init(FeCheck *c, FeAst *ast, FeDiags *diags,
 static FeType *check_expr(FeCheckerState *s, FeNode *n);
 static void check_match(FeCheckerState *s, FeNode *n);
 static void check_stmt(FeCheckerState *s, FeNode *n);
+
+static FeNode *find_const_node(FeCheck *c, const char *name)
+{
+    FeNode *n;
+    for (n=c->ast->root ? c->ast->root->children : 0; n; n=n->next)
+        if (n->kind==FE_N_CONST && n->text && name && strcmp(n->text,name)==0)
+            return n;
+    return 0;
+}
+
+static const char *builtin_format(FeCheckerState *s, FeNode *fmt)
+{
+    FeNode *decl;
+    FeSym *sym;
+    if (fmt && fmt->kind==FE_N_LITERAL && fmt->text && fmt->text[0]=='"')
+        return fmt->text;
+    if (fmt && fmt->kind==FE_N_IDENT) {
+        sym=find_symbol(s->scope,fmt->text);
+        decl=sym && sym->decl && sym->decl->kind==FE_N_CONST ?
+            sym->decl : find_const_node(s->c,fmt->text);
+        if (decl && decl->b && decl->b->kind==FE_N_LITERAL &&
+            decl->b->text && decl->b->text[0]=='"') {
+            if (!decl->a || fe_type_from_ast(&s->c->types,decl->a)->kind==FE_TYPE_STR)
+                return decl->b->text;
+        }
+    }
+    return 0;
+}
+
+static int format_is_slice_u8(FeType *t)
+{
+    return t && t->kind==FE_TYPE_SLICE && t->elem &&
+           t->elem->kind==FE_TYPE_INT && strcmp(t->elem->name,"u8")==0;
+}
+
+static int format_is_writer_type(FeType *t)
+{
+    return t && t->kind==FE_TYPE_STRUCT &&
+        (strcmp(t->name,"Writer")==0 || strcmp(t->name,"io.Writer")==0);
+}
+
+static int format_arg_ok(FeType *t, int verb)
+{
+    if (!t) return 0;
+    if (verb=='x') return fe_type_is_integer(t);
+    if (verb=='c') return t->kind==FE_TYPE_CHAR;
+    if (verb=='s') return t->kind==FE_TYPE_STR || format_is_slice_u8(t);
+    if (verb=='b') return t->kind==FE_TYPE_BOOL;
+    if (t->kind==FE_TYPE_INT || t->kind==FE_TYPE_BOOL ||
+        t->kind==FE_TYPE_CHAR || t->kind==FE_TYPE_STR) return 1;
+    return format_is_slice_u8(t) ||
+        (t->kind==FE_TYPE_ENUM && t->is_error);
+}
+
+static void check_format_call(FeCheckerState *s, FeNode *n)
+{
+    const char *fmt;
+    FeNode *fmt_node;
+    FeNode *arg;
+    FeNode *x;
+    FeType *t;
+    unsigned long i,j;
+    unsigned count=0;
+    unsigned argc=0;
+    unsigned offset=0;
+    int verb;
+    int bad=0;
+    if (strcmp(n->text,"@fprint")==0) offset=1;
+    fmt_node=n->children;
+    if (offset) {
+        if (!fmt_node) { err(s->c,n->loc,"@fprint requires a writer"); return; }
+        t=check_expr(s,fmt_node);
+        if (!(t && t->kind==FE_TYPE_REF && t->ref_mut &&
+              format_is_writer_type(t->elem)))
+            err(s->c,fmt_node->loc,"@fprint requires &mut io.Writer");
+        fmt_node=fmt_node->next;
+    }
+    if (strcmp(n->text,"@sprint")==0) {
+        if (!fmt_node) { err(s->c,n->loc,"@sprint requires a buffer"); return; }
+        t=check_expr(s,fmt_node);
+        if (!format_is_slice_u8(t)) err(s->c,fmt_node->loc,"@sprint requires []u8 buffer");
+        fmt_node=fmt_node->next;
+    }
+    fmt=builtin_format(s,fmt_node);
+    if (!fmt) { err(s->c,n->loc,"format must be a comptime string"); return; }
+    n->aux_text=(char *)fmt;
+    arg=fmt_node ? fmt_node->next : 0;
+    for (x=arg;x;x=x->next) { check_expr(s,x); ++argc; }
+    i=1;
+    while (fmt[i] && fmt[i]!='"') {
+        if (fmt[i]=='\\') { if (fmt[i+1]) ++i; ++i; continue; }
+        if (fmt[i]=='{' && fmt[i+1]=='{') { i+=2; continue; }
+        if (fmt[i]=='}' && fmt[i+1]=='}') { i+=2; continue; }
+        if (fmt[i]=='{') {
+            j=i+1;
+            while (fmt[j] && fmt[j]!='}') ++j;
+            if (!fmt[j]) { err(s->c,n->loc,"unterminated format placeholder"); bad=1; break; }
+            if (j==i+1) verb=' '; else if (j==i+2) verb=(unsigned char)fmt[i+1]; else verb='?';
+            if (verb!=' ' && verb!='x' && verb!='c' && verb!='s' && verb!='b') {
+                err(s->c,n->loc,"unsupported format verb"); bad=1;
+            }
+            if (!arg) { err(s->c,n->loc,"format argument count mismatch"); bad=1; }
+            else {
+                t=arg->sem_type;
+                if (verb==' ' && t && t->kind==FE_TYPE_ENUM && t->is_error) verb='s';
+                if (!format_arg_ok(t,verb)) { err(s->c,arg->loc,"no fmt writer for argument type"); bad=1; }
+                arg=arg->next;
+            }
+            ++count; i=j+1; continue;
+        }
+        if (fmt[i]=='}') { err(s->c,n->loc,"unmatched '}' in format"); bad=1; }
+        ++i;
+    }
+    if (count!=argc) { err(s->c,n->loc,"format argument count mismatch"); bad=1; }
+    (void)bad;
+}
+
+static int is_format_builtin(const char *name)
+{
+    return name && (strcmp(name,"@print")==0 || strcmp(name,"@fprint")==0 ||
+                    strcmp(name,"@sprint")==0);
+}
 
 static int lvalue_writable(FeCheckerState *s, FeNode *n)
 {
@@ -292,12 +416,21 @@ static FeType *check_array_init(FeCheckerState *s, FeNode *n)
     n->sem_type=fe_type_array(&s->c->types,count,elem); return n->sem_type;
 }
 
+static int array_slice_lvalue(FeNode *n)
+{
+    return n && (n->kind==FE_N_IDENT || n->kind==FE_N_MEMBER ||
+                 n->kind==FE_N_INDEX);
+}
+
 static FeType *check_index(FeCheckerState *s, FeNode *n)
 {
     FeType *base=check_expr(s,n->a); FeType *idx; FeType *elem;
     if(!fe_type_is_indexable(base)) { err(s->c,n->loc,"indexing requires an array or slice"); return unknown(s->c); }
     if(n->b) { idx=check_expr(s,n->b); if(known(idx)&&!fe_type_is_integer(idx)) err(s->c,n->loc,"index must be an integer"); }
-    if(n->c || !n->b) { if(n->c) { idx=check_expr(s,n->c); if(known(idx)&&!fe_type_is_integer(idx)) err(s->c,n->loc,"slice bound must be an integer"); } elem=base->elem; n->sem_type=fe_type_slice(&s->c->types,elem); if(base->kind==FE_TYPE_STR) n->flags|=2U; return n->sem_type; }
+    if(n->c || !n->b) {
+        if (base->kind==FE_TYPE_ARRAY && !array_slice_lvalue(n->a))
+            err(s->c,n->loc,"array slicing requires a stable lvalue");
+        if(n->c) { idx=check_expr(s,n->c); if(known(idx)&&!fe_type_is_integer(idx)) err(s->c,n->loc,"slice bound must be an integer"); } elem=base->elem; n->sem_type=fe_type_slice(&s->c->types,elem); if(base->kind==FE_TYPE_STR) n->flags|=2U; return n->sem_type; }
     n->sem_type=base->elem; return n->sem_type;
 }
 
@@ -361,6 +494,15 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
         } else if (strcmp(op, "-") == 0) {
             if (known(a) && !fe_type_is_integer(a))
                 err(c, n->loc, "unary '-' requires integer");
+        } else if (strcmp(op, "try") == 0) {
+            if (a && a->kind==FE_TYPE_ERROR_UNION)
+                a=a->error_value;
+            else {
+                err(c,n->loc,"try requires an error result");
+                a=unknown(c);
+            }
+        } else if (strcmp(op,"&")==0 || strcmp(op,"&mut")==0) {
+            a=fe_type_ref(&c->types,a,strcmp(op,"&mut")==0);
         }
         n->sem_type = a;
         return a;
@@ -403,6 +545,34 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
         return a;
     }
     if (n->kind == FE_N_CALL) {
+        if (n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+            n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+            strcmp(n->a->a->text,"io")==0 && n->a->b && n->a->b->text &&
+            (strcmp(n->a->b->text,"buf_writer")==0 ||
+             strcmp(n->a->b->text,"null_writer")==0)) {
+            FeNode *arg=n->children;
+            if (strcmp(n->a->b->text,"buf_writer")==0) {
+                if (!arg) err(c,n->loc,"io.buf_writer requires a buffer");
+                else {
+                    a=check_expr(s,arg);
+                    if (!(a && a->kind==FE_TYPE_REF && a->ref_mut &&
+                          format_is_slice_u8(a->elem)))
+                        err(c,arg->loc,"io.buf_writer requires &mut []u8 buffer");
+                }
+            } else if (arg) err(c,n->loc,"io.null_writer takes no arguments");
+            n->sem_type=fe_type_intern(&c->types,"io.Writer");
+            return n->sem_type;
+        }
+        if (n->text && is_format_builtin(n->text)) {
+            check_format_call(s,n);
+            if (strcmp(n->text,"@print")==0)
+                n->sem_type=fe_type_intern(&c->types,"void");
+            else if (strcmp(n->text,"@sprint")==0)
+                n->sem_type=fe_type_intern(&c->types,"usize");
+            else
+                n->sem_type=fe_type_error_union(&c->types,fe_type_intern(&c->types,"void"));
+            return n->sem_type;
+        }
         if (!n->a && n->text && (strcmp(n->text,"@size_of")==0 || strcmp(n->text,"@align_of")==0)) {
             FeNode *type_arg=n->children;
             FeType *target=type_arg && type_arg->kind==FE_N_IDENT ? fe_type_intern(&c->types,type_arg->text) : unknown(c);
@@ -452,6 +622,12 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
         return unknown(c);
     }
     if (n->kind == FE_N_MEMBER) {
+        if (n->a && n->a->kind==FE_N_IDENT && n->a->text &&
+            strcmp(n->a->text,"io")==0 && n->b && n->b->text &&
+            strcmp(n->b->text,"stdout")==0) {
+            n->sem_type=fe_type_intern(&c->types,"io.Writer");
+            return n->sem_type;
+        }
         a=check_expr(s,n->a);
         if (a->kind == FE_TYPE_REF && n->b && n->b->text &&
             strcmp(n->b->text,"^")==0) {
@@ -645,6 +821,10 @@ static void check_type_cycle(FeCheck *c, FeType *t)
         t->kind == FE_TYPE_INT || t->kind == FE_TYPE_BOOL ||
         t->kind == FE_TYPE_CHAR || t->kind == FE_TYPE_VOID ||
         t->kind == FE_TYPE_UNKNOWN || t->kind == FE_TYPE_ERROR) return;
+    if (t->kind == FE_TYPE_ERROR_UNION) {
+        check_type_cycle(c,t->error_value);
+        return;
+    }
     if (t->cycle_state == 1) {
         if (c->ast->root) err(c, c->ast->root->loc, "by-value recursive type");
         return;
@@ -739,6 +919,10 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         break;
     case FE_N_EXPR_STMT:
         check_expr(s, n->a);
+        if (n->a && n->a->kind==FE_N_UNARY && n->a->text &&
+            strcmp(n->a->text,"try")==0 &&
+            (!s->ret || s->ret->kind!=FE_TYPE_ERROR_UNION))
+            err(c,n->loc,"try requires an enclosing error result");
         break;
     case FE_N_IF:
         a = check_expr(s, n->a);
@@ -815,6 +999,8 @@ int fe_check_program(FeCheck *c)
             fe_type_declare_struct(&c->types, n, (n->flags & 1U) != 0);
     for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
         if (n->kind == FE_N_ENUM) fe_type_declare_enum(&c->types, n);
+    for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
+        if (n->kind == FE_N_ERROR_DECL) fe_type_declare_error(&c->types, n);
     check_type_cycles(c);
     fe_type_layout_all(&c->types);
     for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next) {

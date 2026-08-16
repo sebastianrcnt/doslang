@@ -8,6 +8,7 @@ if not exist C:\FEC\TESTS\PASS md C:\FEC\TESTS\PASS
 if not exist C:\FEC\TESTS\FAIL md C:\FEC\TESTS\FAIL
 if not exist C:\FEC\TESTS\M2 md C:\FEC\TESTS\M2
 if not exist C:\FEC\TESTS\M3 md C:\FEC\TESTS\M3
+if not exist C:\FEC\TESTS\M4 md C:\FEC\TESTS\M4
 if exist C:\FEC\VM.FAIL del C:\FEC\VM.FAIL
 if exist C:\FEC\STAGE.FAIL del C:\FEC\STAGE.FAIL
 
@@ -140,6 +141,33 @@ if errorlevel 1 goto stage_fail
 copy D:\FEC\TESTS\M3\BADFIELD.FE C:\FEC\TESTS\M3\BADFIELD.FE > nul
 if errorlevel 1 goto stage_fail
 copy D:\FEC\TESTS\M3\BADINDEX.FE C:\FEC\TESTS\M3\BADINDEX.FE > nul
+if errorlevel 1 goto stage_fail
+
+copy D:\FEC\TESTS\M4\FORMAT.FE C:\FEC\TESTS\M4\FORMAT.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-ARI~1.FE C:\FEC\TESTS\M4\BAD-ARI.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-VERB.FE C:\FEC\TESTS\M4\BAD-VERB.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-RUN~1.FE C:\FEC\TESTS\M4\BAD-RUN.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-TYP~1.FE C:\FEC\TESTS\M4\BAD-TYP.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-TRY.FE C:\FEC\TESTS\M4\BAD-TRY.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\TRY-FPR~1.FE C:\FEC\TESTS\M4\TRY-FPR.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-WRI~1.FE C:\FEC\TESTS\M4\BAD-WRI.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\PROP.FE C:\FEC\TESTS\M4\PROP.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\PROPTEST.C C:\FEC\TESTS\M4\PROPTEST.C > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-MANY.FE C:\FEC\TESTS\M4\BAD-MANY.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-OPEN.FE C:\FEC\TESTS\M4\BAD-OPEN.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M4\BAD-CLS.FE C:\FEC\TESTS\M4\BAD-CLS.FE > nul
 if errorlevel 1 goto stage_fail
 
 call C:\FEC\TEST-DOS.BAT

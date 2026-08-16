@@ -10,6 +10,7 @@ typedef struct FeEmitter {
     int indent;
     int no_checks;
     unsigned temp_serial;
+    FeNode *fallthrough_block;
 } FeEmitter;
 
 void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check,

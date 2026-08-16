@@ -4,7 +4,7 @@
 #include "ast.h"
 
 typedef enum FeTypeKind {
-    FE_TYPE_ERROR, FE_TYPE_VOID, FE_TYPE_BOOL, FE_TYPE_CHAR, FE_TYPE_INT,
+    FE_TYPE_ERROR, FE_TYPE_ERROR_UNION, FE_TYPE_VOID, FE_TYPE_BOOL, FE_TYPE_CHAR, FE_TYPE_INT,
     FE_TYPE_STRUCT, FE_TYPE_ENUM, FE_TYPE_ARRAY, FE_TYPE_SLICE, FE_TYPE_STR,
     FE_TYPE_REF, FE_TYPE_UNKNOWN
 } FeTypeKind;
@@ -40,10 +40,13 @@ struct FeType {
     unsigned bits;
     int is_unsigned;
     int packed;
+    int is_error;
     unsigned long length;
     unsigned long size;
     unsigned align;
     FeType *elem;
+    /* Success value for an error union; !void is represented directly. */
+    FeType *error_value;
     int ref_mut;
     FeFieldType *fields;
     unsigned field_count;
@@ -68,8 +71,10 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node);
 FeType *fe_type_array(FeTypeCtx *ctx, unsigned long length, FeType *elem);
 FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable);
+FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value);
 FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed);
 FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node);
+FeType *fe_type_declare_error(FeTypeCtx *ctx, const FeNode *node);
 void fe_type_layout_all(FeTypeCtx *ctx);
 FeFieldType *fe_type_field(FeType *t, const char *name);
 FeVariantType *fe_type_variant(FeType *t, const char *name);
