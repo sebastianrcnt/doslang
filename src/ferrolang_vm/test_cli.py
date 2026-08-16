@@ -35,7 +35,9 @@ def main() -> int:
                      help="print the captured DOS console after the run")
     run.add_argument("--trace-dos", action="store_true",
                      help="do not redirect case command output")
-    args = parser.parse_args()
+    run.add_argument("-k", dest="select", metavar="EXPR",
+                     help="run only cases whose id matches this pytest -k expression")
+    args, extra = parser.parse_known_args()
     try:
         if args.command == "setup":
             dosbox, watcom = setup(accept_watcom_license=args.accept_watcom_license)
@@ -55,12 +57,18 @@ def main() -> int:
             if enabled:
                 os.environ[name] = "1"
         import pytest
-        test_file = os.fspath(
-            Path(__file__).resolve().parents[2] / "tools" / "tests" / "test_milestones_dosboxx.py"
-        )
+        from .paths import ROOT
+        # The package can be imported from a different checkout than the one the
+        # shell is sitting in -- an editable install plus a git worktree is enough
+        # to silently build and test the wrong tree.  Say which tree this is.
+        print(f"ferro-test: building {ROOT}", file=sys.stderr)
+        test_file = os.fspath(ROOT / "tools" / "tests" / "test_milestones_dosboxx.py")
         pytest_args = [test_file, "--tb=short", "-v" if args.verbose else "-q"]
+        if args.select:
+            pytest_args.extend(["-k", args.select])
         if args.dos_log:
             pytest_args.append("-s")
+        pytest_args.extend(extra)
         return int(pytest.main(pytest_args))
     except (DosboxError, ValueError) as exc:
         print(f"ferro-test: {exc}", file=sys.stderr)

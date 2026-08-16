@@ -126,12 +126,40 @@ def resolve_tools() -> tuple[Path, Path]:
     return dosbox, watcom
 
 
+# ``if errorlevel N`` in DOS tests ``>= N``, so an exact code needs a descending
+# ladder.  Small values get their own rung because they carry the meaning -- 1 is
+# an ordinary compiler error, 3 is Watcom's abort() -- while anything above 8 is
+# bucketed to a lower bound, which is enough to tell a crash from a diagnostic.
+_RC_LADDER = (255, 128, 64, 32, 16, 8, 7, 6, 5, 4, 3, 2, 1)
+
+
+def _rc_batch() -> str:
+    """Batch helper that records the previous command's exit code.
+
+    Called as ``call RC.BAT <key>`` right after a case command, since anything
+    else -- including writing a file -- would clobber ERRORLEVEL first.  Note the
+    space before each ``>``: ``echo 0>FILE`` would parse as a redirect of handle
+    0 rather than an echo of "0", so the value is written with a trailing space
+    and stripped on the host.
+    """
+    lines = ["@echo off"]
+    lines.extend(f"if errorlevel {value} goto R{value}" for value in _RC_LADDER)
+    lines.extend(["echo 0 >RESULTS\\%1.RC", "goto END"])
+    for value in _RC_LADDER:
+        lines.extend([f":R{value}", f"echo {value} >RESULTS\\%1.RC", "goto END"])
+    lines.extend([":END", ""])
+    return "\r\n".join(lines)
+
+
 def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool) -> str:
+    # The compiler build is the step that fails first and blocks everything after
+    # it, so its output is captured exactly like a case command's.
+    build = "call BUILD.BAT" if trace_dos else "call BUILD.BAT > RESULTS\\BUILD.LOG"
     lines = [
         "@echo off", "if not exist RESULTS md RESULTS", "if not exist OUT md OUT",
         "set WATCOM=W:", "set INCLUDE=W:\\H",
         "set LIB=W:\\LIB286\\DOS;W:\\LIB286;W:\\LIB386\\DOS;W:\\LIB386",
-        "call BUILD.BAT", "if not exist BUILD.OK goto BUILDFAIL",
+        build, "if not exist BUILD.OK goto BUILDFAIL",
         "echo PASS>RESULTS\\BUILD.RES",
     ]
     for index, case in enumerate(cases):
@@ -145,19 +173,10 @@ def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool) -> str:
         ])
         if not trace_dos:
             command += f" > RESULTS\\{key}.LOG"
-        lines.append(command)
-        if case.expect_success:
-            lines.extend([
-                f"if errorlevel 1 goto {key}E", f"echo PASS>RESULTS\\{key}.RES",
-                f"goto {key}C", f":{key}E", f"echo FAIL>RESULTS\\{key}.RES",
-            ])
-        else:
-            lines.extend([
-                f"if errorlevel 1 goto {key}E", f"echo FAIL>RESULTS\\{key}.RES",
-                f"goto {key}C", f":{key}E", f"echo PASS>RESULTS\\{key}.RES",
-            ])
         lines.extend([
-            f":{key}C", f"if exist *.ERR type *.ERR > RESULTS\\{key}.ERR",
+            command,
+            f"call RC.BAT {key}",
+            f"if exist *.ERR type *.ERR > RESULTS\\{key}.ERR",
             f"if not exist RESULTS\\{key}.ERR type NUL > RESULTS\\{key}.ERR",
         ])
     lines.extend([
@@ -181,22 +200,40 @@ class SuiteRun:
     def _key(self, case: Case) -> str:
         return f"C{self.cases.index(case):03d}"
 
+    def rc(self, case: Case) -> int | None:
+        """Exit code the DOS command reported, or None if it was never recorded.
+
+        Values above 8 are a lower bound; see ``_RC_LADDER``.
+        """
+        path = self.fec / "RESULTS" / f"{self._key(case)}.RC"
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="ascii", errors="replace").strip()
+        return int(text) if text.isdigit() else None
+
     def result(self, case: Case | None = None) -> str:
-        name = "BUILD" if case is None else self._key(case)
-        path = self.fec / "RESULTS" / f"{name}.RES"
-        return path.read_text(encoding="ascii").strip() if path.is_file() else "MISSING"
+        if case is None:
+            path = self.fec / "RESULTS" / "BUILD.RES"
+            return path.read_text(encoding="ascii").strip() if path.is_file() else "MISSING"
+        code = self.rc(case)
+        if code is None:
+            return "MISSING"
+        return "PASS" if (code == 0) == case.expect_success else "FAIL"
 
     def log(self, case: Case | None = None) -> str:
         name = "BUILD" if case is None else self._key(case)
         path = self.fec / "RESULTS" / f"{name}.LOG"
         content = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
-        if content:
+        if content.strip():
             return content
         errors = sorted(self.fec.glob("*.ERR"))
-        if errors:
-            return "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in errors)
-        console = self.root / "CONSOLE.LOG"
-        return console.read_text(encoding="utf-8", errors="replace") if console.is_file() else ""
+        joined = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in errors)
+        if joined.strip():
+            return joined
+        # Deliberately not falling back to CONSOLE.LOG: that is the emulator's own
+        # log (display enumeration, INT15 chatter) and burying one useful line in
+        # it reads as output when there was none.  Use --dos-log to see it.
+        return "(no DOS output captured; the command wrote nothing before exiting)"
 
     def err(self, case: Case) -> str:
         path = self.fec / "RESULTS" / f"{self._key(case)}.ERR"
@@ -229,6 +266,7 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
             _batch(cases, show_dos=show_dos, trace_dos=trace_dos),
             encoding="ascii", newline="",
         )
+        (fec / "RC.BAT").write_text(_rc_batch(), encoding="ascii", newline="")
         command = [str(dosbox)]
         if not show_dos:
             command.append("-silent")

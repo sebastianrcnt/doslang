@@ -46,7 +46,10 @@ def test_milestone_case(case: Case, suite_run: SuiteRun) -> None:
         warning_lines = [line for line in err.splitlines() if "warning" in line.lower()]
         if warning_lines:
             warnings.warn("\n".join(warning_lines), stacklevel=1)
+    code = suite_run.rc(case)
     assert result == "PASS", (
-        f"DOS command: {case.command}\nExpected success: {case.expect_success}\n"
+        f"DOS command: {case.command}\n"
+        f"Expected success: {case.expect_success}\n"
+        f"Exit code: {'not recorded' if code is None else code}\n"
         f"{suite_run.log(case)}\n{err}"
     )
