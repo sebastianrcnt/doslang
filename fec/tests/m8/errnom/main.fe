@@ -1,0 +1,7 @@
+// ERROR:6:error
+unit main;
+import lib;
+
+fn bad() -> !i32 {
+    return try lib.value();
+}

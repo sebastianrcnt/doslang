@@ -1,0 +1,10 @@
+// ERROR:9:instantiation
+unit badbody;
+
+fn add(comptime T: type, a: T, b: T) -> T {
+    return a + b;
+}
+
+fn bad() -> bool {
+    return add(bool, true, false);
+}

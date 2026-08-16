@@ -1,0 +1,4 @@
+unit a;
+import b;
+
+pub fn a_value() -> i32 { return b.b_value(); }

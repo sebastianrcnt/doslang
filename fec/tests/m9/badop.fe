@@ -1,0 +1,17 @@
+// ERROR:16:instantiation
+unit badop;
+
+struct Token {
+    value: i32,
+}
+
+fn max(comptime T: type, a: T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+fn bad() -> Token {
+    let a = Token{ value: 1 };
+    let b = Token{ value: 2 };
+    return max(Token, a, b);
+}

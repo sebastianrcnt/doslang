@@ -1,0 +1,9 @@
+unit okid;
+
+fn id(comptime T: type, v: T) -> T {
+    return v;
+}
+
+fn test() -> i32 {
+    return id(i32, 7);
+}

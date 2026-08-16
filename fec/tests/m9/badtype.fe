@@ -1,0 +1,6 @@
+// ERROR:5:type
+unit badtype;
+
+fn bad() -> void {
+    let t = i32;
+}

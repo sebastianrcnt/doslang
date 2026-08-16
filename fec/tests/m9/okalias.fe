@@ -1,0 +1,11 @@
+unit okalias;
+
+const Word = i32;
+
+fn id(comptime T: type, v: T) -> T {
+    return v;
+}
+
+fn test() -> Word {
+    return id(Word, 12);
+}

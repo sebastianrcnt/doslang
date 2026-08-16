@@ -1,0 +1,8 @@
+unit okdedup;
+
+fn id(comptime T: type, v: T) -> T {
+    return v;
+}
+
+fn a() -> i32 { return id(i32, 1); }
+fn b() -> i32 { return id(i32, 2); }

@@ -1,0 +1,12 @@
+// ERROR:9:reference
+unit badscop;
+
+fn bad(cond: bool) -> i32 {
+    let outer: i32 = 0;
+    var r: &i32 = &outer;
+    if cond {
+        let inner: i32 = 3;
+        r = &inner;
+    }
+    return r.^;
+}

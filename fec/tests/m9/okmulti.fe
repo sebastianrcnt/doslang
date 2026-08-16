@@ -1,0 +1,11 @@
+unit okmulti;
+
+fn id(comptime T: type, v: T) -> T {
+    return v;
+}
+
+fn test() -> i32 {
+    let a: i32 = id(i32, 7);
+    let b: u8 = id(u8, 9 as u8);
+    return a + (b as i32);
+}

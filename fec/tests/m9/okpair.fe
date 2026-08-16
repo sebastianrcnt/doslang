@@ -1,0 +1,15 @@
+unit okpair;
+
+struct Pair(A, B) {
+    first: A,
+    second: B,
+
+    pub fn new(a: A, b: B) -> Self {
+        return Self{ first: a, second: b };
+    }
+}
+
+fn test() -> i32 {
+    let p: Pair(i32, u8) = Pair(i32, u8).new(4, 5 as u8);
+    return p.first + (p.second as i32);
+}

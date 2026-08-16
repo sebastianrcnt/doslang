@@ -1,0 +1,5 @@
+unit data;
+
+pub struct Record {
+    pub value: i32,
+}

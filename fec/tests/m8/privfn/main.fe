@@ -1,0 +1,7 @@
+// ERROR:6:private
+unit main;
+import util;
+
+fn main() -> i32 {
+    return util.hidden();
+}

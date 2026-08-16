@@ -1,0 +1,11 @@
+unit okstatic;
+
+static VALUE: i32 = 7;
+
+fn get() -> &i32 {
+    return &VALUE;
+}
+
+fn test() -> i32 {
+    return get().^;
+}

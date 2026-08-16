@@ -1,0 +1,15 @@
+unit okcvoid;
+
+error E {
+    Bad = 1,
+}
+
+fn leaf() -> E!void {
+    return E.Bad;
+}
+
+fn top() -> void {
+    leaf() catch |e| {
+        return;
+    };
+}
