@@ -443,6 +443,7 @@ unsigned long fe_type_payload_offset(const FeType *t)
         if (fe_m7_optional_uses_niche(t->elem)) return 0;
         return round_up(1UL, fe_type_align(t->elem));
     }
+    if (t->kind == FE_TYPE_ENUM) return round_up(t->bits / 8U, t->align);
     return 0;
 }
 
@@ -551,6 +552,10 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
                 layout_type(ctx, t->variants[i].fields[j].type);
                 if (fe_type_align(t->variants[i].fields[j].type) > max_align)
                     max_align = fe_type_align(t->variants[i].fields[j].type);
+                /* Where this field sits inside the payload area, which the
+                   code generator needs and nobody was recording. */
+                off = round_up(off, fe_type_align(t->variants[i].fields[j].type));
+                t->variants[i].fields[j].offset = off;
                 off += fe_type_size(t->variants[i].fields[j].type);
             }
             if (off > max_size) max_size = off;

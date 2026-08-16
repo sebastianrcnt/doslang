@@ -87,6 +87,11 @@ typedef struct Slot {
 #define SLICE_LEN_OFFSET 4L
 
 /* Every definition in lowering, so the split files can see each other. */
+FeIrType tag_type_of(const FeType *t);
+void lower_if_let(Lower *L, FeNode *n);
+unsigned wrapper_tag(Lower *L, Slot w, const FeType *t, FeNode *n);
+void bind_payload(Lower *L, Slot subject, const FeType *t,
+                  const FeVariantType *v, FeNode *arm);
 void fail(Lower *L, const char *why, FeNode *n);
 FeIrType ir_type_of(const FeType *t);
 int enum_has_payload(const FeType *t);

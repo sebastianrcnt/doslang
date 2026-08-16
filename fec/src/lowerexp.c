@@ -108,13 +108,23 @@ Slot lower_expr_core(Lower *L, FeNode *n)
         fail(L, "this unary operator", n);
         return slot_void();
     case FE_N_MEMBER:
-        /* A payload-free variant used as a value is just its tag. */
-        if (t && t->kind == FE_TYPE_ENUM && !enum_has_payload(t) &&
-            n->b && n->b->text) {
+        /* A variant used as a value carries nothing but its tag. When no
+           variant of the enum carries anything the whole value is that tag;
+           otherwise it is a tag sitting in front of an unused payload. */
+        if (t && t->kind == FE_TYPE_ENUM && n->b && n->b->text) {
             FeVariantType *v = fe_type_variant(t, n->b->text);
-            if (v)
+            if (v && !enum_has_payload(t))
                 return slot_value(fe_ir_const(L->m, L->b, ir_type(t),
                                               (long)v->tag), ir_type(t));
+            if (v && !v->field_count) {
+                unsigned local = scratch(L, t, "variant");
+                unsigned tag = fe_ir_const(L->m, L->b, tag_type_of(t),
+                                           (long)v->tag);
+                fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), tag,
+                            tag_type_of(t));
+                return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM,
+                                  ir_size(t));
+            }
         }
         /* `error.Name` is a member of the open default set: a code, and
            nothing to look up. */
@@ -211,8 +221,37 @@ Slot lower_expr_core(Lower *L, FeNode *n)
         return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
     }
     case FE_N_STRUCT_INIT: {
-        unsigned local = scratch(L, t, "struct");
+        unsigned local;
         FeNode *f;
+        /* `Enum.Variant{ .. }` builds a variant, not a struct: the tag first,
+           then the named fields inside the payload area. */
+        if (t && t->kind == FE_TYPE_ENUM && n->a && n->a->kind == FE_N_MEMBER) {
+            const FeVariantType *v = fe_type_variant(t,
+                n->a->b && n->a->b->text ? n->a->b->text : "");
+            long base = (long)fe_type_payload_offset(t);
+            unsigned tag;
+            if (!v) { fail(L, "an unknown variant", n); return slot_void(); }
+            local = scratch(L, t, "variant");
+            tag = fe_ir_const(L->m, L->b, tag_type_of(t), (long)v->tag);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), tag,
+                        tag_type_of(t));
+            for (f = n->children; f; f = f->next) {
+                unsigned i;
+                if (f->kind != FE_N_FIELD) continue;
+                for (i = 0; i < v->field_count; ++i)
+                    if (f->text && v->fields[i].name &&
+                        !strcmp(v->fields[i].name, f->text)) break;
+                if (i == v->field_count) {
+                    fail(L, "an unknown variant field", f);
+                    return slot_void();
+                }
+                store_into(L, fe_ir_at_local(local,
+                                             base + (long)v->fields[i].offset),
+                           lower_expr(L, f->a), f, ir_size(v->fields[i].type));
+            }
+            return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
+        }
+        local = scratch(L, t, "struct");
         for (f = n->children; f; f = f->next) {
             FeFieldType *field;
             Slot v;

@@ -160,6 +160,27 @@ Slot lower_call(Lower *L, FeNode *n)
         if (lower_mem(L, n, &built)) return built;
         if (lower_print(L, n, &built)) return built;
     }
+    /* `Enum.Variant(payload)` is a constructor, not a call. */
+    if (ret && ret->kind == FE_TYPE_ENUM && n->a && n->a->kind == FE_N_MEMBER &&
+        n->a->b && n->a->b->text) {
+        const FeVariantType *v = fe_type_variant(ret, n->a->b->text);
+        if (v) {
+            unsigned local = scratch(L, ret, "variant");
+            unsigned tag = fe_ir_const(L->m, L->b, tag_type_of(ret),
+                                       (long)v->tag);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), tag,
+                        tag_type_of(ret));
+            if (v->field_count && n->children)
+                store_into(L,
+                    fe_ir_at_local(local,
+                        (long)fe_type_payload_offset(ret) +
+                        (long)v->fields[0].offset),
+                    lower_expr(L, n->children), n->children,
+                    ir_size(v->fields[0].type));
+            return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM,
+                              ir_size(ret));
+        }
+    }
     if (!callee) { fail(L, "a call with no target", n); return slot_void(); }
     /* An aggregate result is written through a hidden first argument. */
     if (rt == FE_IR_MEM) {

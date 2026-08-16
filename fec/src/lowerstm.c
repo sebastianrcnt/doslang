@@ -274,6 +274,81 @@ void lower_for(Lower *L, FeNode *n)
    arm's pattern in turn. The checker already proved the arms cover everything,
    so falling off the end cannot happen in a program that compiled -- but the
    generated code has to go somewhere, and going to the join is right. */
+/* The width of a tag: an enum's own, or the byte an optional puts in front. */
+FeIrType tag_type_of(const FeType *t)
+{
+    if (!t) return FE_IR_I8;
+    if (t->kind == FE_TYPE_ERROR_UNION) return FE_IR_I16;
+    if (t->kind == FE_TYPE_ENUM) return t->bits > 8U ? FE_IR_I16 : FE_IR_I8;
+    return FE_IR_I8;
+}
+
+/* Give an arm's names somewhere to live and put the variant's payload there.
+   The payload is copied rather than pointed at: an arm that takes ownership of
+   what it matched is the normal case, and the checker has already decided
+   whether that was allowed. */
+void bind_payload(Lower *L, Slot subject, const FeType *t,
+                  const FeVariantType *v, FeNode *arm)
+{
+    FeNode *name;
+    unsigned i;
+    long base;
+    if (!v || !v->field_count || !arm->children || !subject.is_place) return;
+    base = (long)fe_type_payload_offset(t);
+    name = arm->children;
+    for (i = 0; i < v->field_count && name; ++i, name = name->next) {
+        FeType *ft = v->fields[i].type;
+        unsigned local = declare_var(L, name->cname, ft, name->text);
+        FeIrPlace from = subject.place;
+        from.offset += base + (long)v->fields[i].offset;
+        store_into(L, fe_ir_at_local(local, 0),
+                   slot_place(from, ir_type(ft), ir_size(ft)), name,
+                   ir_size(ft));
+    }
+}
+
+/* `if let Some(x) = opt { .. } else { .. }` -- and its None twin.
+
+   The optional is read once into a place, the tag decides the branch, and the
+   binding gets what was inside. A binding whose type is a reference gets the
+   address instead of a copy: the checker chose that when the payload was not
+   something you may quietly duplicate. */
+void lower_if_let(Lower *L, FeNode *n)
+{
+    FeType *opt = n->a ? n->a->sem_type : 0;
+    Slot value = lower_expr(L, n->a);
+    FeNode *binding = n->children;
+    int is_some = n->aux_text && !strcmp(n->aux_text, "Some");
+    unsigned tag;
+    FeIrBlock *present;
+    FeIrBlock *absent;
+    FeIrBlock *join;
+    if (!value.is_place) { fail(L, "if let over a temporary", n); return; }
+    tag = wrapper_tag(L, value, opt, n);
+    present = new_block(L);
+    absent = new_block(L);
+    join = new_block(L);
+    fe_ir_br(L->b, tag, present->id, absent->id);
+    /* Which side runs the body depends on which pattern was written. */
+    L->b = is_some ? present : absent;
+    if (is_some && binding) {
+        FeType *bt = binding->sem_type;
+        Slot payload = wrapper_payload(L, value, opt);
+        unsigned local = declare_var(L, binding->cname, bt, binding->text);
+        if (bt && (bt->kind == FE_TYPE_REF || bt->kind == FE_TYPE_RAW))
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0),
+                        as_address(L, payload, n), FE_IR_PTR);
+        else
+            store_into(L, fe_ir_at_local(local, 0), payload, n, ir_size(bt));
+    }
+    lower_stmt(L, n->b);
+    fe_ir_jmp(L->b, join->id);
+    L->b = is_some ? absent : present;
+    if (n->c) lower_stmt(L, n->c);
+    fe_ir_jmp(L->b, join->id);
+    L->b = join;
+}
+
 void lower_match(Lower *L, FeNode *n)
 {
     FeType *t = n->a ? n->a->sem_type : 0;
@@ -282,8 +357,16 @@ void lower_match(Lower *L, FeNode *n)
     unsigned value;
     FeIrBlock *join;
     FeNode *arm;
-    if (it == FE_IR_MEM) { fail(L, "a match over a payload", n); return; }
-    value = as_value(L, subject, n->a);
+    /* A variant that carries something is memory: the tag comes first and the
+       payload after it. Reading the tag is then the same question either way,
+       just from a different place. */
+    if (it == FE_IR_MEM) {
+        if (!subject.is_place) { fail(L, "a match over a temporary", n); return; }
+        it = tag_type_of(t);
+        value = fe_ir_load(L->m, L->b, it, subject.place);
+    } else {
+        value = as_value(L, subject, n->a);
+    }
     join = new_block(L);
     for (arm = n->children; arm; arm = arm->next) {
         FeIrBlock *body;
@@ -307,6 +390,7 @@ void lower_match(Lower *L, FeNode *n)
         next = new_block(L);
         fe_ir_br(L->b, same, body->id, next->id);
         L->b = body;
+        bind_payload(L, subject, t, v, arm);
         lower_stmt(L, arm->a);
         fe_ir_jmp(L->b, join->id);
         L->b = next;
@@ -362,6 +446,7 @@ void lower_stmt(Lower *L, FeNode *n)
         lower_return(L, n);
         return;
     case FE_N_IF:
+        if (n->text && !strcmp(n->text, "if let")) { lower_if_let(L, n); return; }
         lower_if(L, n);
         return;
     case FE_N_WHILE:

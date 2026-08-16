@@ -1,0 +1,35 @@
+// EXIT:0
+// OUTPUT:some 7
+// OUTPUT:none
+// OUTPUT:point 3 4
+// OUTPUT:empty
+unit patterns;
+
+enum Shape {
+    Empty,
+    Point(i32),
+    Pair { x: i32, y: i32 },
+}
+
+fn pick(flag: bool) -> ?i32 {
+    if flag { return 7; }
+    return null;
+}
+
+fn describe(s: Shape) -> void {
+    match s {
+        Empty => { @print("empty\n"); }
+        Point(v) => { @print("point {}\n", v); }
+        Pair { x, y } => { @print("point {} {}\n", x, y); }
+    }
+}
+
+fn main() -> i32 {
+    if let Some(v) = pick(true) { @print("some {}\n", v); }
+    else { @print("unexpected\n"); }
+    if let None = pick(false) { @print("none\n"); }
+    else { @print("unexpected\n"); }
+    describe(Shape.Pair{ x: 3, y: 4 });
+    describe(Shape.Empty);
+    return 0;
+}
