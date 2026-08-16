@@ -932,9 +932,17 @@ static void emit_cleanup_to(FeEmitter *e, unsigned floor)
     for (i=e->block_depth; i>floor; --i) emit_cleanup_block(e,e->block_stack[i-1]);
 }
 
+static void emit_param_cleanup(FeEmitter *e)
+{
+    FeNode *p;
+    if (!e->current_fn || !e->current_fn->a) return;
+    for (p=e->current_fn->a->children; p; p=p->next) emit_value_drop(e,p);
+}
+
 static void emit_cleanup_all(FeEmitter *e)
 {
     emit_cleanup_to(e,0);
+    emit_param_cleanup(e);
 }
 
 static void emit_error_return(FeEmitter *e, const char *error_expr)
@@ -974,6 +982,14 @@ static void emit_block(FeEmitter *e, FeNode *n)
     for (x = n->children; x; x = x->next)
         if (x->kind == FE_N_LET || x->kind == FE_N_VAR ||
             x->kind == FE_N_CONST) emit_decl(e, x);
+    if (e->current_fn && e->current_fn->c==n && e->current_fn->a) {
+        FeNode *param;
+        for (param=e->current_fn->a->children; param; param=param->next)
+            if (param->sem_type && param->sem_type->kind==FE_TYPE_OWNED) {
+                pad(e); fputs("unsigned char fe_live_",e->out);
+                fputs(cname(param,"owned"),e->out); fputs("=1;\n",e->out);
+            }
+    }
     if (e->current_ret && e->current_ret->kind!=FE_TYPE_VOID) {
         pad(e); fputs(fe_type_c_name(e->current_ret,e->pointer_bits),e->out);
         fputs(" fe_return_value;\n",e->out);
@@ -988,6 +1004,7 @@ static void emit_block(FeEmitter *e, FeNode *n)
     }
     --e->indent;
     emit_cleanup_block(e,n);
+    if (e->current_fn && e->current_fn->c==n) emit_param_cleanup(e);
     if (e->block_depth) --e->block_depth;
     if (e->fallthrough_block==n) {
         pad(e);
@@ -1246,7 +1263,9 @@ static void emit_fn(FeEmitter *e, FeNode *fn, int prototype)
     if (prototype) fputs(";\n", e->out);
     else {
         FeType *old_ret=e->current_ret;
+        FeNode *old_fn=e->current_fn;
         e->current_ret=fn->sem_type;
+        e->current_fn=fn;
         fputs(" ", e->out);
         if (fn->sem_type && fn->sem_type->kind==FE_TYPE_ERROR_UNION &&
             fn->sem_type->error_value &&
@@ -1254,6 +1273,7 @@ static void emit_fn(FeEmitter *e, FeNode *fn, int prototype)
             e->fallthrough_block=fn->c;
         emit_block(e, fn->c);
         e->current_ret=old_ret;
+        e->current_fn=old_fn;
         fputc('\n', e->out);
     }
 }
@@ -1285,6 +1305,7 @@ void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check,
     e->block_depth = 0;
     e->loop_depth = 0;
     e->current_ret = 0;
+    e->current_fn = 0;
 }
 
 void fe_emit_c_program(FeEmitter *e)

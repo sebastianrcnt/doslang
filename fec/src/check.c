@@ -79,7 +79,10 @@ static void mark_moved(FeCheckerState *s, FeNode *n, FeType *t)
             if (sym->decl) sym->decl->flags |= 0x200U;
         } else {
             sym->moved=1;
-            if (sym->decl) sym->decl->flags |= 0x100U;
+            /* Mark this consuming expression, not the declaration. Branches
+               may move conditionally; the declaration's runtime live flag
+               must remain available to guard cleanup on the other path. */
+            n->flags |= 0x100U;
         }
     }
 }

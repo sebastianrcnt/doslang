@@ -17,6 +17,7 @@ typedef struct FeEmitter {
     unsigned loop_floor[16];
     unsigned loop_depth;
     FeType *current_ret;
+    FeNode *current_fn;
 } FeEmitter;
 
 void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check,
