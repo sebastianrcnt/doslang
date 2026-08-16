@@ -1,0 +1,14 @@
+// EXIT:0
+// OUTPUT:n=42 neg=-7 hex=ff
+// OUTPUT:yes=true no=false
+// OUTPUT:text=hello char=A
+// OUTPUT:braces {} done
+unit printfmt;
+
+fn main() -> i32 {
+    @print("n={} neg={} hex={x}\n", 42, 0 - 7, 255);
+    @print("yes={} no={}\n", true, false);
+    @print("text={} char={c}\n", "hello", 'A');
+    @print("braces {} done\n", "{}");
+    return 0;
+}

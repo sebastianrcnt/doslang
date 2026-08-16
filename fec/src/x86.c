@@ -360,6 +360,30 @@ void fe_x86_emit(const FeIrModule *m, FILE *out)
     for (f = m->funcs; f; f = f->next)
         if (f->is_extern || !f->first)
             fprintf(out, "extern %s : near\n", f->name);
+    /* Anything called but not defined here lives somewhere else -- the runtime,
+       or a library. Lowering emits such calls directly (allocating, writing,
+       trapping), so the names are collected from the calls themselves rather
+       than from a list that would have to be kept in step. */
+    {
+        const char *seen[64];
+        unsigned count = 0;
+        const FeIrValue *v;
+        const FeIrFunc *g;
+        unsigned i;
+        for (f = m->funcs; f; f = f->next)
+            for (b = f->first; b; b = b->next)
+                for (v = b->first; v; v = v->next) {
+                    if (v->op != FE_IR_CALL || !v->callee) continue;
+                    for (g = m->funcs; g; g = g->next)
+                        if (!strcmp(g->name, v->callee)) break;
+                    if (g) continue;
+                    for (i = 0; i < count; ++i)
+                        if (!strcmp(seen[i], v->callee)) break;
+                    if (i < count || count >= 64) continue;
+                    seen[count++] = v->callee;
+                    fprintf(out, "extern %s : near\n", v->callee);
+                }
+    }
     if (any_trap) fputs("extern fe_trap : near\n", out);
 
     fputs("\n_DATA segment dword public 'DATA'\n", out);
