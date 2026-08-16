@@ -1,4 +1,5 @@
 #include "types.h"
+#include "m7.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -15,6 +16,8 @@ static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
     t->kind = kind;
     t->cname = 0;
     t->maker = 0;
+    t->none_cname = 0;
+    t->unwrap_cname = 0;
     t->indexer = 0;
     t->slicer = 0;
     t->full_slicer = 0;
@@ -218,9 +221,11 @@ FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value)
     if(t->kind==FE_TYPE_UNKNOWN) {
         t->kind=FE_TYPE_ERROR_UNION;
         t->error_value=value;
+        t->drop_cname=generated_name(ctx,"fe_drop_result_","value");
         if (value && value->kind != FE_TYPE_VOID) {
             t->cname=generated_name(ctx,"struct fe_result_","value");
             t->maker=generated_name(ctx,"fe_make_result_","value");
+            t->none_cname=generated_name(ctx,"fe_fail_result_","value");
             t->alloc_cname=generated_name(ctx,"fe_alloc_result_","value");
         }
     }
@@ -335,7 +340,7 @@ FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node)
                 if (fc) {
                     t->variants[i].fields = (FeFieldType *)fe_arena_alloc(
                         ctx->arena, fc * sizeof(FeFieldType));
-                    if (t->variants[i].fields) for (f = v->children; f; f = f->next)
+                    if (t->variants[i].fields) for (f = v->children; f; f=f->next)
                         if (f->kind == FE_N_FIELD) {
                             t->variants[i].fields[j].name = f->text;
                             t->variants[i].fields[j].type = 0;
@@ -385,8 +390,6 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
     unsigned max_align;
     if (!t || t->size) return;
     if (t->cycle_state == 1) {
-        /* The checker reports this as an invalid by-value cycle.  Give the
-           layout walk a sentinel size so error recovery cannot recurse. */
         t->size = 1;
         t->align = 1;
         return;
@@ -405,6 +408,18 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             t->align=ctx->pointer_bits==16 ? 1U : 2U;
         }
         t->cycle_state = 2; return;
+    }
+    if (t->kind == FE_TYPE_OPTIONAL) {
+        layout_type(ctx,t->elem);
+        if (fe_m7_optional_uses_niche(t->elem)) {
+            t->size=fe_type_size(t->elem);
+            t->align=fe_type_align(t->elem);
+        } else {
+            t->align=ctx->pointer_bits==16 ? 1U : fe_type_align(t->elem);
+            t->size=round_up(1UL,t->align)+fe_type_size(t->elem);
+            t->size=round_up(t->size,t->align);
+        }
+        t->cycle_state=2; return;
     }
     if (t->kind == FE_TYPE_BOOL || t->kind == FE_TYPE_CHAR) {
         t->size = 1; t->align = 1; t->cycle_state = 2; return;
@@ -524,6 +539,8 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
                            strcmp(node->text,"&mut") == 0);
     if (node->text && strcmp(node->text,"^")==0)
         return fe_type_owned(ctx,fe_type_from_ast(ctx,node->a));
+    if (node->text && strcmp(node->text,"?")==0)
+        return fe_m7_optional_type(ctx,fe_type_from_ast(ctx,node->a));
     if (node->text && (strcmp(node->text, "[") == 0 ||
                        strcmp(node->text, "[]mut") == 0)) {
         if (node->a) {
@@ -535,16 +552,13 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
             fe_type_mut_slice(ctx, fe_type_from_ast(ctx,node->b)) :
             fe_type_slice(ctx, fe_type_from_ast(ctx, node->b));
     }
-    if (node->text && strcmp(node->text, "!") == 0)
-        /* Prefix !T stores T in a; the E!T spelling stores its success
-           type in b and the error type in a. */
-        return fe_type_error_union(ctx, fe_type_from_ast(
-            ctx, node->b ? node->b : node->a));
-    if (node->text && (strcmp(node->text, "?") == 0 ||
-                       strcmp(node->text, "^") == 0 ||
-                       strcmp(node->text, "&") == 0 ||
-                       strcmp(node->text, "&mut") == 0 ||
-                       strcmp(node->text, "*") == 0 ||
+    if (node->text && strcmp(node->text, "!") == 0) {
+        if (node->b)
+            return fe_m7_error_union_type(ctx,fe_type_from_ast(ctx,node->a),
+                                           fe_type_from_ast(ctx,node->b));
+        return fe_type_error_union(ctx,fe_type_from_ast(ctx,node->a));
+    }
+    if (node->text && (strcmp(node->text, "*") == 0 ||
                        strcmp(node->text, "far") == 0))
         return fe_type_intern(ctx, "<unknown>");
     if (node->text && strcmp(node->text, "fn") == 0)
@@ -571,6 +585,8 @@ int fe_type_is_indexable(const FeType *t)
 const char *fe_type_c_name(const FeType *t, unsigned pointer_bits)
 {
     if (!t) return "long";
+    if (t->kind == FE_TYPE_OPTIONAL && fe_m7_optional_uses_niche(t->elem))
+        return fe_type_c_name(t->elem,pointer_bits);
     if (t->cname) return t->cname;
     if (t->kind == FE_TYPE_VOID) return "void";
     if (t->kind == FE_TYPE_ERROR_UNION) {
