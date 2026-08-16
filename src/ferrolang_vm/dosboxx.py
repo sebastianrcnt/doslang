@@ -151,10 +151,14 @@ def _rc_batch() -> str:
     return "\r\n".join(lines)
 
 
-def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool) -> str:
+def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool,
+           prebuilt: bool = False) -> str:
     # The compiler build is the step that fails first and blocks everything after
     # it, so its output is captured exactly like a case command's.
     build = "call BUILD.BAT" if trace_dos else "call BUILD.BAT > RESULTS\\BUILD.LOG"
+    if prebuilt:
+        # FEC.EXE was restored from cache; BUILD.BAT would delete and rebuild it.
+        build = "echo OK>BUILD.OK"
     lines = [
         "@echo off", "if not exist RESULTS md RESULTS", "if not exist OUT md OUT",
         "set WATCOM=W:", "set INCLUDE=W:\\H",
@@ -247,6 +251,23 @@ class SuiteRun:
             shutil.rmtree(self.root, ignore_errors=True)
 
 
+def _compiler_key() -> str:
+    """Hash of everything the compiler build reads.
+
+    Sources and the build batch only; the toolchain itself is pinned by
+    dosboxx.lock.json, so it cannot drift underneath a cache hit.
+    """
+    digest = hashlib.sha256()
+    paths = sorted((ROOT / "fec" / "src").rglob("*"))
+    paths.append(ROOT / "fec" / "build-dos.bat")
+    for path in paths:
+        if not path.is_file():
+            continue
+        digest.update(path.name.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
 def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
               trace_dos: bool = False) -> SuiteRun:
     dosbox, watcom = resolve_tools()
@@ -254,6 +275,7 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
     run_root = Path(tempfile.mkdtemp(prefix="suite-", dir=RUNS))
     result = SuiteRun(run_root, cases, keep)
     fec = result.fec
+    cached = CACHE / "compilers" / f"{_compiler_key()}.exe"
     try:
         shutil.copytree(ROOT / "fec" / "src", fec / "SRC")
         shutil.copytree(ROOT / "fec" / "std", fec / "STD")
@@ -271,8 +293,11 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
             f"[cpu]\ncore=dynamic\ncycles=max\n",
             encoding="ascii",
         )
+        if cached.is_file():
+            shutil.copy2(cached, fec / "FEC.EXE")
         (fec / "RUN.BAT").write_text(
-            _batch(cases, show_dos=show_dos, trace_dos=trace_dos),
+            _batch(cases, show_dos=show_dos, trace_dos=trace_dos,
+                   prebuilt=cached.is_file()),
             encoding="ascii", newline="",
         )
         (fec / "RC.BAT").write_text(_rc_batch(), encoding="ascii", newline="")
@@ -293,6 +318,10 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
             raise DosboxError(f"DOSBox-X exited with status {completed.returncode}")
         if not (fec / "RUN.OK").is_file():
             raise DosboxError("DOSBox-X did not complete the test batch")
+        built = fec / "FEC.EXE"
+        if not cached.is_file() and built.is_file() and result.result() == "PASS":
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(built, cached)
         return result
     except Exception:
         result.keep = True
