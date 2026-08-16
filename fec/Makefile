@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -std=c89
 CPPFLAGS ?= -Isrc
-SRC = src/arena.c src/diag.c src/lexer.c src/ast.c src/parser.c src/types.c src/m7.c src/own.c src/check_m7.c src/lower.c src/emit_c_m7.c src/driver.c
+SRC = src/arena.c src/diag.c src/lexer.c src/ast.c src/parser.c src/types.c src/m7.c src/own.c src/check_m7.c src/lower.c src/emitcm7.c src/driver.c
 OBJ = $(SRC:.c=.o)
 
 .PHONY: all clean dos-build

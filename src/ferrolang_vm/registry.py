@@ -17,6 +17,7 @@ M3 = "TESTS\\M3"
 M4 = "TESTS\\M4"
 M5 = "TESTS\\M5"
 M6 = "TESTS\\M6"
+M7 = "TESTS\\M7"
 OUT = "OUT"
 
 # Emitted-C basenames that were hand-shortened for DOS 8.3. Keyed by milestone
@@ -193,6 +194,17 @@ CASES: list[Case] = [
         "okbranch", "okdefer", "okglobcp", "oklast", "okr8free", "okr8join",
         "okr8meth", "okr8stat", "okrebor", "okrtlast", "okshare", "okslreb",
         "okstatic", "oktemp", "oktrim", "okwcall")],
+
+    # -- M7: optionals and error unions ---------------------------------------
+    *[_case(7, name, f"FEC.EXE --check {_fe(M7, name)}", False) for name in (
+        "badcatch", "baddef", "baddir", "badercod", "badernam", "badetype",
+        "badnull", "badoref", "badorel", "badproj", "badqmark", "badret",
+        "badsome", "badtry", "badzero")],
+    *[_case(7, name, _emit(_fe(M7, name), f"{OUT}\\{name.upper()}.C",
+                           output_first=True)) for name in (
+        "okcatch", "okcatmov", "okcvoid", "okdeflt", "okiflet", "okmatch",
+        "oknull", "okorelse", "okpatvw", "okproj", "okrepl", "oktrdef",
+        "oktry")],
 ]
 
 MAX_MILESTONE: int = max(case.milestone for case in CASES)

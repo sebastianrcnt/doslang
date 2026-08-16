@@ -811,6 +811,7 @@ static FeType *check_index(FeCheckerState *s, FeNode *n)
 static FeType *check_identifier(FeCheckerState *s, FeNode *n, int read)
 {
     FeSym *sym;
+    (void)read; /* TRIAL PATCH: silence W303 under the check_m7.c wrapper */
     sym = find_symbol(s->scope, n->text ? n->text : "");
     if (!sym) {
         FeType *named=fe_type_intern(&s->c->types,n->text ? n->text : "");

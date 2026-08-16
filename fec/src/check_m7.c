@@ -98,6 +98,7 @@ static FeType *m7_check_expected(FeCheckerState *s, FeNode *value,
     return actual;
 }
 
+/* TRIAL PATCH: m7_error_same was dead (W202); removed for this run.
 static int m7_error_same(FeCheckerState *s, FeType *a, FeType *b)
 {
     FeType *ea;
@@ -108,6 +109,7 @@ static int m7_error_same(FeCheckerState *s, FeType *a, FeType *b)
     eb=fe_m7_error_type(&s->c->types,b);
     return ea && eb && fe_type_equal(ea,eb);
 }
+*/
 
 static FeType *m7_member_field(FeCheckerState *s, FeNode *n, FeType *base)
 {
