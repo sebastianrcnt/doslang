@@ -33,7 +33,8 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "fec" / "tests"
 WATCOM = ROOT / ".dosboxx" / "watcom"
 SOURCES = ("arena", "diag", "lexer", "ast", "parser", "types", "m7", "own",
-           "check", "resolve", "ir", "lower", "x86", "driver")
+           "check", "checkexp", "checkstm", "checkgen", "checkcal", "checkpro",
+           "resolve", "ir", "lower", "lowerprn", "lowerexp", "lowerstm", "x86", "driver")
 
 MARKER = re.compile(r"^//\s*ERROR:(?:(\d+):)?(.*)$")
 

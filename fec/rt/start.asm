@@ -26,7 +26,7 @@ prefix      db  'ferro: ',0
 at_word     db  ' at ',0
 colon       db  ':',0
 newline     db  13,10,0
-numbuf      db  16 dup(0)
+numbuf      db  24 dup(0)
 written     dd  0
 allocs      dd  0
 frees       dd  0
@@ -209,6 +209,94 @@ fe_rt_frees proc near
         mov     eax, [frees]
         ret
 fe_rt_frees endp
+
+; fe_rt_write_int(handle, value, is_unsigned) -- decimal, with a sign when
+; the value is negative and signed was asked for.
+public fe_rt_write_int
+fe_rt_write_int proc near
+        push    ebp
+        mov     ebp, esp
+        push    ebx
+        push    esi
+        push    edi
+        mov     edi, offset numbuf + 15
+        mov     byte ptr [edi], 0
+        mov     eax, [ebp+12]
+        xor     ebx, ebx                ; ebx = 1 when a '-' is needed
+        cmp     dword ptr [ebp+16], 0
+        jne     int_digits
+        test    eax, eax
+        jge     int_digits
+        neg     eax
+        mov     ebx, 1
+int_digits:
+        mov     ecx, 10
+int_loop:
+        xor     edx, edx
+        div     ecx
+        add     dl, '0'
+        dec     edi
+        mov     [edi], dl
+        test    eax, eax
+        jnz     int_loop
+        test    ebx, ebx
+        je      int_write
+        dec     edi
+        mov     byte ptr [edi], '-'
+int_write:
+        mov     esi, offset numbuf + 15
+        sub     esi, edi
+        push    esi
+        push    edi
+        push    dword ptr [ebp+8]
+        call    fe_rt_write
+        add     esp, 12
+        pop     edi
+        pop     esi
+        pop     ebx
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_write_int endp
+
+; fe_rt_write_hex(handle, value)
+public fe_rt_write_hex
+fe_rt_write_hex proc near
+        push    ebp
+        mov     ebp, esp
+        push    ebx
+        push    esi
+        push    edi
+        mov     edi, offset numbuf + 15
+        mov     byte ptr [edi], 0
+        mov     eax, [ebp+12]
+hex_loop:
+        mov     edx, eax
+        and     edx, 15
+        cmp     dl, 10
+        jb      hex_digit
+        add     dl, 'a' - 10 - '0'
+hex_digit:
+        add     dl, '0'
+        dec     edi
+        mov     [edi], dl
+        shr     eax, 4
+        test    eax, eax
+        jnz     hex_loop
+        mov     esi, offset numbuf + 15
+        sub     esi, edi
+        push    esi
+        push    edi
+        push    dword ptr [ebp+8]
+        call    fe_rt_write
+        add     esp, 12
+        pop     edi
+        pop     esi
+        pop     ebx
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_write_hex endp
 
 ; fe_rt_exit(code) -- never returns
 public fe_rt_exit
