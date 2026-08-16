@@ -176,10 +176,9 @@ int main(void) {
     int used,rc; uint16_t key;
     if(Utils::parseEnv()!=0)return 2;
     if(Utils::initStack(1,TCP_SOCKET_RING_SIZE,ctrl_break,ctrl_c))return 3;
-    cprintf("[TCPAGENT] Connecting to 10.0.2.2:%u\r\n",SERVER_PORT);
     while(!stop_requested) {
         if(connect_host()!=0){unsigned long spins=0;while(spins++<60000UL&&!stop_requested)drive();continue;}
-        cprintf("[TCPAGENT] Connected. Alt-X stops.\r\n"); write_text("TCPAGENT READY\r\n"); used=0;
+        write_text("TCPAGENT READY\r\n"); used=0;
         while(!stop_requested&&!socketp->isRemoteClosed()) {
             drive(); rc=socketp->recv((uint8_t *)data,CHUNK_SIZE);
             if(rc<0)break;

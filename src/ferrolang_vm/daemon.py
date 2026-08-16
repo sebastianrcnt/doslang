@@ -62,10 +62,12 @@ class Host:
                     log_event(logging.WARNING, "agent rejected", peer=str(peer), reason="already connected")
                     continue
                 self.agent = sock
-                self.agent_ready.set()
             try:
                 banner = self._read_line(sock).decode("ascii", "replace")
-                log_event(logging.INFO, "agent connected", peer=f"{peer[0]}:{peer[1]}", banner=banner)
+                if banner != "TCPAGENT READY":
+                    raise ConnectionError(f"invalid TCPAGENT banner: {banner!r}")
+                self.agent_ready.set()
+                log_event(logging.INFO, "agent connected", peer=f"{peer[0]}:{peer[1]}")
                 # Request() owns protocol reads. Between requests, peek only
                 # for EOF so TCPAGENT can reconnect without being rejected.
                 while self.agent is sock:
@@ -78,6 +80,11 @@ class Host:
                             self.agent_lock.release()
                     else:
                         time.sleep(.05)
+            except (ConnectionError, OSError) as exc:
+                # Reset can close a connection during its banner. This is a
+                # per-connection event, never a reason to kill the listener.
+                log_event(logging.WARNING, "agent handshake/connection failed",
+                          peer=f"{peer[0]}:{peer[1]}", error=str(exc))
             finally:
                 with self.agent_lock:
                     if self.agent is sock:
@@ -232,10 +239,6 @@ class Host:
             return {"agent_connected": self.agent_ready.is_set(), "qemu_running": running, "log": str(LOG_PATH)}
         if op == "start": return self.start()
         if op == "stop": return self.stop()
-        if op == "soft-reset":
-            self.monitor("system_reset")
-            log_event(logging.INFO, "qemu soft reset requested")
-            return {"reset": "requested"}
         if op == "ping": return self.ping()
         if op == "exec": return self.exec(str(request["command"]))
         if op == "put": return self.put(str(request["source"]), str(request["destination"]))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -37,15 +38,41 @@ def rpc(payload: dict[str, object], start_daemon: bool = False) -> object:
     return response["result"]
 
 
+def wait_ready(timeout: int) -> bool:
+    """Wait quietly; do not turn an expected boot gap into error-log spam."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            status = rpc({"op": "status"})
+            if status["agent_connected"] and str(rpc({"op": "ping"})["response"]).startswith("OK 504F4E47"):
+                return True
+        except RuntimeError:
+            pass
+        time.sleep(.5)
+    return False
+
+
+def follow_logs() -> int:
+    log_path = ROOT / ".qemu" / "ferro-vm.log"
+    lnav = shutil.which("lnav.exe") or shutil.which("lnav")
+    if lnav:
+        return subprocess.run([lnav, str(log_path)]).returncode
+    print("lnav was not found; following the log with PowerShell.", file=sys.stderr)
+    return subprocess.run([
+        "powershell", "-NoProfile", "-Command",
+        f"Get-Content -LiteralPath '{log_path}' -Wait",
+    ]).returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Windows-only QEMU/FreeDOS automation")
     commands = parser.add_subparsers(dest="op", required=True)
-    for name in ("start", "stop", "status", "ping", "screenshot", "ocr"):
+    for name in ("start", "stop", "status", "ping", "screenshot", "ocr", "logs"):
         commands.add_parser(name)
+    wait = commands.add_parser("wait-ready")
+    wait.add_argument("--timeout", type=int, default=45)
     reset = commands.add_parser("reset")
     reset.add_argument("--timeout", type=int, default=45)
-    soft_reset = commands.add_parser("soft-reset")
-    soft_reset.add_argument("--timeout", type=int, default=45)
     execute = commands.add_parser("exec")
     execute.add_argument("command")
     put = commands.add_parser("put")
@@ -57,6 +84,13 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        if args.op == "logs":
+            return follow_logs()
+        if args.op == "wait-ready":
+            if wait_ready(args.timeout):
+                print(json.dumps({"agent": "PONG"}))
+                return 0
+            raise RuntimeError("TCPAGENT did not become ready")
         if args.op == "ocr":
             result = rpc({"op": "screenshot"})
             import logging
@@ -65,25 +99,15 @@ def main() -> int:
             recognized = RapidOCR()(result["path"])
             print("\n".join(recognized.txts or ()))
             return 0
-        if args.op in ("reset", "soft-reset"):
-            if args.op == "reset":
-                rpc({"op": "stop"}, start_daemon=True)
-                time.sleep(.5)
-                rpc({"op": "start"}, start_daemon=True)
-            else:
-                rpc({"op": "soft-reset"})
-            # FreeDOS displays its default boot menu before FDAUTO.BAT starts
-            # TCPAGENT. This is input, not a readiness delay.
+        if args.op == "reset":
+            rpc({"op": "stop"}, start_daemon=True)
+            time.sleep(.5)
+            rpc({"op": "start"}, start_daemon=True)
             time.sleep(2)
             rpc({"op": "monitor", "command": "sendkey ret"})
-            deadline = time.monotonic() + args.timeout
-            while time.monotonic() < deadline:
-                try:
-                    if str(rpc({"op": "ping"})["response"]).startswith("OK 504F4E47"):
-                        print(json.dumps({"reset": args.op, "agent": "PONG"}))
-                        return 0
-                except RuntimeError:
-                    time.sleep(.5)
+            if wait_ready(args.timeout):
+                print(json.dumps({"reset": "complete", "agent": "PONG"}))
+                return 0
             raise RuntimeError("TCPAGENT did not become ready")
         payload: dict[str, object] = {"op": args.op}
         if args.op == "exec": payload["command"] = args.command

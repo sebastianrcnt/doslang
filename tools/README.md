@@ -20,14 +20,14 @@ Windows named pipe `\\.\pipe\ferrolang-vm`; there is no controller or observer
 TCP port. Monitor the append-only structured log in another terminal:
 
 ```powershell
-lnav .qemu/ferro-vm.log
+uv run ferro-vm logs
 ```
 
 Commands:
 
 ```powershell
 uv run ferro-vm reset       # clean QEMU quit and restart
-uv run ferro-vm soft-reset  # QEMU system_reset
+uv run ferro-vm wait-ready --timeout 45
 uv run ferro-vm ping
 uv run ferro-vm exec 'dir C:\FEC'
 uv run ferro-vm put fec/src/check.c 'C:\FEC\SRC\CHECK.C'
@@ -37,9 +37,13 @@ uv run ferro-vm ocr
 uv run ferro-vm stop
 ```
 
-Both reset modes wait for FreeDOS to boot, submit the default boot-menu Enter,
-and require TCPAGENT `PING`/`PONG` before succeeding. The daemon logs command
-metadata, DOS output, exit status, transfers, and agent lifecycle events as UTF-8 lines. It deliberately never logs raw binary
+`reset` cleanly quits and restarts QEMU, waits for FreeDOS to boot, submits
+the default boot-menu Enter, and requires TCPAGENT `PING`/`PONG`. QEMU
+`system_reset` is intentionally unsupported because repeated soft resets leave
+the FreeDOS NE2000 packet driver stuck during initialization. `logs` starts
+`lnav` when installed and otherwise falls back to PowerShell `Get-Content
+-Wait`. The daemon logs command metadata, DOS output, exit status, transfers,
+and agent lifecycle events as UTF-8 lines. It deliberately never logs raw binary
 payloads or protocol hex.
 
 ## Standalone OCR
