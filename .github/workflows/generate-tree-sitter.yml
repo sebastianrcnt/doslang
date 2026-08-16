@@ -1,0 +1,35 @@
+name: Generate Tree-sitter parser
+
+on:
+  push:
+    branches:
+      - agent/zed-ferro-highlighting
+    paths:
+      - grammar.js
+      - .github/workflows/generate-tree-sitter.yml
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/zed-ferro-highlighting
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --global tree-sitter-cli@0.26.11
+      - run: tree-sitter generate
+      - name: Commit generated parser
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/parser.c src/node-types.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "generate Ferro tree-sitter parser"
+          git push
