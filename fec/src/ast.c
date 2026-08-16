@@ -8,7 +8,7 @@ FeNode *fe_node(FeAst *a, FeNodeKind k, FeLoc loc, const char *text, unsigned lo
     FeNode *n=(FeNode *)fe_arena_alloc(&a->arena,sizeof(FeNode));
     if (!n) return 0;
     n->kind=k; n->loc=loc; n->text=text?fe_arena_strdup(&a->arena,text,len):0;
-    n->a=n->b=n->c=n->children=n->next=0; n->cname=0; n->aux_text=0; n->aux_cname=0; n->sem_type=0; n->sem_decl=0; n->flags=0; return n;
+    n->a=n->b=n->c=n->children=n->next=0; n->cname=0; n->aux_text=0; n->aux_cname=0; n->sem_type=0; n->sem_context=0; n->sem_decl=0; n->flags=0; return n;
 }
 void fe_node_add(FeNode *parent, FeNode *child)
 {
