@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 
+static int type_needs_drop(FeType *t);
+static void emit_lvalue(FeEmitter *e, FeNode *n);
+
 static void emit_expr_core(FeEmitter *e, FeNode *n);
 static void emit_stmt_core(FeEmitter *e, FeNode *n);
 static void emit_block(FeEmitter *e, FeNode *n);
@@ -326,15 +329,16 @@ static int node_uses_m4(FeNode *n)
 
 static void emit_expr(FeEmitter *e, FeNode *n);
 static void emit_stmt(FeEmitter *e, FeNode *n);
+static void emit_owned_live(FeEmitter *e, FeNode *n, int value);
+static void emit_cleanup_all(FeEmitter *e);
 static void emit_value_drop(FeEmitter *e, FeNode *n);
 static void emit_cleanup_block(FeEmitter *e, FeNode *n);
-static void emit_cleanup_to(FeEmitter *e, unsigned depth);
+static void emit_cleanup_to(FeEmitter *e, unsigned floor);
 static void emit_param_cleanup(FeEmitter *e);
-static void emit_error_return(FeEmitter *e, FeNode *n);
+static void emit_error_return(FeEmitter *e, const char *error_expr);
 static void emit_fn(FeEmitter *e, FeNode *fn, int prototype);
 static void emit_main_wrapper(FeEmitter *e, FeNode *fn);
 static void emit_type_defs(FeEmitter *e);
-static void emit_match(FeEmitter *e, FeNode *n, int value_context);
 
 static int stmt_definitely_returns(FeNode *n);
 
@@ -966,7 +970,7 @@ static void emit_expr_core(FeEmitter *e, FeNode *n)
 
 
 
-static void emit_match_core(FeEmitter *e, FeNode *n, int value_context)
+static void emit_match(FeEmitter *e, FeNode *n, int value_context)
 {
     FeNode *arm;
     FeType *t=n->a ? n->a->sem_type : 0;
@@ -1243,7 +1247,6 @@ void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check,
 static void emit_expr(FeEmitter *e, FeNode *n);
 static void emit_stmt(FeEmitter *e, FeNode *n);
 static void emit_block(FeEmitter *e, FeNode *n);
-static void emit_lvalue(FeEmitter *e, FeNode *n);
 
 static int type_needs_drop(FeType *t)
 {
@@ -1394,7 +1397,6 @@ static void m7_emit_drop_helpers(FeEmitter *e)
     FeType *t;
     FeNode *method;
     unsigned i;
-    unsigned j;
     char access[256];
     for (t=e->check->types.types;t;t=t->next)
         if (type_needs_drop(t) && t->drop_cname &&
@@ -1443,7 +1445,6 @@ static void m7_emit_drop_helpers(FeEmitter *e)
     }
     /* Error enums are scalar codes, so their enum payload helper functions
        from M3 are deliberately not emitted in the M7 path. */
-    (void)j;
 }
 
 static void m7_emit_type_helpers(FeEmitter *e)
@@ -1847,7 +1848,6 @@ static void m7_emit_assign_stmt(FeEmitter *e, const char *dst, FeNode *src)
 
 static void m7_emit_raw_expr(FeEmitter *e, FeNode *n)
 {
-    FeNode *x;
     FeType *bt;
     FeVariantType *v;
     const char *op;
@@ -1987,7 +1987,6 @@ static void m7_emit_raw_expr(FeEmitter *e, FeNode *n)
         emit_expr_core(e,n);
         break;
     }
-    (void)x;
 }
 
 /* Emit the initializer for a `const` declaration.
@@ -2436,7 +2435,7 @@ static void emit_stmt(FeEmitter *e, FeNode *n)
     case FE_N_MATCH:
         if (n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_OPTIONAL)
             m7_emit_optional_match(e,n);
-        else emit_match_core(e,n,0);
+        else emit_match(e,n,0);
         break;
     case FE_N_BREAK:
     case FE_N_CONTINUE:

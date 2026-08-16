@@ -1,5 +1,8 @@
 #include "check.h"
 #include "m7.h"
+#include <stdlib.h>
+
+#define FE_M7_FLOW_CAP 64U
 #include "own.h"
 #include <string.h>
 #include <stdio.h>
