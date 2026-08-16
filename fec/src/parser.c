@@ -161,9 +161,6 @@ static FeNode *expr(FeParser *p, int minprec)
     return left;
 }
 
-/* A control-flow header is followed by a body '{'.  Do not let that body
-   brace be consumed as the postfix struct-literal brace; callers can use
-   parentheses when a struct literal is intended in the header. */
 static FeNode *header_expr(FeParser *p)
 {
     FeNode *n;
@@ -238,7 +235,28 @@ static FeNode *statement(FeParser *p)
     if(eat(p,FE_TOK_LET)) { n=toknode(p,FE_N_LET,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected variable name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in let");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
     if(eat(p,FE_TOK_VAR)) { n=toknode(p,FE_N_VAR,t);if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected variable name");if(eat(p,FE_TOK_COLON))n->a=type(p);if(eat(p,FE_TOK_EQ))n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
     if(eat(p,FE_TOK_CONST)) { n=toknode(p,FE_N_CONST,t);if(is_name(p)){n->text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}else error(p,"expected constant name");if(eat(p,FE_TOK_COLON))n->a=type(p);want(p,FE_TOK_EQ,"expected '=' in const");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';'");return n; }
-    if(eat(p,FE_TOK_IF)) { n=toknode(p,FE_N_IF,t);if(eat(p,FE_TOK_LET)){n->text=fe_arena_strdup(&p->ast->arena,"if let",6);if(is_name(p))next(p);if(eat(p,FE_TOK_LPAREN)){if(is_name(p))next(p);want(p,FE_TOK_RPAREN,"expected ')' in if let pattern");}want(p,FE_TOK_EQ,"expected '=' in if let");}n->a=header_expr(p);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
+    if(eat(p,FE_TOK_IF)) {
+        n=toknode(p,FE_N_IF,t);
+        if(eat(p,FE_TOK_LET)) {
+            FeToken pt=p->current;
+            n->text=fe_arena_strdup(&p->ast->arena,"if let",6);
+            if(is_name(p)) {
+                n->aux_text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);
+                next(p);
+            } else error(p,"expected if let pattern");
+            if(eat(p,FE_TOK_LPAREN)) {
+                if(is_name(p)) {
+                    FeNode *binding=toknode(p,FE_N_IDENT,p->current);
+                    next(p);
+                    fe_node_add(n,binding);
+                } else error(p,"expected if let binding");
+                want(p,FE_TOK_RPAREN,"expected ')' in if let pattern");
+            }
+            want(p,FE_TOK_EQ,"expected '=' in if let");
+            (void)pt;
+        }
+        n->a=header_expr(p);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n;
+    }
     if(eat(p,FE_TOK_COMPTIME)) { n=toknode(p,FE_N_IF,t);want(p,FE_TOK_IF,"expected 'if' after comptime");n->text=fe_arena_strdup(&p->ast->arena,"comptime if",11);n->a=header_expr(p);n->b=block(p);if(eat(p,FE_TOK_ELSE))n->c=is(p,FE_TOK_IF)?statement(p):block(p);return n; }
     if(eat(p,FE_TOK_WHILE)) {n=toknode(p,FE_N_WHILE,t);n->a=header_expr(p);n->b=block(p);return n;}
     if(eat(p,FE_TOK_FOR)) {n=toknode(p,FE_N_FOR,t);if(is_name(p)){n->text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}else error(p,"expected loop variable");if(eat(p,FE_TOK_COMMA)){if(is_name(p)){n->aux_text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}else error(p,"expected second loop variable");}want(p,FE_TOK_IN,"expected 'in' in for");n->a=header_expr(p);if(eat(p,FE_TOK_DOTDOT))n->c=header_expr(p);n->b=block(p);return n;}
