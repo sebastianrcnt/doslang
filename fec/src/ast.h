@@ -44,6 +44,9 @@ struct FeNode {
 #define FE_NODE_PUB    0x8U
 #define FE_NODE_COMPTIME 0x10U
 #define FE_NODE_EXTERN   0x20U
+/* An index expression that had `..` in it, so it makes a slice rather than
+   reaching an element. `x[a]` and `x[a..]` are otherwise the same shape. */
+#define FE_NODE_SLICE    0x40U
 
 typedef struct FeAst {
     FeArena arena;

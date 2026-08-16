@@ -1,0 +1,20 @@
+// EXIT:0
+// OUTPUT:fizz 12345 -678
+unit printnum;
+import std.io;
+import std.fmt;
+
+fn show(v: i32) -> void {
+    var buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let n: usize = fmt.fmt_i32(buf[..], v);
+    io.print(" ");
+    io.print(buf[0..n]);
+}
+
+fn main() -> i32 {
+    io.print("fizz");
+    show(12345);
+    show(0 - 678);
+    io.print("\n");
+    return 0;
+}

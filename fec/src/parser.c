@@ -124,8 +124,8 @@ static FeNode *postfix(FeParser *p)
         if(eat(p,FE_TOK_LPAREN)) { m=toknode(p,FE_N_CALL,t); m->a=n; while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(m,delimited_expr(p));if(!eat(p,FE_TOK_COMMA))break;} want(p,FE_TOK_RPAREN,"expected ')' after call"); n=m; }
         else if(eat(p,FE_TOK_LBRACKET)) {
             m=toknode(p,FE_N_INDEX,t);m->a=n;
-            if(is(p,FE_TOK_DOTDOT)) m->b=0; else m->b=delimited_expr(p);
-            if(eat(p,FE_TOK_DOTDOT)) { if(!is(p,FE_TOK_RBRACKET)) m->c=delimited_expr(p); }
+            if(is(p,FE_TOK_DOTDOT)) { m->b=0; m->flags|=FE_NODE_SLICE; } else m->b=delimited_expr(p);
+            if(eat(p,FE_TOK_DOTDOT)) { m->flags|=FE_NODE_SLICE; if(!is(p,FE_TOK_RBRACKET)) m->c=delimited_expr(p); }
             want(p,FE_TOK_RBRACKET,"expected ']' after index");n=m;
         }
         else if(eat(p,FE_TOK_DOT)) {

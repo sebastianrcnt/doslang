@@ -62,6 +62,8 @@ static void lower_stmt(Lower *L, FeNode *n);
 static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
                        unsigned long size);
 static void lower_for(Lower *L, FeNode *n);
+static Slot lower_slice(Lower *L, FeNode *n);
+static void guard(Lower *L, unsigned ok, FeIrTrap reason, unsigned long line);
 static void lower_match(Lower *L, FeNode *n);
 static int enum_has_payload(const FeType *t);
 static void lower_global(Lower *L, FeNode *n);
@@ -673,7 +675,7 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
         unsigned scale;
         unsigned offset;
         unsigned addr;
-        if (n->c || !n->b) { fail(L, "a slice expression", n); return slot_void(); }
+        if (n->flags & FE_NODE_SLICE) return lower_slice(L, n);
         base = lower_expr(L, n->a);
         indexable_parts(L, base, bt, &data, &length, n);
         index = as_value(L, lower_expr(L, n->b), n->b);
@@ -971,6 +973,49 @@ static void lower_while(Lower *L, FeNode *n)
     fe_ir_jmp(L->b, head->id);
     if (L->loop_depth) --L->loop_depth;
     L->b = done;
+}
+
+/* `x[a..b]` makes a pointer and a length out of part of something indexable.
+   Both ends are checked -- against each other and against what is there --
+   before the pointer is formed. An empty slice of a valid range is fine; one
+   that starts past its end is not. */
+static Slot lower_slice(Lower *L, FeNode *n)
+{
+    FeType *bt = n->a ? n->a->sem_type : 0;
+    FeType *elem = bt ? bt->elem : 0;
+    FeType *t = n->sem_type;
+    Slot base = lower_expr(L, n->a);
+    unsigned data;
+    unsigned length;
+    unsigned from;
+    unsigned to;
+    unsigned local;
+    unsigned scale;
+    unsigned off;
+    unsigned at;
+    unsigned count;
+    indexable_parts(L, base, bt, &data, &length, n);
+    from = n->b ? as_value(L, lower_expr(L, n->b), n->b)
+                : fe_ir_const(L->m, L->b, FE_IR_I32, 0);
+    to = n->c ? as_value(L, lower_expr(L, n->c), n->c) : length;
+    if (!L->c->no_checks) {
+        unsigned ordered = fe_ir_binary(L->m, L->b, FE_IR_LE, FE_IR_I32,
+                                        from, to, 1);
+        unsigned within;
+        guard(L, ordered, FE_TRAP_BOUNDS, n->loc.line);
+        within = fe_ir_binary(L->m, L->b, FE_IR_LE, FE_IR_I32, to, length, 1);
+        guard(L, within, FE_TRAP_BOUNDS, n->loc.line);
+    }
+    scale = fe_ir_const(L->m, L->b, FE_IR_I32, (long)ir_size(elem));
+    off = fe_ir_binary(L->m, L->b, FE_IR_MUL, FE_IR_I32, from, scale, 1);
+    at = fe_ir_binary(L->m, L->b, FE_IR_ADD, FE_IR_PTR, data, off, 1);
+    count = fe_ir_binary(L->m, L->b, FE_IR_SUB, FE_IR_I32, to, from, 1);
+    local = scratch(L, t, "slice");
+    fe_ir_store(L->m, L->b, fe_ir_at_local(local, SLICE_PTR_OFFSET), at,
+                FE_IR_PTR);
+    fe_ir_store(L->m, L->b, fe_ir_at_local(local, SLICE_LEN_OFFSET), count,
+                FE_IR_I32);
+    return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
 }
 
 /* Three shapes share the keyword.
