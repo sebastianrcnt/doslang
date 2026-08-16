@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 
 import pytest
 
@@ -48,7 +49,13 @@ def test_compiler_build(suite_run: SuiteRun) -> None:
 def test_milestone_case(case: Case, suite_run: SuiteRun) -> None:
     if suite_run.result() != "PASS":
         pytest.skip("compiler build failed")
-    assert suite_run.result(case) == "PASS", (
+    result = suite_run.result(case)
+    err = suite_run.err(case)
+    if result == "PASS" and err:
+        warning_lines = [line for line in err.splitlines() if "warning" in line.lower()]
+        if warning_lines:
+            warnings.warn("\n".join(warning_lines), stacklevel=1)
+    assert result == "PASS", (
         f"DOS command: {case.command}\nExpected success: {case.expect_success}\n"
-        f"{suite_run.log(case)}"
+        f"{suite_run.log(case)}\n{err}"
     )

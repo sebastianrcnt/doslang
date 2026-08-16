@@ -140,19 +140,29 @@ def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool) -> str:
     for index, case in enumerate(cases):
         key = f"C{index:03d}"
         command = case.command
+        # Watcom writes diagnostics into the current directory.  Isolate each
+        # case so a later pytest item never sees stale diagnostics.
+        lines.extend([
+            "if exist *.ERR del *.ERR > NUL",
+            f"if exist RESULTS\\{key}.ERR del RESULTS\\{key}.ERR > NUL",
+        ])
         if not trace_dos:
             command += f" > RESULTS\\{key}.LOG"
         lines.append(command)
         if case.expect_success:
             lines.extend([
-                f"if errorlevel 1 goto {key}F", f"echo PASS>RESULTS\\{key}.RES",
-                f"goto {key}D", f":{key}F", f"echo FAIL>RESULTS\\{key}.RES", f":{key}D",
+                f"if errorlevel 1 goto {key}E", f"echo PASS>RESULTS\\{key}.RES",
+                f"goto {key}C", f":{key}E", f"echo FAIL>RESULTS\\{key}.RES",
             ])
         else:
             lines.extend([
-                f"if errorlevel 1 goto {key}P", f"echo FAIL>RESULTS\\{key}.RES",
-                f"goto {key}D", f":{key}P", f"echo PASS>RESULTS\\{key}.RES", f":{key}D",
+                f"if errorlevel 1 goto {key}E", f"echo FAIL>RESULTS\\{key}.RES",
+                f"goto {key}C", f":{key}E", f"echo PASS>RESULTS\\{key}.RES",
             ])
+        lines.extend([
+            f":{key}C", f"if exist *.ERR type *.ERR > RESULTS\\{key}.ERR",
+            f"if not exist RESULTS\\{key}.ERR type NUL > RESULTS\\{key}.ERR",
+        ])
     lines.extend([
         "goto FINISH", ":BUILDFAIL", "echo FAIL>RESULTS\\BUILD.RES", ":FINISH",
         "echo DONE>RUN.OK", *(["pause"] if show_dos else []), "exit", "",
@@ -189,6 +199,10 @@ class SuiteRun:
             return "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in errors)
         console = self.root / "CONSOLE.LOG"
         return console.read_text(encoding="utf-8", errors="replace") if console.is_file() else ""
+
+    def err(self, case: Case) -> str:
+        path = self.fec / "RESULTS" / f"{self._key(case)}.ERR"
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
 
     def cleanup(self) -> None:
         if not self.keep:
