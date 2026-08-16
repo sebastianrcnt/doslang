@@ -1,0 +1,30 @@
+name: m7-smoke
+on:
+  push:
+    branches: [agent/m7-complete]
+  workflow_dispatch:
+
+jobs:
+  host-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compiler as C89
+        run: make -C fec clean all CFLAGS='-O0 -Wall -Wextra -Werror -std=c89'
+      - name: Check M7 pass fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in fec/tests/m7/ok*.fe; do
+            fec/fec --target=bits32 --check "$f"
+          done
+      - name: Check M7 fail fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in fec/tests/m7/bad*.fe; do
+            if fec/fec --target=bits32 --check "$f"; then
+              echo "expected failure: $f"
+              exit 1
+            fi
+          done
