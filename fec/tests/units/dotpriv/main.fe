@@ -1,3 +1,7 @@
+// ERROR:private
+// The violation is in game/bar.fe, which this unit imports. Reaching it from
+// any entry has to be rejected, so the marker pins the message and not a line
+// in another file.
 unit main;
 import game.bar;
 

@@ -301,6 +301,74 @@ void fe_check_destroy(FeCheck *c)
     fe_arena_destroy(&c->arena);
 }
 
+static unsigned unit_index(FeCheck *c, const FeUnit *u)
+{
+    return (unsigned)(u - c->build->units);
+}
+
+/* An import introduces a local binding, so `binding.name` reaches into the
+   unit it names. A local of the same spelling wins -- shadowing a binding is
+   legal and means the local -- so this only answers when the base name is not
+   otherwise in scope. */
+static FeUnit *binding_unit(FeCheckerState *s, FeNode *base)
+{
+    if (!base || base->kind!=FE_N_IDENT || !base->text) return 0;
+    if (!s->c->build || !s->c->unit) return 0;
+    if (find_symbol(s->scope,base->text)) return 0;
+    return fe_build_binding(s->c->build,s->c->unit,base->text);
+}
+
+/* SPEC 8.2: a declaration is visible outside its unit only with `pub`. */
+static int decl_is_public(const FeNode *decl)
+{
+    return decl && (decl->flags & FE_NODE_PUB)!=0;
+}
+
+static FeSym *unit_member(FeCheck *c, FeUnit *u, const char *name)
+{
+    if (!u || !name) return 0;
+    return find_current(c->unit_scope[unit_index(c,u)],name);
+}
+
+/* A type another unit declares, or null if it declares no such type. Interning
+   is keyed on the declaring unit, so this cannot collide with a same-named
+   type here. */
+static FeType *unit_type(FeCheck *c, FeUnit *u, const char *name)
+{
+    FeType *t;
+    if (!u || !name) return 0;
+    for (t=c->types.types;t;t=t->next)
+        if (t->unit && strcmp(t->name,name)==0 &&
+            strcmp(t->unit,u->name)==0 && t->kind!=FE_TYPE_UNKNOWN) return t;
+    return 0;
+}
+
+/* The AST declaration of a type another unit declares, for its visibility and
+   for its methods. */
+static FeNode *unit_type_decl(FeCheck *c, FeUnit *u, const char *name)
+{
+    FeNode *n;
+    (void)c;
+    if (!u || !name) return 0;
+    for (n=u->ast.root ? u->ast.root->children : 0;n;n=n->next)
+        if ((n->kind==FE_N_STRUCT || n->kind==FE_N_ENUM ||
+             n->kind==FE_N_ERROR_DECL) && n->text &&
+            strcmp(n->text,name)==0) return n;
+    return 0;
+}
+
+/* Resolve a type written in another unit's source. Names in a signature mean
+   what they meant where the signature was written, not where it is called. */
+static FeType *node_type_in(FeCheck *c, const char *unit, FeNode *node)
+{
+    const char *save=c->types.unit_name;
+    FeType *t;
+    if (unit) c->types.unit_name=unit;
+    t=node_type(c,node);
+    c->types.unit_name=save;
+    return t;
+}
+
 static FeType *check_expr(FeCheckerState *s, FeNode *n);
 
 static FeNode *find_method(FeCheck *c, FeType *owner, const char *name)
@@ -335,6 +403,9 @@ static FeType *check_lvalue_core(FeCheckerState *s, FeNode *n, int read,
                                  FeType *base_in);
 static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read);
 static FeType *check_call(FeCheckerState *s, FeNode *n);
+static FeType *check_call_fn(FeCheckerState *s, FeNode *n, FeSym *sym,
+                             const char *home);
+static int is_error_set_member(FeCheckerState *s, FeNode *n);
 
 typedef struct FeFlowSlot {
     FeSym *sym;
@@ -770,6 +841,42 @@ static int has_field(FeNode *list, const char *name)
     return 0;
 }
 
+/* A field of a type declared elsewhere is reachable only with `pub`. Inside
+   the declaring unit every field is reachable, `pub` or not. */
+static int field_is_visible(FeCheckerState *s, const FeType *t,
+                            const FeFieldType *field)
+{
+    if (!t || !t->unit) return 1;
+    if (s->c->types.unit_name &&
+        strcmp(t->unit,s->c->types.unit_name)==0) return 1;
+    return field && field->ast_node &&
+           (field->ast_node->flags & FE_NODE_PUB)!=0;
+}
+
+/* The field list of a struct literal, once the type is known. Reached from
+   both `Type{...}` and `binding.Type{...}`. */
+static FeType *check_struct_fields(FeCheckerState *s, FeNode *n, FeType *t)
+{
+    FeFieldType *field;
+    FeNode *f;
+    FeType *v;
+    unsigned i;
+    for(f=n->children;f;f=f->next) if(f->kind==FE_N_FIELD) {
+        if(has_field(f->next,f->text)) { err(s->c,f->loc,"duplicate struct field"); }
+        field=fe_type_field(t,f->text);
+        if(!field) { err(s->c,f->loc,"invalid struct field"); continue; }
+        if(!field_is_visible(s,t,field)) {
+            err(s->c,f->loc,"field is private to its unit");
+            continue;
+        }
+        v=check_expr(s,f->a);
+        mark_moved(s,f->a,v);
+        if(!compatible(field->type,v,f->a) && v->kind!=FE_TYPE_UNKNOWN) err(s->c,f->loc,"struct field type mismatch");
+    }
+    for(i=0;i<t->field_count;i++) if(!has_field(n->children,t->fields[i].name)) err(s->c,n->loc,"missing struct field");
+    n->sem_type=t; return t;
+}
+
 static FeType *check_struct_init(FeCheckerState *s, FeNode *n)
 {
     FeType *t;
@@ -778,8 +885,24 @@ static FeType *check_struct_init(FeCheckerState *s, FeNode *n)
     FeType *v;
     FeType *et;
     FeVariantType *variant;
-    unsigned i;
     if (n->a && n->a->kind == FE_N_MEMBER) {
+        FeUnit *home=binding_unit(s,n->a->a);
+        if (home) {
+            /* `binding.Type{...}` names a type in another unit. */
+            const char *want=n->a->b && n->a->b->text ? n->a->b->text : "";
+            FeNode *decl=unit_type_decl(s->c,home,want);
+            t=unit_type(s->c,home,want);
+            if (!t || !decl) { err(s->c,n->a->loc,"unknown name"); return unknown(s->c); }
+            if (!decl_is_public(decl)) {
+                err(s->c,n->a->loc,"type is private to its unit");
+                return unknown(s->c);
+            }
+            if (t->kind!=FE_TYPE_STRUCT) {
+                err(s->c,n->loc,"unknown struct type");
+                return unknown(s->c);
+            }
+            return check_struct_fields(s,n,t);
+        }
         et=check_expr(s,n->a->a);
         variant=et && et->kind==FE_TYPE_ENUM ?
             fe_type_variant(et,n->a->b ? n->a->b->text : "") : 0;
@@ -802,16 +925,7 @@ static FeType *check_struct_init(FeCheckerState *s, FeNode *n)
     }
     t=fe_type_intern(&s->c->types,n->text ? n->text : "<unknown>");
     if (!t || t->kind!=FE_TYPE_STRUCT) { err(s->c,n->loc,"unknown struct type"); return unknown(s->c); }
-    for(f=n->children;f;f=f->next) if(f->kind==FE_N_FIELD) {
-        if(has_field(f->next,f->text)) { err(s->c,f->loc,"duplicate struct field"); }
-        field=fe_type_field(t,f->text);
-        if(!field) { err(s->c,f->loc,"invalid struct field"); continue; }
-        v=check_expr(s,f->a);
-        mark_moved(s,f->a,v);
-        if(!compatible(field->type,v,f->a) && v->kind!=FE_TYPE_UNKNOWN) err(s->c,f->loc,"struct field type mismatch");
-    }
-    for(i=0;i<t->field_count;i++) if(!has_field(n->children,t->fields[i].name)) err(s->c,n->loc,"missing struct field");
-    n->sem_type=t; return t;
+    return check_struct_fields(s,n,t);
 }
 
 static FeType *check_array_init(FeCheckerState *s, FeNode *n)
@@ -1059,6 +1173,22 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
         if (n->a && n->a->kind == FE_N_MEMBER) {
             FeNode *method;
             FeNode *self_param;
+            FeUnit *home=binding_unit(s,n->a->a);
+            if (home) {
+                const char *want=n->a->b && n->a->b->text ? n->a->b->text : "";
+                FeSym *fsym=unit_member(c,home,want);
+                if (!fsym) {
+                    err(c,n->a->loc,"unknown name");
+                    for (x=n->children;x;x=x->next) check_expr(s,x);
+                    return unknown(c);
+                }
+                if (!decl_is_public(fsym->decl)) {
+                    err(c,n->a->loc,"name is private to its unit");
+                    for (x=n->children;x;x=x->next) check_expr(s,x);
+                    return unknown(c);
+                }
+                return check_call_fn(s,n,fsym,home->name);
+            }
             et=check_expr(s,n->a->a);
             method=et && et->kind==FE_TYPE_STRUCT ?
                 find_method(c,et,n->a->b ? n->a->b->text : "") : 0;
@@ -1113,47 +1243,16 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                 err(c, n->loc, "unknown function");
                 return unknown(c);
             }
-            n->a->cname = sym->cname;
-            n->sem_decl = sym->fn;
-            if (!sym->fn) {
-                err(c, n->loc, "name is not a function");
-                return unknown(c);
-            }
-            param = sym->fn->a ? sym->fn->a->children : 0;
-            arg = n->children;
-            while (param && arg) {
-                a = check_expr(s, arg);
-                b = node_type(c, param->a);
-                if (b && a && b->kind==FE_TYPE_REF && !b->ref_mut &&
-                    a->kind==FE_TYPE_REF && a->ref_mut) {
-                    FeSym *root=own_root_symbol(s,arg);
-                    if (root && root->borrow_root) root=root->borrow_root;
-                    if (root) fe_own_call_shared_view(c->diags,&root->own,arg->loc);
-                } else if (b && a && b->kind==FE_TYPE_SLICE && !b->ref_mut &&
-                           a->kind==FE_TYPE_SLICE && a->ref_mut) {
-                    /* Call-only []mut -> [] weakening is a temporary view. */
-                } else mark_moved(s,arg,a);
-                if (!compatible(b, a, arg) &&
-                    !(b && a && b->kind==FE_TYPE_SLICE && a->kind==FE_TYPE_SLICE &&
-                      !b->ref_mut && a->ref_mut && fe_type_equal(b->elem,a->elem)) &&
-                    !(b && a && b->kind==FE_TYPE_REF && a->kind==FE_TYPE_REF &&
-                      !b->ref_mut && a->ref_mut && fe_type_equal(b->elem,a->elem)) &&
-                    a->kind != FE_TYPE_UNKNOWN)
-                    err(c, arg->loc, "argument type mismatch");
-                own_release_temporary_borrow(s,arg);
-                param = param->next;
-                arg = arg->next;
-            }
-            if (param || arg) err(c, n->loc, "wrong number of arguments");
-            a = sym->fn->b ? node_type(c, sym->fn->b) :
-                fe_type_intern(&c->types, "void");
-            n->sem_type = a;
-            return a;
+            return check_call_fn(s, n, sym, 0);
         }
         for (x = n->children; x; x = x->next) check_expr(s, x);
         return unknown(c);
     }
     if (n->kind == FE_N_MEMBER) {
+        if (is_error_set_member(s,n)) {
+            n->sem_type=fe_type_intern(&c->types,"core.Error");
+            return n->sem_type;
+        }
         if (n->a && n->a->kind==FE_N_IDENT && n->a->text &&
             strcmp(n->a->text,"io")==0 && n->b && n->b->text &&
             (strcmp(n->b->text,"stdout")==0 ||
@@ -1898,6 +1997,85 @@ static int m7_place_is_projection(FeNode *n)
     return n && (n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX);
 }
 
+/* A call to a named function. `home` is the unit the signature was written in,
+   null when that is the unit being checked: parameter and return types have to
+   be read where they were written or a name would mean the caller's type. */
+/* `error.Name` is a member of the default error set. That set is open -- names
+   are collected across the build and numbered later, not declared -- so any
+   name is well formed here and the value's type is core.Error. */
+static int is_error_set_member(FeCheckerState *s, FeNode *n)
+{
+    return n && n->kind==FE_N_MEMBER && n->a && n->a->kind==FE_N_IDENT &&
+           n->a->text && strcmp(n->a->text,"error")==0 &&
+           n->b && n->b->text && !find_symbol(s->scope,"error");
+}
+
+/* `binding.name` used as a value rather than called. */
+static FeType *cross_unit_value(FeCheckerState *s, FeNode *n, int *handled)
+{
+    FeUnit *home=binding_unit(s,n->a);
+    FeSym *sym;
+    *handled=0;
+    if (!home) return 0;
+    *handled=1;
+    sym=unit_member(s->c,home,n->b && n->b->text ? n->b->text : "");
+    if (!sym) { err(s->c,n->loc,"unknown name"); return unknown(s->c); }
+    if (!decl_is_public(sym->decl)) {
+        err(s->c,n->loc,"name is private to its unit");
+        return unknown(s->c);
+    }
+    n->cname=sym->cname;
+    n->sem_decl=sym->decl;
+    n->sem_type=sym->type;
+    return sym->type;
+}
+
+static FeType *check_call_fn(FeCheckerState *s, FeNode *n, FeSym *sym,
+                             const char *home)
+{
+    FeCheck *c=s->c;
+    FeNode *param;
+    FeNode *arg;
+    FeType *a;
+    FeType *b;
+    if (n->a) n->a->cname = sym->cname;
+    n->sem_decl = sym->fn;
+    if (!sym->fn) {
+        err(c, n->loc, "name is not a function");
+        return unknown(c);
+    }
+    param = sym->fn->a ? sym->fn->a->children : 0;
+    arg = n->children;
+    while (param && arg) {
+        a = check_expr(s, arg);
+        b = node_type_in(c, home, param->a);
+        if (b && a && b->kind==FE_TYPE_REF && !b->ref_mut &&
+            a->kind==FE_TYPE_REF && a->ref_mut) {
+            FeSym *root=own_root_symbol(s,arg);
+            if (root && root->borrow_root) root=root->borrow_root;
+            if (root) fe_own_call_shared_view(c->diags,&root->own,arg->loc);
+        } else if (b && a && b->kind==FE_TYPE_SLICE && !b->ref_mut &&
+                   a->kind==FE_TYPE_SLICE && a->ref_mut) {
+            /* Call-only []mut -> [] weakening is a temporary view. */
+        } else mark_moved(s,arg,a);
+        if (!compatible(b, a, arg) &&
+            !(b && a && b->kind==FE_TYPE_SLICE && a->kind==FE_TYPE_SLICE &&
+              !b->ref_mut && a->ref_mut && fe_type_equal(b->elem,a->elem)) &&
+            !(b && a && b->kind==FE_TYPE_REF && a->kind==FE_TYPE_REF &&
+              !b->ref_mut && a->ref_mut && fe_type_equal(b->elem,a->elem)) &&
+            a->kind != FE_TYPE_UNKNOWN)
+            err(c, arg->loc, "argument type mismatch");
+        own_release_temporary_borrow(s,arg);
+        param = param->next;
+        arg = arg->next;
+    }
+    if (param || arg) err(c, n->loc, "wrong number of arguments");
+    a = sym->fn->b ? node_type_in(c, home, sym->fn->b) :
+        fe_type_intern(&c->types, "void");
+    n->sem_type = a;
+    return a;
+}
+
 static FeType *check_call(FeCheckerState *s, FeNode *n)
 {
     FeCheck *c;
@@ -2166,6 +2344,14 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
     if (n->kind==FE_N_CALL)
         return check_call(s,n);
     if (n->kind==FE_N_MEMBER) {
+        int handled;
+        FeType *cross;
+        if (is_error_set_member(s,n)) {
+            n->sem_type=fe_type_intern(&s->c->types,"core.Error");
+            return n->sem_type;
+        }
+        cross=cross_unit_value(s,n,&handled);
+        if (handled) return cross;
         a=check_expr(s,n->a);
         return m7_member_field(s,n,a);
     }

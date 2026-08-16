@@ -96,6 +96,11 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
     else if (strcmp(name, "io.Writer") == 0) {
         kind = FE_TYPE_STRUCT;
     }
+    /* The default error set. Its members are collected across the build rather
+       than declared, so it carries an identity but no variant list. */
+    else if (strcmp(name, "core.Error") == 0) {
+        kind = FE_TYPE_ENUM; bits = 16; uns = 1;
+    }
     else if (strcmp(name, "i8") == 0 || strcmp(name, "u8") == 0) {
         kind = FE_TYPE_INT; bits = 8; uns = name[0] == 'u';
     } else if (strcmp(name, "i16") == 0 || strcmp(name, "u16") == 0) {
@@ -109,6 +114,7 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
     if (!t) return 0;
     t->bits = bits;
     t->is_unsigned = uns;
+    if (strcmp(name,"core.Error")==0) { t->is_error = 1; t->size = 2; t->align = 2; }
     if (strcmp(name,"io.Writer")==0) {
         t->cname=fe_arena_strdup(ctx->arena,"fe_writer",10);
         t->size=4;
