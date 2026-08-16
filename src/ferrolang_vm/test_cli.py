@@ -62,7 +62,18 @@ def main() -> int:
         # shell is sitting in -- an editable install plus a git worktree is enough
         # to silently build and test the wrong tree.  Say which tree this is.
         print(f"ferro-test: building {ROOT}", file=sys.stderr)
-        test_file = os.fspath(ROOT / "tools" / "tests" / "test_milestones_dosboxx.py")
+        tests = ROOT / "tools" / "tests"
+        # The host gates run first and take under a second. A missing declaration
+        # or an 8.3-illegal name would otherwise be found only after a DOSBox-X
+        # boot and a full compiler build, and the DOS-side message for either is
+        # unhelpful. They do not replace the DOS run; they precede it.
+        gates = [os.fspath(tests / name) for name in
+                 ("test_host_syntax.py", "test_dos_names.py")]
+        if pytest.main([*gates, "-q", "--no-header"]) != 0:
+            print("ferro-test: host gates failed; not starting DOSBox-X",
+                  file=sys.stderr)
+            return 1
+        test_file = os.fspath(tests / "test_milestones_dosboxx.py")
         pytest_args = [test_file, "--tb=short", "-v" if args.verbose else "-q"]
         if args.select:
             pytest_args.extend(["-k", args.select])
