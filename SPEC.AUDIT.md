@@ -557,3 +557,19 @@ M6~M9 구현 전에 함수-local 소유권 분석, optional/error 의미, 계층
 - 근거: collision-free backend linkage와 M12 fixpoint를 동시에 보장한다.
 - 구현 영향: 정확한 escaping 문자는 구현 세부지만 deterministic separator encoding과
   collision 검사가 필요하며 absolute path/address를 symbol에 포함할 수 없다.
+
+### `try` enforcement is blocked on M7 contextual construction
+
+- 문제: `SPEC.md`는 `try`를 에러 유니온 반환 함수 안에서만 허용하는데, `check.c`의 검사가
+  `FE_N_EXPR_STMT`에만 걸려 있어 `var x = try e;`와 `x = try e;`를 통과시킨다.
+  `fec/tests/m5/runtime.fe`의 `run`과 `owned.fe`의 `main`이 이 구멍에 의존하고 있었다.
+- 결정: 구멍은 M7과 함께 닫는다. M7 이전 master에서는 닫을 수 없다.
+- 근거: 검사를 `try` 표현식으로 옮기면 `run`이 에러 유니온을 반환해야 하는데, master는
+  `-> !i32`에서 `return <value>;`도, `-> !void`에서 명시적 `return;`도 거부한다
+  ("return type mismatch" / "void expression returned from value function"). 둘 다
+  contextual success construction이 필요하고 그것은 M7 작업이다. `catch`와 `@trap`도
+  master에는 없어서 우회로가 없다. 실측으로 세 경로를 모두 확인했다.
+- 구현 영향: M7 병합 시 `check.c`의 검사를 `check_expr`의 `try` 분기로 옮기고
+  `FE_N_EXPR_STMT`의 중복 검사를 제거한다. `runtime.fe`의 `run`은 그때 에러 유니온
+  반환으로 바꾸고 `runtime.c`의 `extern long fe_m5_runtime_run(long)`을 함께 고친다.
+  `owned.fe`의 `main`은 M7 없이도 합법인 `-> !void`로 먼저 고쳐 두었다.
