@@ -16,7 +16,7 @@ static char *read_file(const char *name, unsigned long *size)
 
 static void usage(void)
 {
-    puts("usage: fec [--dump-tokens|--dump-ast|--check|--emit-c] file.fe [--target=bits16|bits32] [-o output.c]");
+    puts("usage: fec [--dump-tokens|--dump-ast|--check] file.fe [--no-checks]");
 }
 
 static void dump_tokens(const char *src, unsigned long n, const char *file,
@@ -45,14 +45,12 @@ int main(int argc, char **argv)
     FeAst ast;
     FeParser p;
     FeCheck check;
-    unsigned pointer_bits=32;
+    unsigned pointer_bits=FE_PTR_BITS;
     if(argc<2){usage();return 2;}
     for(i=1;i<argc;i++) {
         if(strcmp(argv[i],"--dump-ast")==0) dump=1;
         else if(strcmp(argv[i],"--dump-tokens")==0) dump_tok=1;
         else if(strcmp(argv[i],"--check")==0) check_only=1;
-        else if(strncmp(argv[i],"--target=bits16",15)==0) pointer_bits=16;
-        else if(strncmp(argv[i],"--target=bits32",15)==0) pointer_bits=32;
         else if(strcmp(argv[i],"--no-checks")==0) no_checks=1;
         else if(strncmp(argv[i],"--target=",9)==0 || strncmp(argv[i],"--model=",8)==0 || strcmp(argv[i],"--strip-error-names")==0) { }
         else if(argv[i][0]!='-') file=argv[i];

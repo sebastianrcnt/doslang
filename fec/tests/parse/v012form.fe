@@ -7,7 +7,6 @@ packed struct Packet {
 }
 interrupt_safe fn poll() { }
 interrupt fn timer() { }
-fn invoke(p: far fn()) { }
 
 pub fn demo() {
     var count = undefined;
@@ -16,5 +15,4 @@ pub fn demo() {
     let x = true and not false or false;
     let y = x orelse true;
     let e = error.NotFound;
-    @call_far(@as_far_fn(timer));
 }

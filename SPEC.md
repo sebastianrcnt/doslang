@@ -21,30 +21,32 @@ DOS용 시스템 프로그래밍 언어. C만큼 빠르고, 메모리 안전성�
 
 ## 2. 타깃
 
-| | `bits16` | `bits32` |
-|---|---|---|
-| CPU/모드 | 8086 리얼모드 | 386 보호모드 플랫 (DPMI) |
-| `usize`/`isize` | 16비트 | 32비트 |
-| 포인터 크기 | near 2B / far 4B | 4B (far 없음) |
-| 메모리 모델 | small, large | flat |
-| 시스템 호출 | INT 21h 직접 | DPMI 서비스 + 실모드 콜백 |
+타깃은 하나다.
 
-- 소스 분기: `comptime if @bits == 16 { ... } else { ... }`
-- `bits32`에서 `far` 키워드를 쓰면 컴파일 에러.
+| | |
+|---|---|
+| CPU/모드 | i386 보호모드 플랫 |
+| 실행 환경 | Windows 11, 그리고 DPMI 익스텐더 위의 DOS |
+| 포인터 크기 | 4바이트 |
+| 메모리 모델 | flat. 세그먼트 개념 없음 |
+| `usize`/`isize` | 타깃의 포인터 폭 |
+
+- 타깃이 하나이므로 타깃에 따라 갈라지는 소스는 v0.1에 없다.
+- `usize`/`isize`는 **타깃의 포인터 폭**이며 특정 비트 수를 약속하지 않는다. 오늘
+  그것은 32비트지만 `u32`와 자동으로 변환되지 않는다. 폭을 언어 의미론으로
+  새어나가게 두지 않는 이 구분이, 나중에 다른 폭의 타깃을 여는 유일한 장치다.
+- **세그먼트 주소 지정은 언어에 없다.** far 포인터는 x86 리얼모드에만 있는 개념이고,
+  평평한 주소 공간을 가진 다른 32비트 프로세서에는 대응물이 없다.
 
 ### 2.1 컴파일러 자신이 도는 곳
 
-위 표는 **생성되는 프로그램**의 타깃이다. 컴파일러 `fec`이 도는 곳은 별개이며 32비트
-보호모드 플랫이다 — 호스트에서든, DOS에서든 DPMI 익스텐더 위에서다. 당대의 Open
-Watcom 컴파일러 자신이 그렇게 돌았다.
+컴파일러 `fec`도 32비트 보호모드 플랫에서 돈다 — 호스트에서든, DOS에서든 DPMI
+익스텐더 위에서다. 당대의 Open Watcom 컴파일러 자신이 그렇게 돌았다.
 
-**8086 리얼모드에서 `fec`을 돌리는 것은 목표가 아니다.** 640KB는 8086의 한계가 아니라
-IBM PC가 1MiB 주소 공간의 위쪽 384KB를 하드웨어에 예약해서 생긴 것이고, 그 안에
-컴파일러를 넣으려면 AST를 통째로 들지 않는 스트리밍 구조와 오버레이가 필요하다.
-그것은 언어 설계가 아니라 컴파일러 구현 전략의 문제이므로 언어 명세에서 다루지 않는다.
-
-`bits16` 타깃은 유지된다. **8086용 프로그램을 만드는 것과 8086에서 컴파일러를 돌리는
-것은 다른 일이고, 전자만 명세의 약속이다.**
+**8086 리얼모드는 이 명세의 범위 밖이다.** 640KB는 8086의 한계가 아니라 IBM PC가
+1MiB 주소 공간의 위쪽 384KB를 하드웨어에 예약해서 생긴 것이고, 그 안에 컴파일러를
+넣으려면 AST를 통째로 들지 않는 스트리밍 구조와 오버레이가 필요하다. 리얼모드
+타깃이 필요해지면 그것은 백엔드와 `usize` 폭의 문제이지 언어 설계의 문제가 아니다.
 
 ---
 
@@ -62,7 +64,7 @@ IBM PC가 1MiB 주소 공간의 위쪽 384KB를 하드웨어에 예약해서 생
 ```
 unit import pub fn struct packed enum error const static var let
 if else while for in match return break continue defer
-unsafe critical shared atomic comptime asm try catch as extern interrupt interrupt_safe far
+unsafe comptime asm try catch as extern
 true false null undefined self Self type
 and or not orelse
 ```
@@ -77,7 +79,7 @@ and or not orelse
 - `bool` (1바이트, 정수와 상호 변환 없음)
 - `char` (`u8`과 크기 같지만 별개 타입). `char`와 `u8` 사이의 저장·대입·비교에는
   반드시 명시적인 `as` 변환이 필요하며, 리터럴에도 문맥 기반 암묵 변환을 적용하지 않는다.
-- `void` (반환 타입으로만. 단, 역참조 불가능한 `*void`/`far *void`의 대상 타입은 허용, R9)
+- `void` (반환 타입으로만. 단, 역참조 불가능한 `*void`의 대상 타입은 허용, R9)
 - `type` (comptime 파라미터와 type alias의 `const` 초기값에서만, §4.7·§9)
 
 **정수 규칙:**
@@ -101,7 +103,6 @@ and or not orelse
 | `&T` | 공유 참조 | 포인터 |
 | `&mut T` | 배타 참조 | 포인터 |
 | `*T` | raw 포인터 (`unsafe`에서만 역참조) | 포인터 |
-| `far ^T`, `far *T`, `far &T`, `far &mut T` | far 포인터 (`bits16` 전용) | 4바이트 |
 | `?T` | 옵셔널 | 널 표현 가능 타입은 크기 동일, 아니면 `(bool, T)` |
 | `E!T` / `!T` | 에러 유니온 (`!T`는 기본 에러 집합) | `(u16 err, T val)` |
 | `fn(A, B) -> R` | 함수 포인터 | 포인터 |
@@ -129,7 +130,7 @@ pub struct Point {
 - 메서드는 struct 블록 안에 정의. 첫 파라미터가 `self: Self | &Self | &mut Self`면 메서드.
 - `x.f(y)`는 `Point.f(x, y)`의 설탕. 자동 참조 취함(`x.shift(1)`은 `Point.shift(&mut x, 1)`).
 - `Self`는 자기 타입의 별칭.
-- 필드 레이아웃은 선언 순서. 정렬은 타깃 규칙(`bits16`은 1바이트 정렬, `bits32`는 자연 정렬). `packed struct`로 정렬 강제 해제.
+- 필드 레이아웃은 선언 순서. 정렬은 자연 정렬. `packed struct`로 정렬 강제 해제.
 - 소멸자: `fn drop(self: &mut Self)`를 정의하면 스코프 종료 시 자동 호출(§5 R3).
 
 ### 4.4 열거형 (태그드 유니온)
@@ -306,15 +307,10 @@ pub fn name() -> str { return "main"; }     // R8(b)
 
 자유 함수에 참조성 파라미터가 둘 이상이면 어느 쪽에서 파생됐는지 시그니처만으로 결정되지 않으므로 참조성 반환을 할 수 없다. 그런 함수가 필요하면 메서드로 만들어 `self`를 원본으로 고정하거나 인덱스(`usize`)·핸들을 반환한다.
 
-**R9 (unsafe).** `unsafe {}` 안에서만 허용: raw 포인터 역참조, `*T` ↔ `^T`/`&T` 변환, `@ptr_cast`, `@seg_ptr`, `@volatile_*`, `@port_*`, `@as_far_fn`, `@call_far`, `asm`, `*_unchecked` 함수. `*void`/`far *void`는 저장·비교·전달과 `@ptr_cast`에만 쓸 수 있고 직접 역참조할 수 없다. R1~R8은 `unsafe` 안에서도 그대로 유지된다. 특히 `unsafe`가 참조 반환·저장이나 대여 검사를 끄지 않으며, 프로그래머가 명시적으로 raw 포인터를 경유한 부분만 컴파일러의 메모리 안전 보장 밖에 놓인다.
+**R9 (unsafe).** `unsafe {}` 안에서만 허용: raw 포인터 역참조, `*T` ↔ `^T`/`&T` 변환, `@ptr_cast`, `@volatile_*`, `@port_*`, `asm`, `*_unchecked` 함수. `*void`는 저장·비교·전달과 `@ptr_cast`에만 쓸 수 있고 직접 역참조할 수 없다. R1~R8은 `unsafe` 안에서도 그대로 유지된다. 특히 `unsafe`가 참조 반환·저장이나 대여 검사를 끄지 않으며, 프로그래머가 명시적으로 raw 포인터를 경유한 부분만 컴파일러의 메모리 안전 보장 밖에 놓인다.
 
-**R10 (전역과 인터럽트 공유).** `static`은 불변이며 컴파일타임 상수 초기화만 가능하다. 일반 전역 `var`의 읽기와 쓰기는 안전하며 `unsafe`가 필요 없다. 인터럽트 핸들러와 메인 흐름이 함께 접근하는 값은 반드시 `shared var`로 선언하고 다음 규칙을 적용한다.
-- 메인 흐름은 `critical {}` 안에서만 `shared var`에 접근할 수 있다. 진입 시 플래그를 저장하고 인터럽트를 막으며, 정상 종료·`return`·`break`·`continue`·에러 전파를 포함한 모든 이탈 경로에서 원래 플래그를 복원한다.
-- `interrupt fn` 안에서는 `shared var`에 직접 접근할 수 있다. 일반 함수와 `interrupt_safe fn`은 호출 문맥을 알 수 없으므로 명시적 `critical` 밖의 비원자 공유 접근이 금지된다.
-- `shared var`와 `shared atomic var`는 C에서 `volatile T`로 방출한다. `critical` 진입/이탈에는 타깃 컴파일러용 memory barrier를 두어 접근이 경계 밖으로 이동하거나 병합되지 않게 한다.
-- `shared atomic var`는 타깃에서 한 명령으로 읽고 쓸 수 있는 정수/불린/near-pointer 스칼라에만 허용한다. 8086 인터럽트는 명령 경계에서만 진입하므로 bits16 단일 8/16비트 load/store는 `volatile` 한 명령으로 충분하며 자동 임계 구역을 만들지 않는다. far pointer와 복합 read-modify-write는 명시적 `critical {}`이 필요하다.
-- `interrupt fn`은 `interrupt_safe fn`만 호출할 수 있다. `interrupt_safe fn`은 `critical`, `@port_*`, `@volatile_*`, `asm`, 필요한 `unsafe`를 사용할 수 있다. 금지되는 것은 힙 할당, DOS/DPMI 서비스, 블로킹 I/O, 부동소수점 및 `interrupt_safe`가 아닌 함수 호출이다. 컴파일러가 본문만 보고 검증하고 이 효과를 `.fei` 시그니처에 기록한다.
-- 전역에 대한 대여는 다음으로 제한한다. `static`(불변)은 `&`로 대여할 수 있다. 일반 전역 `var`는 `&`·`&mut` 모두 대여할 수 없으며 직접 읽기와 쓰기만 허용한다. `shared var`는 `critical` 안에서의 직접 접근만 허용하고 대여할 수 없다. 전역 값을 참조로 넘겨야 하면 지역 변수로 복사한 뒤 대여한다.
+**R10 (전역).** `static`은 불변이며 컴파일타임 상수 초기화만 가능하다. 일반 전역 `var`의 읽기와 쓰기는 안전하며 `unsafe`가 필요 없다.
+- 전역에 대한 대여는 다음으로 제한한다. `static`(불변)은 `&`로 대여할 수 있다. 일반 전역 `var`는 `&`·`&mut` 모두 대여할 수 없으며 직접 읽기와 쓰기만 허용한다. 전역 값을 참조로 넘겨야 하면 지역 변수로 복사한 뒤 대여한다.
 - 이 제한의 근거는 R6다. 전역에 대한 대여가 살아 있는 동안 호출된 다른 함수가 같은 전역에 직접 접근할 수 있고, 그것은 함수 단위 지역 검사로 검출할 수 없다. 아래는 이 제한이 없으면 통과해 버리는 예다.
 
 ```fe
@@ -323,7 +319,7 @@ fn f(r: &mut i32) { G = 5; }   // r과 G가 같은 곳을 가리키는지 f는 �
 fn g() { f(&mut G); }          // 제한이 없으면 g의 지역 검사는 통과한다
 ```
 
-- 전역에는 `^T`나 `drop` 있는 타입을 둘 수 없다. `shared`, `atomic`, `critical`, `interrupt fn`은 v0.1에서 `bits16` 전용이며 `bits32`에서 사용하면 컴파일 에러다.
+- 전역에는 `^T`나 `drop` 있는 타입을 둘 수 없다. 인터럽트 핸들러와 공유 상태(`shared`, `atomic`, `critical`, `interrupt fn`)는 v0.1에 없다(§11).
 
 **R11 (재귀·그래프 구조).** `^T`는 R4의 2급 참조가 아니므로 소유가 한 방향인 단방향 리스트와 트리는 필드에 저장할 수 있다. 반면 양방향 리스트·순환·일반 그래프는 역방향 필드에 `^T`를 두면 R1의 단일 소유권을 위반하고 `&T`를 두면 R4를 위반한다. 이런 구조는 아레나/배열이 값을 소유하고 `u16`/`u32` 인덱스 핸들이 간선을 나타내도록 구현한다. 표준 라이브러리 `mem.Arena`를 사용할 수 있으며, 핸들 역참조 때 세대 번호 또는 경계 검사를 사용해 해제된 항목 접근을 막아야 한다.
 
@@ -342,7 +338,7 @@ decl        := ['pub'] (fn_decl | struct_decl | enum_decl | error_decl
                        | const_decl | global_decl) | comptime_decl
 comptime_decl := 'comptime' 'if' expr '{' decl* '}' ['else' ('{' decl* '}' | comptime_decl)]
 
-fn_decl     := ['extern' string] [('interrupt' | 'interrupt_safe')] 'fn' ident
+fn_decl     := ['extern' string] 'fn' ident
                '(' [param (',' param)*] ')' ['->' type] (block | ';')
 param       := ['comptime'] ident ':' type
 generic_params := '(' ident (',' ident)* ')'
@@ -356,7 +352,6 @@ error_decl  := 'error' ident '{' ident '=' int (',' ident '=' int)* [','] '}'
 const_decl  := 'const' ident [':' type] '=' expr ';'
 global_decl := 'static' ident ':' type '=' expr ';'
              | 'var' ident ':' type '=' expr ';'
-             | 'shared' ['atomic'] 'var' ident ':' type '=' expr ';'
 
 block       := '{' stmt* '}'
 stmt        := 'let' ident [':' type] '=' expr ';'
@@ -368,7 +363,6 @@ stmt        := 'let' ident [':' type] '=' expr ';'
              | 'return' [expr] ';' | 'break' ';' | 'continue' ';'
              | 'defer' block
              | 'unsafe' block
-             | 'critical' block
              | 'comptime' 'if' expr block ['else' (block | 'if' ...)]
              | 'asm' '{' asm_body '}'
              | expr ';'
@@ -390,8 +384,6 @@ qualified_name := ident ('.' ident)*
 type        := qualified_name
              | '?' type | '!' type | qualified_name '!' type
              | '^' type | '&' ['mut'] type | '*' type
-             | 'far' ('^' | '*' | '&' ['mut']) type
-             | 'far' 'fn' '(' [type (',' type)*] ')' ['->' type]
              | '[' expr ']' type | '[' ']' ['mut'] type
              | 'fn' '(' [type (',' type)*] ')' ['->' type]
              | qualified_name '(' type (',' type)* ')' // 제네릭 인스턴스
@@ -439,9 +431,8 @@ orelse_expr := expr 'orelse' expr
 
 ```
 @size_of(T) -> usize          @align_of(T) -> usize
-@bits -> comptime int         @target -> comptime str
+@target -> comptime str
 @ptr_cast(T, p) -> *T                    (unsafe)
-@seg_ptr(T, seg: u16, off: u16) -> far *T (unsafe, bits16)
 @port_in8(p) @port_in16(p) @port_out8(p,v) @port_out16(p,v)  (unsafe)
 @volatile_load(p) @volatile_store(p, v)  (unsafe)
 @trap() -> never              @unreachable() -> never  (unsafe)
@@ -451,8 +442,6 @@ orelse_expr := expr 'orelse' expr
 @fprint(w, fmt, ...) -> !void            // 임의 Writer
 @sprint(buf: []mut u8, fmt, ...) -> usize // 버퍼에 기록, 쓴 바이트 수 반환
 @compile_error(msg)                      // comptime에서 항상 컴파일 에러
-@as_far_fn(f) -> far fn()                // bits16 전용 함수 포인터 변환
-@call_far(p: far fn())                    // bits16/unsafe 전용 호출
 ```
 
 ### 6.3.1 포매팅 빌트인
@@ -489,28 +478,21 @@ io.write(out, " name="); io.write(out, s); io.write(out, "\n");
 
 `@compile_error(msg)`의 `msg`는 comptime 문자열이어야 하며, 평가되는 분기에서
 항상 진단을 발생시킨다. `comptime if`의 제거되는 분기에서는 진단하지 않는다.
-`@as_far_fn(f)`와 `@call_far`는 `bits16`에서만 허용된다. 전자는 함수 포인터를
-`far fn()`으로 변환하고 후자는 `far fn()`을 호출한다. 둘 다 `unsafe { }` 안에서만
-사용할 수 있으며, `bits32`에서는 컴파일 에러다.
 
 ### 6.4 예제
 
 ```fe
-unit vga;
-import std.sys;
+unit frame;
 
-const WIDTH: u16 = 320;
-const HEIGHT: u16 = 200;
+const WIDTH: usize = 320;
+const HEIGHT: usize = 200;
 
-pub fn set_mode13() {
-    unsafe { asm { mov ax, 0x0013; int 0x10; } }
-}
+pub struct Buffer {
+    pixels: []mut u8,
 
-pub fn put_pixel(x: u16, y: u16, c: u8) {
-    if x >= WIDTH or y >= HEIGHT { return; }
-    unsafe {
-        let vram: far *u8 = @seg_ptr(u8, 0xA000, 0);
-        @volatile_store(vram + (y * WIDTH + x) as usize, c);
+    pub fn put(self: &mut Self, x: usize, y: usize, c: u8) -> void {
+        if x >= WIDTH or y >= HEIGHT { return; }
+        self.pixels[y * WIDTH + x] = c;
     }
 }
 ```
@@ -572,24 +554,22 @@ pub fn main() -> !void {
 
 ### 7.3 함수 호출 규약
 
-- 기본: `bits32`는 cdecl, `bits16`은 타깃 C 컴파일러 기본.
+- 기본: cdecl.
 - `extern "c" fn name(...) -> T;` — 본문 없이 선언, C 심볼과 링크. 이름 맹글링 없음. 인자/반환에 `^T`, 슬라이스, 에러 유니온 사용 불가(`*T`, `usize`만).
-- `interrupt fn name()` — 모든 레지스터 보존 + `iret`. 파라미터/반환 없음. 주소는 `@as_far_fn(name)`으로 획득. 호출 제한과 공유 상태 규칙은 R10을 따른다.
-- `interrupt_safe fn name(...)` — 인터럽트 문맥에서 호출 가능한 함수. ABI는 일반 함수와 같고 R10의 제한을 본문 검사로 만족해야 한다.
 - 큰 struct(> 4바이트)는 숨은 포인터로 반환(C ABI 따름).
 
 ### 7.4 검사와 트랩
 
 트랩 발생 조건: 배열/슬라이스 경계 초과, 정수 오버플로, 0 나눗셈, `?T`의 `.?` 실패, `@trap()`.
 
-동작: `core.panic(msg: str, file: str, line: u32)` 호출 → 등록된 `sys.on_exit(fn)` 정리 함수를 역순 호출 → 메시지 출력 → `sys.exit(3)`. 사용자가 `core.set_panic_handler`로 교체 가능. 일반 panic unwind나 defer 실행은 없지만 bits16 interrupt vector처럼 프로세스 종료 전에 반드시 복원할 자원은 allocation 없는 고정 크기 `on_exit` registry에 등록한다.
+동작: `core.panic(msg: str, file: str, line: u32)` 호출 → 등록된 `sys.on_exit(fn)` 정리 함수를 역순 호출 → 메시지 출력 → `sys.exit(3)`. 사용자가 `core.set_panic_handler`로 교체 가능. 일반 panic unwind나 defer 실행은 없지만 프로세스 종료 전에 반드시 복원해야 하는 자원은 allocation 없는 고정 크기 `on_exit` registry에 등록한다.
 
 `--no-checks` 빌드에서 제거되는 것: 경계 검사, 오버플로 검사, `.?` 검사.
 **절대 제거되지 않는 것:** 소유권/참조 검사, 옵셔널 타입 검사, `match` 완전성 — 전부 컴파일타임이므로.
 
 ### 7.5 comptime
 
-- `const` 선언의 초기값은 컴파일타임 평가(정수 연산, `@size_of`, `@bits`, 다른 const).
+- `const` 선언의 초기값은 컴파일타임 평가(정수 연산, `@size_of`, 다른 const).
 - `comptime if`는 평가되지 않는 분기를 **파싱은 하되 타입 검사/코드 생성하지 않는다**(타깃별 분기용).
 - 함수의 `comptime` 파라미터는 §9 제네릭.
 - 재귀 평가 깊이 제한 256, 초과 시 에러.
@@ -778,7 +758,8 @@ binding은 마지막 segment라 `io.write`, `mem.replace` 형태로 사용한다
 | 기능 | 등급 | 제외 이유 | 대체 수단 |
 |---|---|---|---|
 | 트레잇/인터페이스 (`dyn`) | **v0.2 (1순위)** | 부트스트랩에 불필요, 타입 시스템 전반에 영향 | Copy handle enum (`io.Writer`, §10) |
-| bits32 interrupt/shared/critical | v0.2 | DPMI callback·vector 복원과 backend 지원이 아직 범위 밖 | bits16 실행 파일 또는 polling |
+| 인터럽트 핸들러와 공유 상태 (`interrupt fn`, `shared`, `atomic`, `critical`) | v0.2 | 벡터 설치·복원과 배리어가 백엔드 지원을 요구하고, 타깃마다 다르다 | polling |
+| far 포인터와 세그먼트 주소 지정 | **영구** | x86 리얼모드에만 있는 개념이고 평평한 주소 공간에는 대응물이 없다 (§2) | 없음. 리얼모드 타깃이 생기면 그때 다시 본다 |
 | 클로저 | v0.2 | 캡처 = 참조 저장 = R4 위반 소지 | 콜백에 `ctx: *void` 전달 |
 | 연산자 오버로딩 | v0.2 (인터페이스 이후) | 숨은 비용. 넣더라도 특정 인터페이스 구현으로만 제한 | 메서드 |
 | 튜플 / 다중 반환 | 편의 | 이름 없는 필드는 가독성 손해 | struct |

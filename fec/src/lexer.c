@@ -11,7 +11,7 @@ static const FeKw keywords[] = {
     {"match",FE_TOK_MATCH},{"return",FE_TOK_RETURN},{"break",FE_TOK_BREAK},{"continue",FE_TOK_CONTINUE},
     {"defer",FE_TOK_DEFER},{"unsafe",FE_TOK_UNSAFE},{"comptime",FE_TOK_COMPTIME},{"asm",FE_TOK_ASM},
     {"try",FE_TOK_TRY},{"catch",FE_TOK_CATCH},{"as",FE_TOK_AS},{"extern",FE_TOK_EXTERN},
-    {"interrupt",FE_TOK_INTERRUPT},{"interrupt_safe",FE_TOK_INTERRUPT_SAFE},{"far",FE_TOK_FAR},
+    {"interrupt",FE_TOK_INTERRUPT},{"interrupt_safe",FE_TOK_INTERRUPT_SAFE},
     {"true",FE_TOK_TRUE},{"false",FE_TOK_FALSE},{"null",FE_TOK_NULL},{"undefined",FE_TOK_UNDEFINED},
     {"shared",FE_TOK_SHARED},{"atomic",FE_TOK_ATOMIC},{"critical",FE_TOK_CRITICAL},
     {"self",FE_TOK_SELF},{"Self",FE_TOK_SELFTYPE},{"type",FE_TOK_TYPE},

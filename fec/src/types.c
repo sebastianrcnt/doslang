@@ -441,12 +441,12 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
     if (t->kind == FE_TYPE_ERROR_UNION) {
         if (t->error_value && t->error_value->kind != FE_TYPE_VOID) {
             layout_type(ctx,t->error_value);
-            t->align=ctx->pointer_bits==16 ? 1U : fe_type_align(t->error_value);
+            t->align=fe_type_align(t->error_value);
             t->size=round_up(2UL,t->align)+fe_type_size(t->error_value);
             t->size=round_up(t->size,t->align);
         } else {
             t->size=2;
-            t->align=ctx->pointer_bits==16 ? 1U : 2U;
+            t->align=2U;
         }
         t->cycle_state = 2; return;
     }
@@ -456,7 +456,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             t->size=fe_type_size(t->elem);
             t->align=fe_type_align(t->elem);
         } else {
-            t->align=ctx->pointer_bits==16 ? 1U : fe_type_align(t->elem);
+            t->align=fe_type_align(t->elem);
             t->size=round_up(1UL,t->align)+fe_type_size(t->elem);
             t->size=round_up(t->size,t->align);
         }
@@ -467,30 +467,29 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
     }
     if (t->kind == FE_TYPE_INT) {
         t->size = (t->bits + 7U) / 8U;
-        t->align = ctx->pointer_bits == 16 ? 1U : t->size;
-        if (t->size > 4UL) t->size = ctx->pointer_bits == 16 ? 2UL : 4UL;
+        t->align = t->size;
+        if (t->size > 4UL) t->size = 4UL;
         t->cycle_state = 2; return;
     }
     if (t->kind == FE_TYPE_REF) {
-        t->size = ctx->pointer_bits == 16 ? 2UL : 4UL;
-        t->align = ctx->pointer_bits == 16 ? 1U : 4U;
+        t->size = FE_PTR_SIZE;
+        t->align = FE_PTR_ALIGN;
         t->cycle_state = 2; return;
     }
     if (t->kind == FE_TYPE_OWNED) {
         t->size = t->elem && t->elem->kind==FE_TYPE_SLICE ?
-            (ctx->pointer_bits == 16 ? 4UL : 8UL) :
-            (ctx->pointer_bits == 16 ? 2UL : 4UL);
-        t->align = ctx->pointer_bits == 16 ? 1U : 4U;
+            2UL * FE_PTR_SIZE : FE_PTR_SIZE;
+        t->align = FE_PTR_ALIGN;
         t->cycle_state = 2; return;
     }
     if (t->kind == FE_TYPE_SLICE || t->kind == FE_TYPE_STR) {
-        t->size = ctx->pointer_bits == 16 ? 4UL : 8UL;
-        t->align = ctx->pointer_bits == 16 ? 1U : 4U;
+        t->size = 2UL * FE_PTR_SIZE;
+        t->align = FE_PTR_ALIGN;
         t->cycle_state = 2; return;
     }
     if (t->kind == FE_TYPE_ARRAY) {
         layout_type(ctx, t->elem);
-        t->align = t->packed || ctx->pointer_bits == 16 ? 1U : fe_type_align(t->elem);
+        t->align = t->packed ? 1U : fe_type_align(t->elem);
         t->size = t->length * fe_type_size(t->elem);
         t->cycle_state = 2; return;
     }
@@ -500,7 +499,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             if (!t->fields[i].type && t->fields[i].ast_node)
                 t->fields[i].type = fe_type_from_ast(ctx, t->fields[i].ast_node->a);
             layout_type(ctx, t->fields[i].type);
-            align = t->packed || ctx->pointer_bits == 16 ? 1U : fe_type_align(t->fields[i].type);
+            align = t->packed ? 1U : fe_type_align(t->fields[i].type);
             if (align > max_align) max_align = align;
             off = round_up(off, align);
             t->fields[i].offset = off;
@@ -528,9 +527,9 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             if (off > max_size) max_size = off;
         }
         t->bits = t->variant_count > 256U ? 16U : 8U;
-        off = ctx->pointer_bits == 16 ? t->bits / 8U : round_up(t->bits / 8U, max_align);
-        t->size = round_up(off + max_size, ctx->pointer_bits == 16 ? 1U : max_align);
-        t->align = ctx->pointer_bits == 16 ? 1U : max_align;
+        off = round_up(t->bits / 8U, max_align);
+        t->size = round_up(off + max_size, max_align);
+        t->align = max_align;
         t->cycle_state = 2;
     }
 }
@@ -599,8 +598,7 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
                                            fe_type_from_ast(ctx,node->b));
         return fe_type_error_union(ctx,fe_type_from_ast(ctx,node->a));
     }
-    if (node->text && (strcmp(node->text, "*") == 0 ||
-                       strcmp(node->text, "far") == 0))
+    if (node->text && strcmp(node->text, "*") == 0)
         return fe_type_intern(ctx, "<unknown>");
     if (node->text && strcmp(node->text, "fn") == 0)
         return fe_type_intern(ctx, "<unknown>");
@@ -665,8 +663,8 @@ const char *fe_type_c_name(const FeType *t, unsigned pointer_bits)
         return owned_name;
     }
     if (t->kind != FE_TYPE_INT) return "long";
-    if (strcmp(t->name, "usize") == 0) return pointer_bits == 16 ? "unsigned short" : "unsigned long";
-    if (strcmp(t->name, "isize") == 0) return pointer_bits == 16 ? "short" : "long";
+    if (strcmp(t->name, "usize") == 0) return "unsigned long";
+    if (strcmp(t->name, "isize") == 0) return "long";
     if (strcmp(t->name, "i8") == 0) return "signed char";
     if (strcmp(t->name, "u8") == 0) return "unsigned char";
     if (strcmp(t->name, "i16") == 0) return "short";

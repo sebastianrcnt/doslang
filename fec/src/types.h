@@ -10,6 +10,13 @@ typedef enum FeTypeKind {
     FE_TYPE_REF, FE_TYPE_OWNED, FE_TYPE_UNKNOWN
 } FeTypeKind;
 
+/* One target, one pointer width (SPEC 2). usize and isize are that width and
+   are not promised to be any particular number of bits, which is what keeps a
+   different width possible later. */
+#define FE_PTR_SIZE  4UL
+#define FE_PTR_ALIGN 4U
+#define FE_PTR_BITS  32U
+
 typedef struct FeFieldType FeFieldType;
 
 /* A type parameter bound to an argument while an instance is checked. */
