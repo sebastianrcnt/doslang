@@ -70,6 +70,8 @@ EPILOG = r"""examples:
   uv run ferro-vm exec 'dir C:\FEC'      run a DOS command, print exit code and output
   uv run ferro-vm put fec/src/check.c 'C:\FEC\SRC\CHECK.C'
   uv run ferro-vm get 'C:\FEC\TEST.OK' .qemu/TEST.OK
+  uv run ferro-vm exec --idle-timeout 180 'C:\FEC\BUILD-DOS.BAT'
+  uv run ferro-vm abort                  Ctrl+C the command running right now
   uv run ferro-vm logs                   follow the structured daemon log
 
 The authoritative workspace is C:\FEC inside the VM. Never build on D: (the vvfat
@@ -84,6 +86,7 @@ SIMPLE_COMMANDS = {
     "screenshot": "Capture the VGA console to a PPM/PNG under .qemu/.",
     "ocr": "Capture the console and print recognized text (RapidOCR).",
     "logs": "Follow the append-only daemon log. Uses lnav when available.",
+    "abort": "Interrupt the DOS command currently running (Ctrl+C via QEMU).",
 }
 
 
@@ -112,9 +115,19 @@ def main() -> int:
     execute = commands.add_parser(
         "exec", help=exec_help,
         description=exec_help + " Quote the command so the host shell does not eat"
-                                r" backslashes: exec 'wcl386 -q HELLO.C'.")
+                                r" backslashes: exec 'wcl386 -q HELLO.C'."
+                                " A slow command is not a failed one: the wait ends"
+                                " when the guest stops touching its disk, not when a"
+                                " stopwatch expires.")
     execute.add_argument("command", metavar="DOS_COMMAND",
                          help=r"command line to hand to COMMAND.COM, e.g. 'dir C:\FEC'")
+    execute.add_argument("--idle-timeout", type=float, default=60, metavar="SECONDS",
+                         help="interrupt once the guest has made no disk access for"
+                              " this long (default: %(default)s)")
+    execute.add_argument("--hard-timeout", type=float, default=900, metavar="SECONDS",
+                         help="interrupt after this much total time regardless of"
+                              " activity; the backstop for a CPU-bound hang"
+                              " (default: %(default)s)")
 
     put_help = "Copy a host file into the VM."
     put = commands.add_parser("put", help=put_help, description=put_help)
@@ -161,7 +174,10 @@ def main() -> int:
                 return 0
             raise RuntimeError("TCPAGENT did not become ready")
         payload: dict[str, object] = {"op": args.op}
-        if args.op == "exec": payload["command"] = args.command
+        if args.op == "exec":
+            payload["command"] = args.command
+            payload["idle_timeout"] = args.idle_timeout
+            payload["hard_timeout"] = args.hard_timeout
         if args.op == "put":
             payload["source"] = str(args.source.resolve())
             payload["destination"] = args.destination

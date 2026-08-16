@@ -61,9 +61,28 @@ are not interpreted on this FreeDOS console, so neither of the usual routes
 works. Elapsed times come from the BIOS tick counter at 18.2065 Hz (~55 ms
 resolution).
 
-Note that mTCP is not driven while `system()` runs a child, so a DOS command
-lasting tens of seconds can drop the TCP connection. The agent logs `link lost`
-and reconnects on its own, but the host loses that command's result.
+## Long commands
+
+mTCP is only driven when the agent calls it, and `system()` freezes the agent
+for the entire child command. So during a long `EXEC` the DOS side is mute: it
+cannot answer, cannot acknowledge, cannot report progress. Silence therefore
+proves nothing about whether the command is healthy.
+
+The host must not read that silence as failure. `ferro-vm exec` waits on
+QEMU's own view of the guest instead: `info blockstats` keeps counting while
+the agent is frozen, and `idle_time_ns` distinguishes a slow command from a
+stuck one. See `--idle-timeout` and `--hard-timeout` in `ferro-vm exec --help`.
+
+When the host does decide to stop a command it injects Ctrl+C through the QEMU
+monitor, then answers COMMAND.COM's `Terminate batch file (Y/N/A)?` prompt.
+That is a request, not a guarantee: Ctrl+C only lands at a DOS break check, and
+with `BREAK=OFF` (the FreeDOS default in `C:\FDCONFIG.SYS`) a compute-bound
+child whose output we redirected to a file may never reach one. The host keeps
+collecting the result either way rather than abandoning a stream that still
+owes it a `RESULT`.
+
+Adding `BREAK=ON` to `C:\FDCONFIG.SYS` would make DOS check on every system
+call and so make Ctrl+C reliable, at a small cost to every DOS call.
 
 ## Rebuilding inside the VM
 
