@@ -61,6 +61,16 @@ static FeNode *fe_own_root_expr(FeNode *expr)
     return 0;
 }
 
+static int fe_own_expr_has_projection(FeNode *expr)
+{
+    if (!expr) return 0;
+    if (expr->kind == FE_N_MEMBER || expr->kind == FE_N_INDEX) return 1;
+    if (expr->kind == FE_N_UNARY && expr->text &&
+        (strcmp(expr->text, "&") == 0 || strcmp(expr->text, "&mut") == 0))
+        return fe_own_expr_has_projection(expr->a);
+    return 0;
+}
+
 int fe_own_place_from_expr(FeNode *expr, FeOwnPlace *place)
 {
     FeNode *root;
@@ -72,7 +82,7 @@ int fe_own_place_from_expr(FeNode *expr, FeOwnPlace *place)
     if (!root) return 0;
     place->root = root;
     place->root_cname = root->cname ? root->cname : root->text;
-    place->projected = root != expr;
+    place->projected = fe_own_expr_has_projection(expr);
     return place->root_cname != 0;
 }
 
@@ -90,10 +100,6 @@ void fe_own_state_init(FeOwnState *state, int initialized)
 
 static int fe_own_require_value(FeDiags *diags, FeOwnState *state, FeLoc loc)
 {
-    if (!state->initialized) {
-        fe_diag_error(diags, loc, "use of uninitialized variable");
-        return 0;
-    }
     if (state->move == FE_OWN_MOVED) {
         fe_own_error_note(diags, loc, "use of moved value", state->move_loc,
                           "value was moved here");
@@ -101,6 +107,10 @@ static int fe_own_require_value(FeDiags *diags, FeOwnState *state, FeLoc loc)
     }
     if (state->move == FE_OWN_MAYBE_MOVED) {
         fe_diag_error(diags, loc, "use of possibly moved value");
+        return 0;
+    }
+    if (!state->initialized) {
+        fe_diag_error(diags, loc, "use of uninitialized variable");
         return 0;
     }
     return 1;
@@ -183,6 +193,19 @@ int fe_own_access(FeDiags *diags, FeOwnState *state,
     return 1;
 }
 
+int fe_own_call_shared_view(FeDiags *diags, FeOwnState *state, FeLoc loc)
+{
+    if (!state) return 0;
+    if (!fe_own_require_stable_borrow(diags, state, loc)) return 0;
+    if (!fe_own_require_value(diags, state, loc)) return 0;
+    if (!state->exclusive) {
+        fe_diag_error(diags, loc,
+            "read-only reborrow requires a live mutable borrow");
+        return 0;
+    }
+    return 1;
+}
+
 void fe_own_release_shared(FeOwnState *state)
 {
     if (!state || !state->shared) return;
@@ -224,6 +247,14 @@ int fe_own_state_equal(const FeOwnState *left, const FeOwnState *right)
            left->shared == right->shared &&
            left->exclusive == right->exclusive &&
            left->borrow_conflict == right->borrow_conflict;
+}
+
+int fe_own_loop_merge_state(FeOwnState entry, FeOwnState backedge,
+                            FeOwnState *merged)
+{
+    if (!merged) return 0;
+    *merged = fe_own_merge_state(entry, backedge);
+    return fe_own_state_equal(&entry, merged);
 }
 
 FeOwnProvenance fe_own_provenance_static(void)
