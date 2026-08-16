@@ -262,7 +262,13 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
         console = run_root / "CONSOLE.LOG"
         config = run_root / "DOSBOX.CON"
         config.write_text(
-            f"[log]\nlogfile={console}\n[dosbox]\nlog console=quiet\n",
+            # core=auto falls back to the interpreter in real mode, which is
+            # where the 16-bit compiler build spends its time. Nothing here is
+            # timing sensitive -- it is a compiler and a batch file -- so ask for
+            # the recompiler and uncapped cycles explicitly.
+            f"[log]\nlogfile={console}\n"
+            f"[dosbox]\nlog console=quiet\n"
+            f"[cpu]\ncore=dynamic\ncycles=max\n",
             encoding="ascii",
         )
         (fec / "RUN.BAT").write_text(
@@ -279,7 +285,10 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
             "-c", f'mount W "{watcom}" -ro',
             "-c", "C:", "-c", "cd \\FEC", "-c", "RUN.BAT",
         ])
-        completed = subprocess.run(command, check=False, timeout=300)
+        # Every case pays a DOS process spawn, and the compile-only checks spawn
+        # wcc386 once each, so the whole-suite run is minutes rather than the
+        # under-a-minute a single milestone takes.
+        completed = subprocess.run(command, check=False, timeout=1800)
         if completed.returncode != 0:
             raise DosboxError(f"DOSBox-X exited with status {completed.returncode}")
         if not (fec / "RUN.OK").is_file():

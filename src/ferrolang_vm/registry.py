@@ -74,6 +74,41 @@ def _wcl(exe: str, *sources: str, bits: int = 32, strict: bool = False,
     return " ".join(parts)
 
 
+def _wcc(source: str, obj: str) -> str:
+    """Compile the generated C without linking.
+
+    A fixture with no ``main`` cannot be run, so this is the floor for it: the
+    backend's output has to survive the compiler the project actually ships
+    with. It catches a malformed emission -- an unnamed assignment target, a
+    helper that is called but never defined, an initializer C89 rejects -- which
+    otherwise sits unnoticed in a case that only ever emitted text.
+
+    This asserts nothing about the C itself; it is a conformance check on the
+    backend's output, so a future non-C backend swaps the command rather than
+    the intent. Never grep the generated C to prove a language feature -- write a
+    fixture whose exit code differs instead, as TESTS\\M3\\NOCHK.FE does.
+    """
+    # Through the wcl386 driver with -c rather than calling wcc386 directly:
+    # wcc386 writes its diagnostics to stderr, which COMMAND.COM cannot
+    # redirect, so a failure would report a count and no messages. The driver
+    # leaves an .ERR file, which the runner already collects.
+    return f"WCL386 -q -za -wx -wcd=202 -bt=dos -c -fo={obj} {source}"
+
+
+def _accepts(milestone: int, directory: str, names: tuple[str, ...], *,
+             output: str = OUT, output_first: bool = True) -> list[Case]:
+    """Fixtures that must compile: emit the C, then build it."""
+    cases: list[Case] = []
+    for name in names:
+        cfile = f"{output}\\{name.upper()}.C"
+        cases.append(_case(milestone, name,
+                           _emit(_fe(directory, name), cfile,
+                                 output_first=output_first)))
+        cases.append(_case(milestone, f"{name}-cc",
+                           _wcc(cfile, f"{OUT}\\{name.upper()}.OBJ")))
+    return cases
+
+
 def _dump_ast(milestone: int, directory: str, names: tuple[str, ...], *,
               suffix: str, ok: bool = True, prefix: str = "") -> list[Case]:
     return [
@@ -171,8 +206,7 @@ CASES: list[Case] = [
                       "bad-writ", "bad-bufw", "bad-many", "bad-open", "bad-cls")),
 
     # -- M5: defer and ownership ----------------------------------------------
-    _case(5, "defer", _emit(_fe(M5, "defer"), f"{M5}\\DEFER.C")),
-    _case(5, "owned", _emit(_fe(M5, "owned"), f"{M5}\\OWNED.C")),
+    *_accepts(5, M5, ("defer", "owned"), output=M5, output_first=False),
     *_rejects(5, M5, ("bad-move", "bad-dest", "bad-drop", "bad-dbl", "bad-cond",
                       "bad-proj", "bad-clos", "bad-loop")),
     # The runtime case links the generated C against a hand-written allocator
@@ -189,22 +223,20 @@ CASES: list[Case] = [
         "badinv", "badlocsl", "badloop", "badmove", "badmut", "badmut2", "badptr",
         "badret", "badrfld", "badridx", "badscop", "badself", "badshwr", "badslfld",
         "badtwo", "badup", "badweak")],
-    *[_case(6, name, _emit(_fe(M6, name), f"{OUT}\\{name.upper()}.C",
-                           output_first=True)) for name in (
+    *_accepts(6, M6, (
         "okbranch", "okdefer", "okglobcp", "oklast", "okr8free", "okr8join",
         "okr8meth", "okr8stat", "okrebor", "okrtlast", "okshare", "okslreb",
-        "okstatic", "oktemp", "oktrim", "okwcall")],
+        "okstatic", "oktemp", "oktrim", "okwcall")),
 
     # -- M7: optionals and error unions ---------------------------------------
     *[_case(7, name, f"FEC.EXE --check {_fe(M7, name)}", False) for name in (
         "badcatch", "baddef", "baddir", "badercod", "badernam", "badetype",
         "badnull", "badoref", "badorel", "badproj", "badqmark", "badret",
         "badsome", "badtry", "badzero")],
-    *[_case(7, name, _emit(_fe(M7, name), f"{OUT}\\{name.upper()}.C",
-                           output_first=True)) for name in (
+    *_accepts(7, M7, (
         "okcatch", "okcatmov", "okcvoid", "okdeflt", "okiflet", "okmatch",
         "oknull", "okorelse", "okpatvw", "okproj", "okrepl", "oktrdef",
-        "oktry")],
+        "oktry")),
 ]
 
 MAX_MILESTONE: int = max(case.milestone for case in CASES)

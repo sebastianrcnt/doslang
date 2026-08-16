@@ -199,6 +199,22 @@ static void emit_drop_helpers(FeEmitter *e)
         }
 }
 
+/* SPEC 12.3 lists `trim` among the built-in alias methods on `str`, called as
+   `line.trim()`.  The checker accepts it; this emits the lowering.  Only the
+   helper for slice types actually reached by a trim call is emitted, so a
+   program that never trims does not carry it. */
+static int node_uses_trim(FeNode *n)
+{
+    FeNode *x;
+    if (!n) return 0;
+    if (n->kind==FE_N_CALL && n->a && n->a->kind==FE_N_MEMBER &&
+        n->a->b && n->a->b->text && strcmp(n->a->b->text,"trim")==0) return 1;
+    if (node_uses_trim(n->a) || node_uses_trim(n->b) || node_uses_trim(n->c))
+        return 1;
+    for (x=n->children; x; x=x->next) if (node_uses_trim(x)) return 1;
+    return 0;
+}
+
 static void emit_type_helpers(FeEmitter *e)
 {
     FeType *t;
@@ -278,6 +294,14 @@ static void emit_type_helpers(FeEmitter *e)
             fprintf(e->out,"return %s(x.p+a,b-a); }\n",t->maker);
             fprintf(e->out,"static %s %s(%s x) { return %s(x,0,x.n); }\n",t->cname,t->full_slicer,t->cname,t->slicer);
             fprintf(e->out,"static %s %s(%s x, unsigned long a) { return %s(x,a,x.n); }\n",t->cname,t->tail_slicer,t->cname,t->slicer);
+            if (node_uses_trim(e->check->ast->root) && !t->ref_mut) {
+                fprintf(e->out,
+                        "static %s fe_trim_%s(%s s) { unsigned long a=0; unsigned long b=s.n;"
+                        " while (a<b && (s.p[a]==' '||s.p[a]=='\\t'||s.p[a]=='\\r'||s.p[a]=='\\n')) ++a;"
+                        " while (b>a && (s.p[b-1]==' '||s.p[b-1]=='\\t'||s.p[b-1]=='\\r'||s.p[b-1]=='\\n')) --b;"
+                        " return %s(s.p+a,b-a); }\n",
+                        t->cname,t->cname,t->cname,t->maker);
+            }
         }
     }
 }
@@ -812,7 +836,12 @@ static void emit_expr(FeEmitter *e, FeNode *n)
             fputc('(', e->out);
             fputs(strcmp(op,"&mut")==0 ? "&" : op, e->out);
         }
-        emit_expr(e, n->a);
+        /* Borrowing needs a place, not a value.  emit_expr lowers an index to
+           the bounds-checking accessor, and the address of that call is not an
+           lvalue -- `&s[0]` became `&fe_idx_slice_type_2(s, 0)`, which C
+           rejects.  emit_lvalue spells the same element as `s.p[0]`. */
+        if (strcmp(op,"&")==0 || strcmp(op,"&mut")==0) emit_lvalue(e, n->a);
+        else emit_expr(e, n->a);
         fputc(')', e->out);
         break;
     case FE_N_BINARY:
@@ -869,6 +898,15 @@ static void emit_expr(FeEmitter *e, FeNode *n)
             if(result && result->alloc_cname) fputs(result->alloc_cname,e->out);
             else fputs("fe_bad_slice_alloc",e->out);
             fputc('(',e->out); emit_expr(e,n->children->next); fputc(')',e->out);
+            special=1;
+        }
+        else if(n->a && n->a->kind==FE_N_MEMBER && n->a->b && n->a->b->text &&
+                strcmp(n->a->b->text,"trim")==0 && !n->children &&
+                n->a->a && n->a->a->sem_type &&
+                n->a->a->sem_type->kind==FE_TYPE_SLICE &&
+                n->a->a->sem_type->cname) {
+            fputs("fe_trim_",e->out); fputs(n->a->a->sem_type->cname,e->out);
+            fputc('(',e->out); emit_expr(e,n->a->a); fputc(')',e->out);
             special=1;
         }
         else if(n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
