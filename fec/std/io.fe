@@ -1,9 +1,10 @@
 unit io;
-pub struct Writer {
-    ctx: *void,
-    write_fn: fn(*void, []u8) -> !usize,
-}
+pub enum Writer { Stdout, Stderr, File(u16), Null }
+pub enum Reader { Stdin, File(u16) }
+pub fn write(w: Writer, bytes: []u8) -> !usize;
+pub fn read(r: Reader, bytes: []mut u8) -> !usize;
 pub struct File {
     handle: u16,
-    pub fn close(self: &mut Self) { }
+    pub fn close(self: Self) -> !void;
+    pub fn drop(self: &mut Self) { }
 }

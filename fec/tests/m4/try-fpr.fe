@@ -2,7 +2,7 @@ unit m4_try_fprint;
 
 fn main() -> !void {
     var raw: [4]u8 = [0, 0, 0, 0];
-    var buf: []u8 = raw[..];
-    let w: io.Writer = io.buf_writer(&mut buf);
-    try @fprint(&mut w, "ok");
+    var buf: []mut u8 = raw[..];
+    let w: io.Writer = io.null_writer();
+    try @fprint(w, "ok");
 }

@@ -237,6 +237,8 @@ fec.exe --target=bits32 --emit-c TESTS\M4\BAD-TRY.FE -o TESTS\M4\BAD-TRY.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-WRIT.FE -o TESTS\M4\BAD-WRI.C > nul
 if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-BUFW.FE -o TESTS\M4\BAD-BUFW.C > nul
+if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-MANY.FE -o TESTS\M4\BAD-MANY.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-OPEN.FE -o TESTS\M4\BAD-OPEN.C > nul

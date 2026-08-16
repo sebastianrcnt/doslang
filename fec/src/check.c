@@ -375,9 +375,8 @@ static void check_format_call(FeCheckerState *s, FeNode *n)
     if (offset) {
         if (!fmt_node) { err(s->c,n->loc,"@fprint requires a writer"); return; }
         t=check_expr(s,fmt_node);
-        if (!(t && t->kind==FE_TYPE_REF && t->ref_mut &&
-              format_is_writer_type(t->elem)))
-            err(s->c,fmt_node->loc,"@fprint requires &mut io.Writer");
+        if (!format_is_writer_type(t))
+            err(s->c,fmt_node->loc,"@fprint requires io.Writer");
         fmt_node=fmt_node->next;
     }
     if (strcmp(n->text,"@sprint")==0) {
@@ -679,18 +678,9 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
         if (n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
             n->a->a->kind==FE_N_IDENT && n->a->a->text &&
             strcmp(n->a->a->text,"io")==0 && n->a->b && n->a->b->text &&
-            (strcmp(n->a->b->text,"buf_writer")==0 ||
-             strcmp(n->a->b->text,"null_writer")==0)) {
+            strcmp(n->a->b->text,"null_writer")==0) {
             FeNode *arg=n->children;
-            if (strcmp(n->a->b->text,"buf_writer")==0) {
-                if (!arg) err(c,n->loc,"io.buf_writer requires a buffer");
-                else {
-                    a=check_expr(s,arg);
-                    if (!(a && a->kind==FE_TYPE_REF && a->ref_mut &&
-                          format_is_slice_u8(a->elem)))
-                        err(c,arg->loc,"io.buf_writer requires &mut []u8 buffer");
-                }
-            } else if (arg) err(c,n->loc,"io.null_writer takes no arguments");
+            if (arg) err(c,n->loc,"io.null_writer takes no arguments");
             n->sem_type=fe_type_intern(&c->types,"io.Writer");
             return n->sem_type;
         }
@@ -760,7 +750,8 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
     if (n->kind == FE_N_MEMBER) {
         if (n->a && n->a->kind==FE_N_IDENT && n->a->text &&
             strcmp(n->a->text,"io")==0 && n->b && n->b->text &&
-            strcmp(n->b->text,"stdout")==0) {
+            (strcmp(n->b->text,"stdout")==0 ||
+             strcmp(n->b->text,"stderr")==0)) {
             n->sem_type=fe_type_intern(&c->types,"io.Writer");
             return n->sem_type;
         }

@@ -1,4 +1,6 @@
 unit fmt;
-pub fn write_str(w: &mut io.Writer, s: str) -> !void;
-pub fn write_int_i32(w: &mut io.Writer, v: i32) -> !void;
-pub fn write_bool(w: &mut io.Writer, v: bool) -> !void;
+pub fn fmt_int_i32(buf: []mut u8, v: i32) -> str;
+pub fn fmt_hex_i32(buf: []mut u8, v: i32) -> str;
+pub fn fmt_char(buf: []mut u8, v: char) -> str;
+pub fn fmt_bool(buf: []mut u8, v: bool) -> str;
+pub fn fmt_error(buf: []mut u8, v: core.Error) -> str;
