@@ -133,6 +133,9 @@ typedef struct FeIrGlobal {
 typedef struct FeIrModule {
     FeArena arena;
     const char *unit_file;   /* the one file-name string a unit's traps share */
+    /* The entry unit's `main`, if it has one. The runtime's start stub
+       calls a fixed name, so the generator emits a jump to this one. */
+    const char *entry_main;
     FeIrFunc *funcs;
     FeIrFunc *last_func;
     FeIrGlobal *globals;

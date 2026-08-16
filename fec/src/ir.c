@@ -5,6 +5,7 @@ void fe_ir_module_init(FeIrModule *m)
 {
     fe_arena_init(&m->arena, 16384);
     m->unit_file = "";
+    m->entry_main = 0;
     m->funcs = 0;
     m->last_func = 0;
     m->globals = 0;
