@@ -127,14 +127,43 @@ class Host:
 
     def exec(self, command: str) -> dict[str, object]:
         log_event(logging.INFO, "exec start", command=command)
-        response = self.request("EXEC " + command.encode("ascii", "replace").hex().upper())
-        fields = response.split(" ", 2)
-        code = int(fields[1]) if len(fields) > 1 else -1
-        output = bytes.fromhex(fields[2]).decode("cp437", "replace") if len(fields) > 2 else ""
+        started = time.monotonic()
+        with self.agent_lock:
+            if self.agent is None:
+                raise RuntimeError("TCPAGENT is not connected")
+            sock = self.agent
+            try:
+                encoded = command.encode("ascii", "replace").hex().upper()
+                sock.sendall(f"EXEC {encoded}\n".encode("ascii"))
+                header = self._read_line(sock).decode("ascii", "replace")
+                fields = header.split()
+                if len(fields) == 4 and fields[0] == "RESULT":
+                    code, remaining, flags = int(fields[1]), int(fields[2]), int(fields[3])
+                    chunks: list[bytes] = []
+                    while remaining:
+                        chunk = sock.recv(min(65536, remaining))
+                        if not chunk:
+                            raise ConnectionError("TCP agent closed during EXEC result")
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    raw = b"".join(chunks)
+                elif fields and fields[0] == "OK":
+                    # Compatibility with an installed pre-RESULT agent.
+                    code = int(fields[1]); flags = 1
+                    raw = bytes.fromhex(fields[2]) if len(fields) > 2 else b""
+                else:
+                    raise RuntimeError("malformed EXEC response: " + header)
+            except OSError as exc:
+                if self.agent is sock:
+                    self.agent = None
+                    self.agent_ready.clear()
+                raise RuntimeError(f"TCPAGENT EXEC failed: {exc}") from exc
+        output = raw.decode("cp437", "replace")
         for line in output.splitlines():
             log_event(logging.INFO, "dos output", line=line)
-        log_event(logging.INFO, "exec finish", exit=code)
-        return {"exit": code, "output": output}
+        log_event(logging.INFO, "exec finish", exit=code, bytes=len(raw), flags=flags,
+                  elapsed_ms=round((time.monotonic()-started)*1000))
+        return {"exit": code, "output": output, "bytes": len(raw), "flags": flags}
 
     def put(self, source: str, destination: str) -> dict[str, object]:
         data = Path(source).read_bytes()

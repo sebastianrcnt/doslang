@@ -22,8 +22,12 @@ therefore distributed under GPLv3 when linked with mTCP.
 
 ## Protocol
 
-`PING`, `READ`, `WRITE`, `LIST`, and `EXEC` use text commands. Fast transfer
-commands are:
+`PING`, `READ`, `WRITE`, and `LIST` use text commands. `EXEC` captures both
+stdout and stderr at the DOS handle level and returns an untruncated raw body:
+
+- `EXEC <hex command>\n` -> `RESULT <exit> <length> <flags>\r\n<raw bytes>`
+
+Fast transfer commands are:
 
 - `PUT <hex DOS path> <byte length>\n<raw bytes>` -> `OK\r\n`
 - `GET <hex DOS path>\n` -> `DATA <length>\r\n<raw bytes>`
@@ -36,4 +40,7 @@ uv run ferro-vm put host-file 'C:\DOS\FILE'
 uv run ferro-vm get 'C:\DOS\FILE' host-file
 ```
 
-No DOS-side change is required for the Python host automation.
+The foreground agent shows timestamped connection, transfer, and command
+start/finish lines. It also keeps the same metadata in `C:\TCPAGENT.LOG`,
+rotating files larger than 256 KiB to `C:\TCPAGENT.OLD`. Payloads and command
+output are never written to that metadata log.

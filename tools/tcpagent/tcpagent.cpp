@@ -1,10 +1,13 @@
 #include <bios.h>
 #include <conio.h>
 #include <dos.h>
+#include <fcntl.h>
 #include <io.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "types.h"
 #include "trace.h"
@@ -27,6 +30,35 @@ static TcpSocket *socketp;
 static volatile uint8_t stop_requested;
 static FILE *put_file;
 static unsigned long put_remaining;
+static unsigned long put_started;
+static char put_path[260];
+
+static unsigned long ticks(void) {
+    long value=0;
+    _bios_timeofday(_TIME_GETCLOCK,&value);
+    return (unsigned long)value;
+}
+static void elapsed_text(unsigned long started,char *out) {
+    unsigned long now=ticks(),delta=now>=started?now-started:now+(1573040UL-started);
+    sprintf(out,"%lu.%02lus",delta/18UL,(delta%18UL)*100UL/18UL);
+}
+static void log_line(int attr,const char *fmt,...) {
+    struct dostime_t now; va_list ap; char text[760];
+    _dos_gettime(&now); va_start(ap,fmt); vsprintf(text,fmt,ap); va_end(ap);
+    /* Open Watcom's DOS conio has no textattr(), and ANSI escapes are not
+       interpreted on the installed FreeDOS console. Keep output clean. */
+    (void)attr;
+    cprintf("%02u:%02u:%02u %s\r\n",now.hour,now.minute,now.second,text);
+    { FILE *f=fopen("C:\\TCPAGENT.LOG","a");
+      if(f){fprintf(f,"%02u:%02u:%02u %s\n",now.hour,now.minute,now.second,text);fclose(f);} }
+}
+static void init_log(void) {
+    FILE *f=fopen("C:\\TCPAGENT.LOG","rb"); long size=0;
+    if(f){fseek(f,0,SEEK_END);size=ftell(f);fclose(f);}
+    if(size>262144L){remove("C:\\TCPAGENT.OLD");rename("C:\\TCPAGENT.LOG","C:\\TCPAGENT.OLD");}
+    f=fopen("C:\\TCPAGENT.LOG","a");
+    if(f){fputs("--- TCPAGENT start ---\n",f);fclose(f);}
+}
 
 void __interrupt __far ctrl_break(void) { stop_requested=1; }
 void __interrupt __far ctrl_c(void) { stop_requested=1; }
@@ -110,10 +142,11 @@ static void command_put(char *args) {
     if(!length_text){error_text("PUT requires path and length");return;}
     *length_text++='\0';
     if(!decode_path(args,path,sizeof(path))){error_text("Invalid path encoding");return;}
-    put_remaining=strtoul(length_text,0,10);
+    put_remaining=strtoul(length_text,0,10); strcpy(put_path,path); put_started=ticks();
+    log_line(0x0B,"> PUT %s %luB",path,put_remaining);
     put_file=fopen(path,"wb");
-    if(!put_file){put_remaining=0;error_text("Cannot write file");return;}
-    if(!put_remaining){fclose(put_file);put_file=0;ok_data((const unsigned char *)"",0);}
+    if(!put_file){put_remaining=0;log_line(0x0C,"< PUT ERR cannot open");error_text("Cannot write file");return;}
+    if(!put_remaining){char elapsed[24];fclose(put_file);put_file=0;elapsed_text(put_started,elapsed);log_line(0x0A,"< PUT OK %s",elapsed);ok_data((const unsigned char *)"",0);}
 }
 static void command_get(char *args) {
     char path[260]; FILE *f; long length; size_t count;
@@ -144,11 +177,28 @@ static void command_list(char *args) {
     ok_data((unsigned char *)output,used);
 }
 static void command_exec(char *args) {
-    char command[700],shell[800]; const char *tmp="C:\\PIEXEC.TMP"; FILE *f; int n,code; size_t count;
+    char command[700],elapsed[24]; const char *tmp="C:\\PIEXEC.TMP"; FILE *f;
+    int n,code=-1,fd=-1,save1=-1,save2=-1; long length=0; size_t count; unsigned long started;
     n=decode_hex(args,(unsigned char *)command,sizeof(command)-1); if(n<0){error_text("Invalid command encoding");return;} command[n]='\0';
-    sprintf(shell,"COMMAND.COM /C %s > %s",command,tmp); code=system(shell);
-    f=fopen(tmp,"rb"); count=f?fread(data,1,CHUNK_SIZE,f):0; if(f)fclose(f); remove(tmp);
-    sprintf(linebuf,"OK %d ",code); write_text(linebuf); write_hex(data,count); write_text("\r\n");
+    started=ticks(); log_line(0x0E,"> EXEC %.640s",command);
+    fflush(stdout); fflush(stderr);
+    save1=dup(1); save2=dup(2);
+    fd=open(tmp,O_CREAT|O_TRUNC|O_WRONLY|O_BINARY,S_IREAD|S_IWRITE);
+    if(save1<0||save2<0||fd<0||dup2(fd,1)<0||dup2(fd,2)<0) {
+        if(fd>=0)close(fd);
+        if(save1>=0){dup2(save1,1);close(save1);}
+        if(save2>=0){dup2(save2,2);close(save2);}
+        log_line(0x0C,"< EXEC ERR redirect failed"); error_text("Cannot capture command output"); return;
+    }
+    close(fd); code=system(command); fflush(stdout); fflush(stderr);
+    dup2(save1,1); dup2(save2,2); close(save1); close(save2);
+    f=fopen(tmp,"rb");
+    if(f){fseek(f,0,SEEK_END);length=ftell(f);fseek(f,0,SEEK_SET);}
+    elapsed_text(started,elapsed);
+    log_line(code?0x0C:0x0A,"< EXEC exit=%d %ldB %s",code,length,elapsed);
+    sprintf(linebuf,"RESULT %d %ld 0\r\n",code,length); write_text(linebuf);
+    while(f&&(count=fread(data,1,CHUNK_SIZE,f))>0)if(send_all(data,count)<0)break;
+    if(f)fclose(f); remove(tmp);
 }
 static void process_line(char *line) {
     char *cmd=line,*args=strchr(line,' '); if(args)*args++='\0';else args=cmd+strlen(cmd);
@@ -173,11 +223,15 @@ static int connect_host(void) {
     return 0;
 }
 int main(void) {
-    int used,rc; uint16_t key;
-    if(Utils::parseEnv()!=0)return 2;
-    if(Utils::initStack(1,TCP_SOCKET_RING_SIZE,ctrl_break,ctrl_c))return 3;
+    int used,rc; uint16_t key; unsigned attempts=0;
+    init_log();
+    log_line(0x0B,"* TCPAGENT starting; Alt-X returns to DOS");
+    if(Utils::parseEnv()!=0){log_line(0x0C,"* MTCP configuration error");return 2;}
+    if(Utils::initStack(1,TCP_SOCKET_RING_SIZE,ctrl_break,ctrl_c)){log_line(0x0C,"* TCP stack initialization error");return 3;}
     while(!stop_requested) {
-        if(connect_host()!=0){unsigned long spins=0;while(spins++<60000UL&&!stop_requested)drive();continue;}
+        if(!attempts)log_line(0x07,"* connecting 10.0.2.2:%u",SERVER_PORT);
+        if(connect_host()!=0){unsigned long spins=0;++attempts;if(attempts==1||attempts%10==0)log_line(0x0C,"* connect failed; retry %u",attempts);while(spins++<60000UL&&!stop_requested)drive();continue;}
+        attempts=0; log_line(0x0A,"* connected; host automation owns console");
         write_text("TCPAGENT READY\r\n"); used=0;
         while(!stop_requested&&!socketp->isRemoteClosed()) {
             drive(); rc=socketp->recv((uint8_t *)data,CHUNK_SIZE);
@@ -190,7 +244,7 @@ int main(void) {
                     if(fwrite(data+i,1,take,put_file)!=(size_t)take){fclose(put_file);put_file=0;put_remaining=0;error_text("Short write");}
                     else {
                         put_remaining-=take; i+=(int)take-1;
-                        if(!put_remaining){fclose(put_file);put_file=0;ok_data((const unsigned char *)"",0);}
+                        if(!put_remaining){char elapsed[24];fclose(put_file);put_file=0;elapsed_text(put_started,elapsed);log_line(0x0A,"< PUT OK %s",elapsed);ok_data((const unsigned char *)"",0);}
                     }
                 } else if(c=='\r'||c=='\n') {
                     if(used){linebuf[used]='\0';process_line(linebuf);used=0;}
@@ -199,6 +253,8 @@ int main(void) {
             if(_bios_keybrd(1)){key=_bios_keybrd(0);if((key&0xff)==3||(key>>8)==45)stop_requested=1;}
         }
         socketp->close(); TcpSocketMgr::freeSocket(socketp); socketp=0;
+        if(!stop_requested)log_line(0x0C,"* link lost; retrying");
     }
+    log_line(0x07,"* stopped; returning to DOS");
     Utils::endStack(); return 0;
 }
