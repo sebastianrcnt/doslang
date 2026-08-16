@@ -1,5 +1,5 @@
 // Minimal Tree-sitter grammar for Ferro syntax highlighting in Zed.
-// This intentionally models lexical structure rather than full Ferro semantics.
+// `parser.c` is normative; this file is the editor-copy.
 
 module.exports = grammar({
   name: "ferro",
@@ -10,6 +10,8 @@ module.exports = grammar({
 
   rules: {
     source_file: $ => repeat(choice(
+      $.unit_decl,
+      $.import_decl,
       $.line_comment,
       $.block_comment,
       $.string_literal,
@@ -24,6 +26,11 @@ module.exports = grammar({
     )),
 
     line_comment: _ => token(seq("//", /[^\n]*/)),
+
+    unit_decl: $ => seq("unit", $.dotted_identifier, ";"),
+
+    import_decl: $ => seq("import", $.dotted_identifier,
+      optional(seq("as", $.identifier)), ";"),
 
     // Ferro block comments may nest. Keeping this rule recursive makes syntax
     // highlighting follow the compiler lexer instead of flattening nested /* */.
@@ -92,8 +99,10 @@ module.exports = grammar({
       "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
       "==", "!=", "<=", ">=", "<<", ">>", "->", "=>", "..",
       "+%", "-%", "*%",
-      "+", "-", "*", "/", "%", "=", "<", ">", "&", "|", "^", "~", "!", "?",
+      "+", "-", "*", "/", "%", "=", "<", ">", "&", "|", "^", "!", "?",
     )),
+
+    dotted_identifier: _ => /[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*/,
 
     punctuation: _ => token(choice(
       "(", ")", "{", "}", "[", "]", ",", ";", ":", ".",
