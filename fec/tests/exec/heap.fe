@@ -1,0 +1,30 @@
+// EXIT:0
+// OUTPUT:sum 4950
+unit heap;
+import std.io;
+import std.fmt;
+
+fn build(n: usize) -> !^[]mut i32 {
+    var cells: ^[]mut i32 = try mem.alloc_slice(i32, n);
+    var i: usize = 0;
+    while i < n {
+        cells.^[i] = i as i32;
+        i = i + 1;
+    }
+    return cells;
+}
+
+fn main() -> i32 {
+    let cells: ^[]mut i32 = build(100) catch |e| { return 1; };
+    defer { mem.destroy(cells); }
+    var sum: i32 = 0;
+    for v in cells.^ {
+        sum = sum + v.^;
+    }
+    var buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let k: usize = fmt.fmt_i32(buf[..], sum);
+    io.print("sum ");
+    io.print(buf[0..k]);
+    io.print("\n");
+    return 0;
+}

@@ -1198,7 +1198,9 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                 b=count ? check_expr(s,count) : unknown(c);
                 if(known(b) && !fe_type_is_integer(b))
                     err(c,count->loc,"slice length must be an integer");
-                a=fe_type_owned(&c->types,fe_type_slice(&c->types,item));
+                /* Freshly allocated storage is owned outright, so it is
+                   writable: there is nobody else to disturb. */
+                a=fe_type_owned(&c->types,fe_type_mut_slice(&c->types,item));
                 n->sem_type=fe_type_error_union(&c->types,a);
                 return n->sem_type;
             }

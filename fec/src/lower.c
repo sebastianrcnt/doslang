@@ -62,6 +62,8 @@ static void lower_stmt(Lower *L, FeNode *n);
 static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
                        unsigned long size);
 static void lower_for(Lower *L, FeNode *n);
+static int lower_mem(Lower *L, FeNode *n, Slot *out);
+static long error_code(Lower *L, const char *name);
 static int fn_is_generic(const FeNode *fn);
 static void lower_fn_as(Lower *L, FeNode *fn, const char *name);
 static Slot lower_slice(Lower *L, FeNode *n);
@@ -303,6 +305,14 @@ static void collect_error_names(Lower *L, FeNode *n)
 {
     FeNode *x;
     if (!n) return;
+    /* Allocation reports failure with a name like any other, so it has to be
+       in the table even though no source line writes it. */
+    if (n->kind == FE_N_CALL && n->a && n->a->kind == FE_N_MEMBER &&
+        n->a->a && n->a->a->kind == FE_N_IDENT && n->a->a->text &&
+        !strcmp(n->a->a->text, "mem") && n->a->b && n->a->b->text &&
+        (!strcmp(n->a->b->text, "create") ||
+         !strcmp(n->a->b->text, "alloc_slice")))
+        note_error_name(L, "OutOfMemory");
     if (n->kind == FE_N_MEMBER && n->a && n->a->kind == FE_N_IDENT &&
         n->a->text && !strcmp(n->a->text, "error") && n->b && n->b->text)
         note_error_name(L, n->b->text);
@@ -448,6 +458,164 @@ static int lower_builtin(Lower *L, FeNode *n, Slot *out)
     return 0;
 }
 
+/* ------------------------------------------------------------- mem.* ----- *
+ * The allocating intrinsics. They are not ordinary calls: `mem.create` takes a
+ * value and gives back an owned pointer to a copy of it, and the result is an
+ * error union because the allocation can fail. The runtime does the allocating;
+ * everything else about the shape is decided here.
+ * -------------------------------------------------------------------------- */
+
+static const char *RT_ALLOC = "fe_rt_alloc";
+static const char *RT_FREE = "fe_rt_free";
+
+static int is_mem_call(const FeNode *n, const char *what)
+{
+    return n && n->a && n->a->kind == FE_N_MEMBER &&
+           n->a->a && n->a->a->kind == FE_N_IDENT && n->a->a->text &&
+           !strcmp(n->a->a->text, "mem") &&
+           n->a->b && n->a->b->text && !strcmp(n->a->b->text, what);
+}
+
+/* Build `!^T`: zero and the pointer when the allocation worked, the
+   out-of-memory code when it did not. */
+static Slot allocation_result(Lower *L, FeNode *n, unsigned pointer)
+{
+    FeType *t = n->sem_type;
+    unsigned local = scratch(L, t, "allocated");
+    long payload_at = (long)fe_type_payload_offset(t);
+    unsigned zero = fe_ir_const(L->m, L->b, FE_IR_PTR, 0);
+    unsigned ok = fe_ir_binary(L->m, L->b, FE_IR_NE, FE_IR_PTR, pointer, zero, 1);
+    FeIrBlock *good = new_block(L);
+    FeIrBlock *bad = new_block(L);
+    FeIrBlock *join = new_block(L);
+    fe_ir_br(L->b, ok, good->id, bad->id);
+    L->b = good;
+    {
+        unsigned none = fe_ir_const(L->m, L->b, FE_IR_I16, 0);
+        fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), none, FE_IR_I16);
+        fe_ir_store(L->m, L->b, fe_ir_at_local(local, payload_at), pointer,
+                    FE_IR_PTR);
+    }
+    fe_ir_jmp(L->b, join->id);
+    L->b = bad;
+    {
+        unsigned code = fe_ir_const(L->m, L->b, FE_IR_I16,
+                                    error_code(L, "OutOfMemory"));
+        fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), code, FE_IR_I16);
+    }
+    fe_ir_jmp(L->b, join->id);
+    L->b = join;
+    return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
+}
+
+static int lower_mem(Lower *L, FeNode *n, Slot *out)
+{
+    unsigned args[2];
+    if (is_mem_call(n, "create")) {
+        FeNode *arg = n->children;
+        FeType *value = arg ? arg->sem_type : 0;
+        unsigned size = fe_ir_const(L->m, L->b, FE_IR_I32,
+                                    (long)ir_size(value));
+        unsigned p;
+        Slot v;
+        args[0] = size;
+        p = fe_ir_call(L->m, L->b, FE_IR_PTR, RT_ALLOC, args, 1);
+        /* The value is written through the new pointer, not copied into a
+           local first: `create` moves what it was given. */
+        v = lower_expr(L, arg);
+        store_into(L, fe_ir_at_temp(p, 0), v, arg, ir_size(value));
+        *out = allocation_result(L, n, p);
+        return 1;
+    }
+    if (is_mem_call(n, "alloc_slice")) {
+        FeNode *type_arg = n->children;
+        FeNode *count_arg = type_arg ? type_arg->next : 0;
+        FeType *t = n->sem_type;
+        /* `!^[]T` -- the payload is an owned slice, a pointer and a length. */
+        FeType *owned = t ? t->error_value : 0;
+        FeType *slice = owned ? owned->elem : 0;
+        FeType *elem = slice ? slice->elem : 0;
+        unsigned each = fe_ir_const(L->m, L->b, FE_IR_I32, (long)ir_size(elem));
+        unsigned howmany = count_arg
+            ? as_value(L, lower_expr(L, count_arg), count_arg)
+            : fe_ir_const(L->m, L->b, FE_IR_I32, 0);
+        unsigned bytes = fe_ir_binary(L->m, L->b, FE_IR_MUL, FE_IR_I32,
+                                      howmany, each, 1);
+        unsigned p;
+        unsigned local = scratch(L, t, "allocated");
+        long payload_at = (long)fe_type_payload_offset(t);
+        unsigned zero;
+        unsigned ok;
+        FeIrBlock *good;
+        FeIrBlock *bad;
+        FeIrBlock *join;
+        args[0] = bytes;
+        p = fe_ir_call(L->m, L->b, FE_IR_PTR, RT_ALLOC, args, 1);
+        zero = fe_ir_const(L->m, L->b, FE_IR_PTR, 0);
+        ok = fe_ir_binary(L->m, L->b, FE_IR_NE, FE_IR_PTR, p, zero, 1);
+        good = new_block(L);
+        bad = new_block(L);
+        join = new_block(L);
+        fe_ir_br(L->b, ok, good->id, bad->id);
+        L->b = good;
+        {
+            unsigned none = fe_ir_const(L->m, L->b, FE_IR_I16, 0);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), none, FE_IR_I16);
+            fe_ir_store(L->m, L->b,
+                        fe_ir_at_local(local, payload_at + SLICE_PTR_OFFSET),
+                        p, FE_IR_PTR);
+            fe_ir_store(L->m, L->b,
+                        fe_ir_at_local(local, payload_at + SLICE_LEN_OFFSET),
+                        howmany, FE_IR_I32);
+        }
+        fe_ir_jmp(L->b, join->id);
+        L->b = bad;
+        {
+            unsigned code = fe_ir_const(L->m, L->b, FE_IR_I16,
+                                        error_code(L, "OutOfMemory"));
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), code, FE_IR_I16);
+        }
+        fe_ir_jmp(L->b, join->id);
+        L->b = join;
+        *out = slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
+        return 1;
+    }
+    if (is_mem_call(n, "destroy")) {
+        FeNode *arg = n->children;
+        Slot p = lower_expr(L, arg);
+        /* An owned slice is a pointer and a length; what was allocated is the
+           pointer. */
+        if (p.type == FE_IR_MEM) {
+            FeIrPlace at = p.place;
+            at.offset += SLICE_PTR_OFFSET;
+            args[0] = fe_ir_load(L->m, L->b, FE_IR_PTR, at);
+        } else {
+            args[0] = as_value(L, p, arg);
+        }
+        fe_ir_call(L->m, L->b, FE_IR_VOID, RT_FREE, args, 1);
+        *out = slot_void();
+        return 1;
+    }
+    if (is_mem_call(n, "replace")) {
+        /* Read what is there, put the new value in its place, hand back the
+           old one. This is how a value is taken out of a field without ever
+           leaving the field uninitialised (SPEC 5 R7). */
+        FeNode *dst = n->children;
+        FeNode *value = dst ? dst->next : 0;
+        FeType *t = n->sem_type;
+        unsigned target = as_value(L, lower_expr(L, dst), dst);
+        unsigned old = scratch(L, t, "replaced");
+        Slot fresh;
+        fe_ir_copy(L->m, L->b, fe_ir_at_local(old, 0), fe_ir_at_temp(target, 0),
+                   ir_size(t));
+        fresh = lower_expr(L, value);
+        store_into(L, fe_ir_at_temp(target, 0), fresh, value, ir_size(t));
+        *out = slot_place(fe_ir_at_local(old, 0), ir_type(t), ir_size(t));
+        return 1;
+    }
+    return 0;
+}
+
 static Slot lower_call(Lower *L, FeNode *n)
 {
     unsigned args[16];
@@ -462,6 +630,7 @@ static Slot lower_call(Lower *L, FeNode *n)
     {
         Slot built;
         if (lower_builtin(L, n, &built)) return built;
+        if (lower_mem(L, n, &built)) return built;
     }
     if (!callee) { fail(L, "a call with no target", n); return slot_void(); }
     /* An aggregate result is written through a hidden first argument. */
@@ -650,9 +819,15 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
             FeType *bt = n->a ? n->a->sem_type : 0;
             return wrapper_payload(L, lower_expr(L, n->a), bt);
         }
-        /* `p.^` reads through a pointer. */
+        /* `p.^` reads through a pointer -- except for an owned slice, whose
+           pointer and length are the value itself, so there is nothing to
+           step through. */
         if (n->text && !strcmp(n->text, ".^")) {
-            unsigned p = as_value(L, lower_expr(L, n->a), n->a);
+            Slot base = lower_expr(L, n->a);
+            unsigned p;
+            if (base.type == FE_IR_MEM)
+                return slot_place(base.place, it, ir_size(t));
+            p = as_value(L, base, n->a);
             return slot_place(fe_ir_at_temp(p, 0), it, ir_size(t));
         }
         /* `.n` is how many elements there are, which an array knows at
