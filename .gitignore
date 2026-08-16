@@ -1,19 +1,8 @@
-# QEMU runtime state, downloaded media, and generated captures
-.qemu/*
-!.qemu/*.ps1
-!.qemu/*.mjs
-!.qemu/*.txt
-!.qemu/share/
-!.qemu/share/*.c
-.qemu/share/fec/
+# Legacy local QEMU state is no longer used, but may contain large user-owned images.
+.qemu/
 
-.qemu/*.qcow2
-.qemu/*.img
-.qemu/*.iso
-.qemu/*.zip
-.qemu/*.png
-.qemu/*.ppm
-.qemu/*.tmp
+# Reproducible DOSBox-X/Open Watcom development cache and ephemeral runs
+.dosboxx/
 
 # Windows reserved-device artifact: `> nul` under Git Bash creates a real file.
 # Committing it breaks checkout on Windows.
@@ -36,6 +25,3 @@ __pycache__/
 node_modules/
 .npm/
 .cache/
-
-# Temporary DOS build sources
-.qemu/share/dosag*.c
