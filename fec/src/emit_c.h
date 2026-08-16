@@ -2,6 +2,7 @@
 #define FE_EMIT_C_H
 
 #include "check.h"
+#include "own.h"
 
 typedef struct FeEmitter {
     FILE *out;
