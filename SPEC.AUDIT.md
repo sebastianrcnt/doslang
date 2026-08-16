@@ -154,3 +154,114 @@ M6(borrow checker) 착수 전에 확정해야 하는 소유권·참조 규칙 �
 - `HANDOFF.md`를 제거했다. 여기에만 있던 빌드 함정(컴파일러 A는 16비트 large model,
   링크는 `*.obj`, M4 Watcom 테스트는 `-wx -wcd=202`, 8.3 파일명 제약, `D:`에서 빌드
   금지)은 별도 문서로 옮겨야 한다.
+
+## 2026-08-16 — v0.1.7
+
+외부 전면 audit에서 발견된 안전성 모순과 M6~M10 구현 전 미결정 사항을 통합했다.
+이 절의 결정은 v0.1.6의 `str` nominal 타입, 함수 포인터 Writer, R8 단일 파라미터
+규칙 및 own.c 스코프 끝 해제 결정을 명시적으로 대체한다.
+
+### 슬라이스·문자열·소유 버퍼
+
+- 문제: R4는 일반 `^T`의 대상에 `[]T`를 금지하면서 `^[]T`, `List.items`,
+  `mem.alloc_slice`를 요구했다. 또한 하나뿐인 `[]T`가 읽기/쓰기를 모두 나타내어
+  R6의 공유·배타 대여를 표현할 수 없었다.
+- 결정: `[]T`는 공유·읽기 전용, `[]mut T`는 배타·쓰기 가능 slice다. var place만
+  mutable slice를 만들 수 있다. 호출 인자 위치의 `[]mut T → []T`, `&mut T → &T`는
+  원래 Exclusive 상태를 유지하는 암묵 재대여로 한정한다.
+- 결정: `^[]T`는 일반 포인터 합성이 아닌 `(ptr,len)` 독립 소유 타입이다.
+  `^[]T`/`?^[]T`만 R4의 대상 제한에서 예외이고 `*[]T`/`*[]mut T`는 금지한다.
+- 재검토: v0.1.6은 문자열 리터럴의 불변성을 위해 `str`을 nominal 타입으로 만들었지만,
+  `[]T` 자체가 불변이 되면서 근거가 사라졌다. `str`을 미리 선언된 `[]u8` 완전 동일
+  alias로 내렸다. UTF-8 검증은 없으며 별도 cast·C 표현·쓰기 금지 규칙이 필요 없다.
+- 결과: `str`도 R4를 그대로 적용받아 field/element에 저장할 수 없다. 문자열을
+  소유하려면 `String{ bytes: ^[]u8 }`를 쓰며 `as_str()`은 파생 shared slice를 반환한다.
+
+### 안전한 Writer/Reader와 포매팅 분리
+
+- 문제: 안전한 `File.writer() -> Writer`가 대여 대상을 `*void`에 숨겨 반환하여
+  `make() -> Writer`만으로 safe-code dangling을 만들 수 있었다. 문서의 "사용자 책임"은
+  §1의 memory-safety 보장과 충돌하며 Reader도 동일하게 불건전했다.
+- 원칙: 안전한 표준 라이브러리 API는 대여 대상을 가리키는 raw pointer를 값에 숨겨
+  반환할 수 없다. R9 내부에서 unsafe 변환을 한 번 감쌌다는 사실은 safe API를
+  건전하게 만들지 않는다.
+- 결정: v0.1.2 Writer/Reader는 함수 포인터 struct 대신 정수 payload만 가진 Copy handle
+  enum이다. `Writer{Stdout,Stderr,File(u16),Null}`, `Reader{Stdin,File(u16)}`와
+  `io.write(Writer, []u8)`, `io.read(Reader, []mut u8)`를 쓴다. fd 재사용은 논리적 I/O
+  오류일 수 있으나 memory dangling은 아니다. buffer Writer는 두지 않는다.
+- 결정: fmt는 sink를 모른다. `fmt.fmt_int_i32(tmp: []mut u8, v) -> str`처럼 임시
+  buffer에 쓰고 R8(a) 파생 slice를 반환하는 순수 함수 한 벌만 둔다. `@print`/`@fprint`는
+  결과를 `io.write`, `@sprint`는 `mem.copy`로 이어 붙인다. v0.2의 `dyn Writer` 전환은
+  안전성 수정이 아닌 기능 확장이다.
+
+### 소유권·R4·R8
+
+- `str`/`[]T`/조건부·에러 union/배열의 재귀 Copy 규칙을 완성하고 `[]mut T`와
+  `^[]T`는 non-Copy로 정했다.
+- field/index/optional projection에서 non-Copy 값을 부분 이동하는 것을 금지했다.
+  own.c는 변수 단위 상태를 유지하며 `mem.replace(&mut place, replacement)`만 추출을
+  허용한다. `.?`/field/index는 값을 즉시 꺼내는 연산이 아니라 place projection이다.
+- mutable borrow·slice와 `&mut Self` 호출은 var place에서만 허용한다. consuming
+  `self: Self`는 메서드 내부에서 invalid sentinel을 남길 수 있는 local owner다.
+- R8 메서드는 파생 원본을 self로 고정한다. 추가 참조 인자는 받을 수 있지만 반환이
+  그 인자에서 파생될 수 없다. 자유 함수만 참조성 파라미터 정확히 하나를 요구한다.
+  `?&T`, `?&mut T`, `?[]T`, `?[]mut T` 반환을 포함한다.
+- own.c의 오래된 "스코프 끝 해제"와 "R8 결과 바인딩 거부"를 삭제했다. 역방향
+  liveness pass로 마지막 사용을 계산하고 defer 사용은 스코프 끝까지 연장한다.
+
+### drop, File, heap 초기화
+
+- `File.close(=drop)` 모순을 제거했다. `close(self: Self) -> !void`는 소비하는 일반
+  메서드이며 내부 handle을 invalid로 만든 후 오류를 반환한다. 자동 drop은 열린 handle만
+  조용히 닫는다. `drop` 직접 호출 금지는 유지한다.
+- `mem.create(T) -> !^T`는 초기화되지 않은 안전 힙을 반환하므로 삭제했다.
+  `mem.create(value: T) -> !^T`로 바꾸고 T는 값에서 추론한다.
+
+### error와 결정적 build
+
+- `try`는 operand와 현재 함수의 nominal error 타입이 같을 때만 허용한다. 다른 타입은
+  catch에서 명시 매핑한다. `catch`는 error-return 함수 밖에서도 허용하며 void 결과의
+  handler block은 정상 fallthrough할 수 있다.
+- 정렬 기반 error code 표는 결정성과 fixpoint를 위해 유지한다. build-directory 이력에
+  의존하는 append-only 표는 기각했다.
+- 드라이버는 단일 `fe_errors.h`에 정렬된 `#define`을 생성한다. 이름 집합 변경 시 유닛
+  C를 재방출하지 않고 header 의존 object만 다시 컴파일한다. switch 상수 요건도 유지한다.
+
+### 제네릭·증분 build
+
+- 제네릭 이름 해석은 사용 유닛이 아니라 정의 유닛 scope에서 한다. `.fei`는 본문 token과
+  generic 전용 private signature를 함께 기록한다.
+- driver가 전체 인스턴스 요청을 합쳐 단일 `fe_generics.c`에 중복 없이 방출한다.
+  사용 유닛별 external 중복 심볼과 static 코드 복제를 모두 피한다.
+- comptime type 비교와 최소 introspection `@is_int`, `@is_ptr`를 추가했다.
+- `.fei` cache key에 source hash뿐 아니라 dependency `.fei` hash를 포함한다.
+
+### interrupt/shared와 panic
+
+- shared C 방출을 `volatile`로 정하고 critical 진입·이탈에 compiler barrier를 둔다.
+  bits16의 한 명령 크기 8/16비트 atomic load/store는 interrupt 경계에서 원자적이므로
+  자동 critical 없이 volatile 한 명령만 방출한다. far pointer와 RMW는 explicit critical이다.
+- `interrupt_safe`에서 critical, port/volatile builtin, asm과 필요한 unsafe를 허용한다.
+  금지 목록은 heap, DOS/DPMI, blocking I/O, FPU, non-interrupt-safe 호출로 한정했다.
+- panic은 일반 defer unwind를 하지 않지만 interrupt vector 복원용 고정 크기
+  `sys.on_exit` callback을 실행한다. bits32 interrupt/shared/critical은 v0.2로 명시했다.
+
+### 문법·표기 정리
+
+- generic struct/enum parameter, declaration-level comptime if, for 전용 range,
+  bool/char pattern, `[]mut T`를 EBNF에 추가했다.
+- 정의되지 않은 단항 `^`를 삭제했다. field/index/slice/method의 `&`/`&mut`/`^`
+  projection과 raw/optional의 비자동 역참조를 명문화했다.
+- method가 function-pointer field보다 우선하며 field 호출은 `(x.f)(...)`로 고정했다.
+- `@seg_ptr(T, seg, off)`로 타입 인자를 명시하고 type-valued const alias를 허용했다.
+- 단항 직후 cast는 `(-x) as T` 또는 `-(x as T)`처럼 괄호를 강제한다.
+
+### 구현 및 milestone 영향
+
+- M3: shared/mutable slice와 str alias를 재검증한다.
+- M4: 함수 포인터 Writer를 handle enum + 순수 fmt 함수로 교체한다.
+- M5: `^[]T`, consuming close, projection 부분 이동, 초기화된 create를 반영한다.
+- M6: 역방향 liveness와 self-source R8을 구현한다.
+- M7: try nominal error 일치와 일반 catch를 구현한다.
+- M8/M9: `fe_errors.h`, dependency hash, `fe_generics.c`를 구현한다.
+- M10: volatile/barrier, interrupt-safe 허용 목록, on_exit 복원을 검증한다.
