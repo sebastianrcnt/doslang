@@ -62,6 +62,8 @@ static void lower_stmt(Lower *L, FeNode *n);
 static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
                        unsigned long size);
 static void lower_for(Lower *L, FeNode *n);
+static void lower_match(Lower *L, FeNode *n);
+static int enum_has_payload(const FeType *t);
 static void lower_global(Lower *L, FeNode *n);
 static long literal_value(FeNode *n);
 static Slot wrap_context(Lower *L, Slot v, FeNode *n);
@@ -505,14 +507,33 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
     case FE_N_LITERAL:
         if (n->text && n->text[0] == '"') {
             /* The bytes live in the image; the value is a pointer to them and
-               how many there are. */
-            unsigned long len = strlen(n->text);
+               how many there are. The lexer keeps the quotes and the escapes,
+               so this is where `
+` becomes one byte. */
+            char text[1024];
+            unsigned long raw = strlen(n->text);
+            unsigned long len = 0;
+            unsigned long i;
             const char *label;
             unsigned local;
             unsigned p;
             unsigned c;
-            if (len >= 2) len -= 2;
-            label = fe_ir_string(L->m, n->text + 1, len);
+            if (raw >= 2) raw -= 2;
+            for (i = 0; i < raw && len + 1 < sizeof text; ++i) {
+                char ch = n->text[1 + i];
+                if (ch == 92 && i + 1 < raw) {          /* a backslash */
+                    ++i;
+                    switch (n->text[1 + i]) {
+                    case 'n': ch = 10; break;
+                    case 't': ch = 9; break;
+                    case 'r': ch = 13; break;
+                    case '0': ch = 0; break;
+                    default:  ch = n->text[1 + i]; break;
+                    }
+                }
+                text[len++] = ch;
+            }
+            label = fe_ir_string(L->m, text, len);
             if (!label) { fail(L, "a string literal", n); return slot_void(); }
             local = scratch(L, t, "text");
             p = fe_ir_addr(L->m, L->b, fe_ir_at_global(label, 0));
@@ -583,6 +604,14 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
         fail(L, "this unary operator", n);
         return slot_void();
     case FE_N_MEMBER:
+        /* A payload-free variant used as a value is just its tag. */
+        if (t && t->kind == FE_TYPE_ENUM && !enum_has_payload(t) &&
+            n->b && n->b->text) {
+            FeVariantType *v = fe_type_variant(t, n->b->text);
+            if (v)
+                return slot_value(fe_ir_const(L->m, L->b, ir_type(t),
+                                              (long)v->tag), ir_type(t));
+        }
         /* `error.Name` is a member of the open default set: a code, and
            nothing to look up. */
         if (n->a && n->a->kind == FE_N_IDENT && n->a->text &&
@@ -688,6 +717,19 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
     }
     case FE_N_CALL:
         return lower_call(L, n);
+    case FE_N_TYPE:
+        /* `x as T`: the operand is `a` and the target type is the node's own.
+           Between integers this only changes how wide the value is and whether
+           the top bits repeat the sign. */
+        if (n->a) {
+            FeType *from = n->a->sem_type;
+            unsigned v = as_value(L, lower_expr(L, n->a), n->a);
+            if (ir_type(from) == it) return slot_value(v, it);
+            return slot_value(fe_ir_cast(L->m, L->b, ir_type(from), it, v,
+                                         type_is_unsigned(from)), it);
+        }
+        fail(L, "this type expression", n);
+        return slot_void();
     case FE_N_EXPR:
         return lower_expr(L, n->a);
     default:
@@ -1064,6 +1106,51 @@ static void lower_for(Lower *L, FeNode *n)
     L->b = done;
 }
 
+/* `match` over a payload-free enum or an integer: compare the tag against each
+   arm's pattern in turn. The checker already proved the arms cover everything,
+   so falling off the end cannot happen in a program that compiled -- but the
+   generated code has to go somewhere, and going to the join is right. */
+static void lower_match(Lower *L, FeNode *n)
+{
+    FeType *t = n->a ? n->a->sem_type : 0;
+    FeIrType it = ir_type(t);
+    Slot subject = lower_expr(L, n->a);
+    unsigned value;
+    FeIrBlock *join;
+    FeNode *arm;
+    if (it == FE_IR_MEM) { fail(L, "a match over a payload", n); return; }
+    value = as_value(L, subject, n->a);
+    join = new_block(L);
+    for (arm = n->children; arm; arm = arm->next) {
+        FeIrBlock *body;
+        FeIrBlock *next;
+        unsigned want;
+        unsigned same;
+        FeVariantType *v;
+        if (arm->kind != FE_N_ARM) continue;
+        if (arm->text && !strcmp(arm->text, "_")) {
+            lower_stmt(L, arm->a);
+            fe_ir_jmp(L->b, join->id);
+            L->b = join;
+            return;
+        }
+        v = t && t->kind == FE_TYPE_ENUM && arm->text
+            ? fe_type_variant(t, arm->text) : 0;
+        want = fe_ir_const(L->m, L->b, it,
+                           v ? (long)v->tag : literal_value(arm));
+        same = fe_ir_binary(L->m, L->b, FE_IR_EQ, it, value, want, 1);
+        body = new_block(L);
+        next = new_block(L);
+        fe_ir_br(L->b, same, body->id, next->id);
+        L->b = body;
+        lower_stmt(L, arm->a);
+        fe_ir_jmp(L->b, join->id);
+        L->b = next;
+    }
+    fe_ir_jmp(L->b, join->id);
+    L->b = join;
+}
+
 static void lower_stmt(Lower *L, FeNode *n)
 {
     FeNode *x;
@@ -1122,6 +1209,9 @@ static void lower_stmt(Lower *L, FeNode *n)
         return;
     case FE_N_FOR:
         lower_for(L, n);
+        return;
+    case FE_N_MATCH:
+        lower_match(L, n);
         return;
     default:
         fail(L, "this statement", n);

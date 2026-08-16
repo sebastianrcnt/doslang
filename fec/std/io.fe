@@ -1,10 +1,25 @@
-unit io;
-pub enum Writer { Stdout, Stderr, File(u16), Null }
-pub enum Reader { Stdin, File(u16) }
-pub fn write(w: Writer, bytes: []u8) -> !usize;
-pub fn read(r: Reader, bytes: []mut u8) -> !usize;
-pub struct File {
-    handle: u16,
-    pub fn close(self: Self) -> !void;
-    pub fn drop(self: &mut Self) { }
+unit std.io;
+import std.sys;
+
+// A writer is a handle and nothing else: an integer the runtime understands.
+// It stores no reference and no context pointer, so it is Copy and can be
+// passed and returned freely (SPEC 5 R8).
+pub enum Writer { Null, Stdout, Stderr }
+
+pub fn write(w: Writer, bytes: []u8) -> usize {
+    if w == Writer.Null { return bytes.n; }
+    var handle: i32 = 1;
+    if w == Writer.Stderr { handle = 2; }
+    let done: i32 = sys.raw_write(handle, &bytes[0], bytes.n);
+    if done < 0 { return 0; }
+    return done as usize;
+}
+
+pub fn print(bytes: []u8) -> usize {
+    return write(Writer.Stdout, bytes);
+}
+
+pub fn println(bytes: []u8) -> usize {
+    let n: usize = write(Writer.Stdout, bytes);
+    return n + write(Writer.Stdout, "\n");
 }

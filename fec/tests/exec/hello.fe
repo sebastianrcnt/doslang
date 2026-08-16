@@ -1,0 +1,9 @@
+// EXIT:0
+// OUTPUT:hello from ferro
+unit hello;
+import std.io;
+
+fn main() -> i32 {
+    io.println("hello from ferro");
+    return 0;
+}

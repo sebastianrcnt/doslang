@@ -191,9 +191,9 @@ static FeNode *params(FeParser *p)
 static FeNode *fn_decl(FeParser *p, int pub, int external, int interrupt, int interrupt_safe)
 {
     FeToken t=p->current, name; FeNode *n;
-    (void)external; (void)interrupt; (void)interrupt_safe;
+    (void)interrupt; (void)interrupt_safe;
     want(p,FE_TOK_FN,"expected 'fn'"); if(!is_name(p)){error(p,"expected function name");return fe_node(p->ast,FE_N_ERROR_NODE,t.loc,"fn",2);}
-    name=p->current; n=toknode(p,FE_N_FN,t); if(pub) n->flags|=FE_NODE_PUB; n->text=fe_arena_strdup(&p->ast->arena,name.begin,name.length); next(p); n->a=params(p); if(eat(p,FE_TOK_ARROW)) n->b=type(p); if(eat(p,FE_TOK_SEMI)) return n; n->c=block(p); return n;
+    name=p->current; n=toknode(p,FE_N_FN,t); if(pub) n->flags|=FE_NODE_PUB; if(external) n->flags|=FE_NODE_EXTERN; n->text=fe_arena_strdup(&p->ast->arena,name.begin,name.length); next(p); n->a=params(p); if(eat(p,FE_TOK_ARROW)) n->b=type(p); if(eat(p,FE_TOK_SEMI)) return n; n->c=block(p); return n;
 }
 static FeNode *field(FeParser *p, int pub)
 {

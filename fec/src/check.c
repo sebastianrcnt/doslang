@@ -3515,6 +3515,16 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             borrow_left=flow_borrow_new(s,count);
             flow_own_capture(left,own_left,count);
             flow_borrow_capture(left,borrow_left,count);
+            /* A branch that always leaves contributes nothing to what follows.
+               Merging its state would make a value it consumed look consumed
+               afterwards, on a path that never ran it. */
+            if (m7_stmt_definitely_exits(n->b)) {
+                for (i=0;i<count;++i) left[i]=base[i];
+                if (own_left && own_base)
+                    for (i=0;i<count;++i) own_left[i]=own_base[i];
+                if (borrow_left && borrow_base)
+                    for (i=0;i<count;++i) borrow_left[i]=borrow_base[i];
+            }
             m7_restore_flow(base,own_base,borrow_base,count);
             if (n->c) check_stmt(s,n->c);
             if (n->c) {
@@ -3523,6 +3533,13 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
                 borrow_right=flow_borrow_new(s,count);
                 flow_own_capture(right,own_right,count);
                 flow_borrow_capture(right,borrow_right,count);
+                if (m7_stmt_definitely_exits(n->c)) {
+                    for (i=0;i<count;++i) right[i]=base[i];
+                    if (own_right && own_base)
+                        for (i=0;i<count;++i) own_right[i]=own_base[i];
+                    if (borrow_right && borrow_base)
+                        for (i=0;i<count;++i) borrow_right[i]=borrow_base[i];
+                }
             } else {
                 own_right=flow_own_new(s,count);
                 borrow_right=flow_borrow_new(s,count);
@@ -3698,7 +3715,10 @@ static FeScope *declare_unit_scope(FeCheck *c, FeCheckerState *s)
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_FN) {
             t=fe_type_intern(&c->types,"<fn>");
+            /* `extern "c"` means the linker already knows this name, so it is
+               not decorated with the unit it was declared in. */
             add_symbol(s,globals,n->text,t,n,0,1,
+                       (n->flags & FE_NODE_EXTERN) && n->text ? n->text :
                        unit_cname(c,n->text ? n->text : "fn"),n);
         }
     return globals;

@@ -80,7 +80,8 @@ def run_case(fec: Path, path: Path) -> tuple[bool, str]:
     want = expectation(path)
     # The grammar fixtures are not all well-typed; stop after parsing.
     mode = "--dump-ast" if path.parent.name == "parse" else "--check"
-    done = subprocess.run([str(fec), mode, str(path)],
+    done = subprocess.run([str(fec), mode, str(path),
+                           f"--std={ROOT / 'fec'}"],
                           capture_output=True, text=True, timeout=30)
     output = (done.stdout + done.stderr).strip()
     rejected = done.returncode != 0
