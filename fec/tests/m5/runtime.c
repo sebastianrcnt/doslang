@@ -7,7 +7,9 @@
 extern void *malloc(size_t size);
 extern void free(void *p);
 
-extern long fe_m5_runtime_run(long mode);
+/* `run` returns !i32, which lowers to { error, value }. */
+struct fe_result_value_9 { unsigned short e; long v; };
+extern struct fe_result_value_9 fe_m5_runtime_run(long mode);
 extern unsigned short fe_m5_runtime_conditional(unsigned char flag);
 extern unsigned short fe_m5_runtime_argument_cleanup(void);
 extern unsigned short fe_m5_runtime_owned_slice(unsigned long n);
@@ -64,9 +66,10 @@ void m5_free(void *p)
 
 int main(void)
 {
-    if (fe_m5_runtime_run(0) != 0) return 1;
-    if (fe_m5_runtime_run(1) != 9) return 2;
-    if (fe_m5_runtime_run(2) != 0) return 3;
+    struct fe_result_value_9 r;
+    r = fe_m5_runtime_run(0); if (r.e != 0 || r.v != 0) return 1;
+    r = fe_m5_runtime_run(1); if (r.e != 0 || r.v != 9) return 2;
+    r = fe_m5_runtime_run(2); if (r.e != 0 || r.v != 0) return 3;
     if (fe_m5_runtime_conditional(0) != 0) return 4;
     if (fe_m5_runtime_conditional(1) != 0) return 5;
     if (fe_m5_runtime_argument_cleanup() != 0) return 6;

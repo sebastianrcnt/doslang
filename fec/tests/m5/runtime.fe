@@ -2,7 +2,7 @@ unit m5_runtime;
 
 fn take(p: ^i32) -> void { mem.destroy(p); }
 
-pub fn run(mode: i32) -> i32 {
+pub fn run(mode: i32) -> !i32 {
     var p: ^i32 = try mem.create(0);
     defer { mem.destroy(p); }
     p.^ = 7;

@@ -595,6 +595,28 @@ static void m7_emit_call(FeEmitter *e, FeNode *n)
         emit_expr(e,n->children->next); fputc(')',e->out);
         return;
     }
+    if (n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+        n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+        strcmp(n->a->a->text,"mem")==0 && n->a->b && n->a->b->text &&
+        strcmp(n->a->b->text,"create")==0 && n->children) {
+        FeType *created=n->children->sem_type;
+        FeType *owned=fe_type_owned(&e->check->types,created);
+        FeType *result=fe_type_error_union(&e->check->types,owned);
+        fputs(result->alloc_cname ? result->alloc_cname : "fe_bad_alloc",e->out);
+        fputc('(',e->out); emit_expr(e,n->children); fputc(')',e->out);
+        return;
+    }
+    if (n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+        n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+        strcmp(n->a->a->text,"mem")==0 && n->a->b && n->a->b->text &&
+        strcmp(n->a->b->text,"alloc_slice")==0 && n->children &&
+        n->children->next) {
+        FeType *result=n->sem_type;
+        fputs(result && result->alloc_cname ? result->alloc_cname :
+              "fe_bad_slice_alloc",e->out);
+        fputc('(',e->out); emit_expr(e,n->children->next); fputc(')',e->out);
+        return;
+    }
     if (n->text && (strcmp(n->text,"@print")==0 ||
         strcmp(n->text,"@fprint")==0 || strcmp(n->text,"@sprint")==0)) {
         emit_m4_builtin(e,n);
