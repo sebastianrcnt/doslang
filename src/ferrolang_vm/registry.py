@@ -187,7 +187,22 @@ CASES: list[Case] = [
         "okstatic", "oktemp", "oktrim", "okwcall")],
 ]
 
-def all_cases(*, through: int = 6, only: int | None = None) -> list[Case]:
+MAX_MILESTONE: int = max(case.milestone for case in CASES)
+MILESTONES: tuple[str, ...] = tuple(f"m{number}"
+                                    for number in range(1, MAX_MILESTONE + 1))
+
+
+def milestone_number(name: str) -> int:
+    """Parse an ``mN`` selector against the milestones the registry knows about."""
+    if not name.startswith("m") or not name[1:].isdigit():
+        raise ValueError(f"invalid milestone: {name}")
+    value = int(name[1:])
+    if value not in range(1, MAX_MILESTONE + 1):
+        raise ValueError(f"unsupported milestone: {name}")
+    return value
+
+
+def all_cases(*, through: int = MAX_MILESTONE, only: int | None = None) -> list[Case]:
     if only is not None:
         return [case for case in CASES if case.milestone == only]
     return [case for case in CASES if case.milestone <= through]

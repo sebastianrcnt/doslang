@@ -6,23 +6,13 @@ import warnings
 import pytest
 
 from ferrolang_vm.dosboxx import SuiteRun, run_suite
-from ferrolang_vm.registry import all_cases
+from ferrolang_vm.registry import MAX_MILESTONE, all_cases, milestone_number
 from ferrolang_vm.suite import Case
-
-
-def _number(name: str) -> int:
-    if not name.startswith("m") or not name[1:].isdigit():
-        raise ValueError(f"invalid milestone: {name}")
-    value = int(name[1:])
-    if value not in range(1, 7):
-        raise ValueError(f"unsupported milestone: {name}")
-    return value
-
 
 ONLY = os.environ.get("FERRO_TEST_ONLY")
 CASES = all_cases(
-    through=_number(os.environ.get("FERRO_TEST_THROUGH", "m6")),
-    only=_number(ONLY) if ONLY else None,
+    through=milestone_number(os.environ.get("FERRO_TEST_THROUGH", f"m{MAX_MILESTONE}")),
+    only=milestone_number(ONLY) if ONLY else None,
 )
 
 

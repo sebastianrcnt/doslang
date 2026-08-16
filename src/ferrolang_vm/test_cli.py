@@ -7,9 +7,7 @@ import sys
 from pathlib import Path
 
 from .dosboxx import DosboxError, setup
-
-
-MILESTONES = tuple(f"m{number}" for number in range(1, 7))
+from .registry import MAX_MILESTONE, MILESTONES
 
 
 def main() -> int:
@@ -23,8 +21,9 @@ def main() -> int:
                          help="confirm acceptance of the Sybase Open Watcom Public License")
     run = commands.add_parser("run", help="build once and run milestone pytest cases")
     selection = run.add_mutually_exclusive_group()
-    selection.add_argument("--through", choices=MILESTONES, default="m6",
-                           help="run cumulatively through this milestone (default: m6)")
+    selection.add_argument("--through", choices=MILESTONES, default=f"m{MAX_MILESTONE}",
+                           help="run cumulatively through this milestone "
+                                f"(default: m{MAX_MILESTONE})")
     selection.add_argument("--only", choices=MILESTONES,
                            help="run only this milestone's cases")
     run.add_argument("-v", "--verbose", action="store_true", help="show every pytest case")
