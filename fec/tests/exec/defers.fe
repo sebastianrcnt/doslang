@@ -1,0 +1,22 @@
+// EXIT:21921
+// body(true):  defer 2 then defer 1  -> 2, 21
+// body(false): note(9) first        -> 219, 2192, 21921
+unit defers;
+
+var log: i32 = 0;
+
+fn note(v: i32) -> void { log = log * 10 + v; }
+
+fn body(early: bool) -> i32 {
+    defer { note(1); }
+    defer { note(2); }
+    if early { return 0; }
+    note(9);
+    return 0;
+}
+
+fn main() -> i32 {
+    body(true);
+    body(false);
+    return log;
+}

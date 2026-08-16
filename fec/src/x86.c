@@ -368,8 +368,18 @@ void fe_x86_emit(const FeIrModule *m, FILE *out)
         emit_string(m->unit_file, out);
     }
     for (g = m->globals; g; g = g->next) {
+        unsigned long i;
         fprintf(out, "public %s\n%s label byte\n", g->name, g->name);
-        fprintf(out, "        db      %lu dup(0)\n", g->size ? g->size : 1UL);
+        if (!g->init) {
+            fprintf(out, "        db      %lu dup(0)\n", g->size ? g->size : 1UL);
+            continue;
+        }
+        for (i = 0; i < g->size; ++i) {
+            if (i % 16 == 0) fputs("        db      ", out);
+            fprintf(out, "%u%s", g->init[i],
+                    (i + 1 == g->size || (i % 16) == 15) ? "\n" : ",");
+        }
+        if (!g->size) fputs("        db      0\n", out);
     }
     fputs("_DATA ends\n", out);
 

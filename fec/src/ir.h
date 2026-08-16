@@ -151,6 +151,13 @@ unsigned fe_ir_local(FeIrModule *m, FeIrFunc *f, FeIrType type,
                      unsigned long size, unsigned align, const char *name);
 unsigned fe_ir_temp(FeIrFunc *f);
 FeIrBlock *fe_ir_block(FeIrModule *m, FeIrFunc *f);
+/* Static storage. `init` is `size` bytes to place there, or null for zero. */
+FeIrGlobal *fe_ir_global(FeIrModule *m, const char *name, FeIrType type,
+                         unsigned long size, unsigned align,
+                         const unsigned char *init);
+/* A string literal's bytes, interned so the same text is stored once. */
+const char *fe_ir_string(FeIrModule *m, const char *bytes,
+                         unsigned long length);
 
 /* Places */
 FeIrPlace fe_ir_at_local(unsigned index, long offset);

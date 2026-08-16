@@ -1,5 +1,6 @@
 #include "ir.h"
 #include <string.h>
+#include <stdio.h>
 
 void fe_ir_module_init(FeIrModule *m)
 {
@@ -82,6 +83,50 @@ FeIrBlock *fe_ir_block(FeIrModule *m, FeIrFunc *f)
     else f->first = b;
     f->last = b;
     return b;
+}
+
+FeIrGlobal *fe_ir_global(FeIrModule *m, const char *name, FeIrType type,
+                         unsigned long size, unsigned align,
+                         const unsigned char *init)
+{
+    FeIrGlobal *g;
+    for (g = m->globals; g; g = g->next)
+        if (!strcmp(g->name, name)) return g;
+    g = (FeIrGlobal *)ir_alloc(m, sizeof(FeIrGlobal));
+    if (!g) return 0;
+    memset(g, 0, sizeof *g);
+    g->name = name;
+    g->type = type;
+    g->size = size;
+    g->align = align ? align : 1U;
+    g->init = init;
+    if (m->last_global) m->last_global->next = g;
+    else m->globals = g;
+    m->last_global = g;
+    return g;
+}
+
+const char *fe_ir_string(FeIrModule *m, const char *bytes, unsigned long length)
+{
+    FeIrGlobal *g;
+    unsigned char *copy;
+    char *name;
+    unsigned serial = 0;
+    /* The same text twice is the same storage: string literals are read-only,
+       so sharing them is free. */
+    for (g = m->globals; g; g = g->next) {
+        if (g->init && g->size == length &&
+            !memcmp(g->init, bytes, (size_t)length)) return g->name;
+        ++serial;
+    }
+    copy = (unsigned char *)ir_alloc(m, length ? length : 1UL);
+    if (!copy) return 0;
+    if (length) memcpy(copy, bytes, (size_t)length);
+    name = (char *)ir_alloc(m, 32);
+    if (!name) return 0;
+    sprintf(name, "FE_STR_%u", serial);
+    g = fe_ir_global(m, name, FE_IR_MEM, length, 1, copy);
+    return g ? g->name : 0;
 }
 
 FeIrPlace fe_ir_at_local(unsigned index, long offset)

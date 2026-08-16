@@ -62,6 +62,8 @@ static void lower_stmt(Lower *L, FeNode *n);
 static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
                        unsigned long size);
 static void lower_for(Lower *L, FeNode *n);
+static void lower_global(Lower *L, FeNode *n);
+static long literal_value(FeNode *n);
 static Slot wrap_context(Lower *L, Slot v, FeNode *n);
 static Slot lower_try(Lower *L, FeNode *n);
 static Slot lower_lazy(Lower *L, FeNode *n, int is_catch);
@@ -461,6 +463,26 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
     it = ir_type(t);
     switch (n->kind) {
     case FE_N_LITERAL:
+        if (n->text && n->text[0] == '"') {
+            /* The bytes live in the image; the value is a pointer to them and
+               how many there are. */
+            unsigned long len = strlen(n->text);
+            const char *label;
+            unsigned local;
+            unsigned p;
+            unsigned c;
+            if (len >= 2) len -= 2;
+            label = fe_ir_string(L->m, n->text + 1, len);
+            if (!label) { fail(L, "a string literal", n); return slot_void(); }
+            local = scratch(L, t, "text");
+            p = fe_ir_addr(L->m, L->b, fe_ir_at_global(label, 0));
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, SLICE_PTR_OFFSET), p,
+                        FE_IR_PTR);
+            c = fe_ir_const(L->m, L->b, FE_IR_I32, (long)len);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, SLICE_LEN_OFFSET), c,
+                        FE_IR_I32);
+            return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
+        }
         return slot_value(fe_ir_const(L->m, L->b,
                                       it == FE_IR_VOID ? FE_IR_I32 : it,
                                       literal_value(n)),
@@ -1069,6 +1091,26 @@ static void lower_stmt(Lower *L, FeNode *n)
 
 /* ------------------------------------------------------------ functions --- */
 
+/* A global is static storage. SPEC 7.1: its initializer is evaluated at
+   compile time, so what reaches here is either a constant to place in the
+   image or nothing, and the storage starts as zeroes. */
+static void lower_global(Lower *L, FeNode *n)
+{
+    FeType *t = n->sem_type;
+    unsigned char *init = 0;
+    unsigned long size = ir_size(t);
+    if (!n->cname) return;
+    if (n->b && n->b->kind == FE_N_LITERAL && size && size <= 8) {
+        long v = literal_value(n->b);
+        unsigned long i;
+        init = (unsigned char *)fe_arena_alloc(&L->m->arena, (size_t)size);
+        if (init)
+            for (i = 0; i < size; ++i)
+                init[i] = (unsigned char)((v >> (i * 8)) & 0xFF);
+    }
+    fe_ir_global(L->m, n->cname, ir_type(t), size, ir_align(t), init);
+}
+
 static void lower_fn(Lower *L, FeNode *fn)
 {
     FeNode *p;
@@ -1125,7 +1167,9 @@ int fe_lower_program(FeCheck *c, FeIrModule *out)
         c->types.unit_name = unit->name[0] ? unit->name : "unit";
         if (!out->unit_file || !out->unit_file[0]) out->unit_file = unit->path;
         for (n = unit->ast.root ? unit->ast.root->children : 0; n; n = n->next)
-            if (n->kind == FE_N_FN && n->c) {
+            if (n->kind == FE_N_GLOBAL || n->kind == FE_N_CONST)
+                lower_global(&L, n);
+            else if (n->kind == FE_N_FN && n->c) {
                 lower_fn(&L, n);
                 /* The entry unit is the one the build was rooted at. */
                 if (u == 0 && n->text && !strcmp(n->text, "main"))
