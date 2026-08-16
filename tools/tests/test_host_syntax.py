@@ -17,13 +17,14 @@ What it still cannot see is the DOS environment itself -- memory limits, the
 command line length, the filesystem. The DOS build and the milestone suite
 remain the gate.
 
-Skipped when the toolchain has not been downloaded, so the suite runs anywhere.
+It uses the pinned toolchain only. There is no environment override and no
+skip: a system-wide Watcom is a different version reporting different things,
+and a gate that quietly skips is not a gate.
 """
 from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -37,23 +38,20 @@ SOURCES = ("arena", "diag", "lexer", "ast", "parser", "types", "m7", "own",
            "check", "lower", "emit_c", "driver")
 
 
-def _watcom() -> Path | None:
-    """Prefer the toolchain the runner pins over anything installed system-wide."""
-    root = os.environ.get("WATCOM")
-    candidates = [ROOT / ".dosboxx" / "watcom"]
-    if root:
-        candidates.append(Path(root))
-    for base in candidates:
-        if (base / "binnt" / "wcl.exe").is_file():
-            return base
-    return None
-
-
 @pytest.fixture(scope="session")
 def watcom() -> Path:
-    base = _watcom()
-    if base is None:
-        pytest.skip("run `ferro-dos setup` to download the pinned toolchain")
+    """The pinned toolchain, and nothing else.
+
+    Deliberately no environment override and no skip. A system-wide Open Watcom
+    is a different version with different diagnostics, and a gate that skips is
+    a gate that is not running -- which is the failure mode this file exists to
+    close. dosboxx.py fails the same way when the toolchain is missing.
+    """
+    base = ROOT / ".dosboxx" / "watcom"
+    if not (base / "binnt" / "wcl.exe").is_file():
+        raise AssertionError(
+            f"the pinned Open Watcom is not at {base}; "
+            "run `uv run ferro-dos setup --accept-watcom-license`")
     return base
 
 

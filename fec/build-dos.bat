@@ -1,5 +1,5 @@
 @echo off
-rem Open Watcom C89 build. TEST-DOS.BAT runs this from C:\FEC.
+rem Open Watcom C89 build. The runner's generated RUN.BAT calls this from C:\FEC.
 C:
 cd \FEC
 if exist BUILD.OK del BUILD.OK

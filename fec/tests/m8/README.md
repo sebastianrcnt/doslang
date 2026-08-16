@@ -21,6 +21,6 @@ Fail cases:
 - `pubpriv`: a public signature cannot expose a private nominal type.
 - `errnom`: nominal error cannot flow into `core.Error` via `try`.
 
-The current M5 `TEST-DOS.BAT` is intentionally unchanged. M8 should add procedural checks for `.fei` creation/hash invalidation and deterministic `fe_errors.h` using these fixtures.
+They are not registered in `src/ferrolang_vm/registry.py` yet. M8 should add procedural checks for `.fei` creation/hash invalidation and deterministic `fe_errors.h` using these fixtures.
 
 The M8 DOS gate must additionally construct two separate `-I` roots containing the same canonical unit and require an ambiguity error; repeat the case with two paths to the same canonical file and require deduplication. It must also verify that `std.*` resolves only from the built-in std root, ordinary user units never do, and that changing a private non-generic implementation preserves the dependent interface-cache hit. Those checks need temporary roots/cache inspection and deliberately remain procedural rather than encoding host paths in fixtures.
