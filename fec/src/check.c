@@ -659,6 +659,7 @@ static void check_format_call(FeCheckerState *s, FeNode *n)
     unsigned offset=0;
     int verb;
     int bad=0;
+    int counted=0;
     if (strcmp(n->text,"@fprint")==0) offset=1;
     fmt_node=n->children;
     if (offset) {
@@ -693,7 +694,10 @@ static void check_format_call(FeCheckerState *s, FeNode *n)
             if (verb!=' ' && verb!='x' && verb!='c' && verb!='s' && verb!='b') {
                 err(s->c,n->loc,"unsupported format verb"); bad=1;
             }
-            if (!arg) { err(s->c,n->loc,"format argument count mismatch"); bad=1; }
+            if (!arg) {
+                err(s->c,n->loc,"format argument count mismatch");
+                bad=1; counted=1;
+            }
             else {
                 t=arg->sem_type;
                 if (verb==' ' && t && t->kind==FE_TYPE_ENUM && t->is_error) verb='s';
@@ -705,7 +709,9 @@ static void check_format_call(FeCheckerState *s, FeNode *n)
         if (fmt[i]=='}') { err(s->c,n->loc,"unmatched '}' in format"); bad=1; }
         ++i;
     }
-    if (count!=argc) { err(s->c,n->loc,"format argument count mismatch"); bad=1; }
+    /* Running out of arguments mid-string already said this. Saying it again
+       once the whole string has been walked adds nothing. */
+    if (count!=argc && !counted) { err(s->c,n->loc,"format argument count mismatch"); bad=1; }
     (void)bad;
 }
 
@@ -2730,8 +2736,13 @@ static void m7_check_storage(FeCheck *c, FeNode *decl)
     FeNode *m;
     if (!decl) return;
     if (decl->kind==FE_N_STRUCT || decl->kind==FE_N_ENUM) {
+        /* This pass exists for the shapes the other one cannot see, such as a
+           reference behind an optional. A plain `&T` field is seen by both, so
+           leave that one to check_reference_storage below. */
         for (m=decl->children;m;m=m->next)
-            if (m->kind==FE_N_FIELD && m7_ast_reference_storage(m->a))
+            if (m->kind==FE_N_FIELD && m7_ast_reference_storage(m->a) &&
+                !own_ast_reference_type(m->a) &&
+                !own_ast_pointer_to_reference(m->a))
                 err(c,m->loc,"reference type is not allowed in aggregate storage");
     }
     check_reference_storage(c,decl);
