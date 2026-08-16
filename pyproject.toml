@@ -1,0 +1,9 @@
+[project]
+name = "ferrolang"
+version = "0.1.0"
+description = "Ferro language compiler and QEMU development automation"
+requires-python = ">=3.12"
+dependencies = [
+    "onnxruntime>=1.28.0",
+    "rapidocr>=3.9.2",
+]

@@ -23,6 +23,11 @@
 .DS_Store
 Thumbs.db
 
+# Python/uv environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+
 # Node/tool caches
 node_modules/
 .npm/
