@@ -1,8 +1,0 @@
-unit ok_try_f;
-
-fn main() -> !void {
-    var raw: [4]u8 = [0, 0, 0, 0];
-    var buf: []mut u8 = raw[..];
-    let w: io.Writer = io.null_writer();
-    try @fprint(w, "ok");
-}

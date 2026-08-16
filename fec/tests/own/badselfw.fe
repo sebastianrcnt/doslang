@@ -1,0 +1,12 @@
+// ERROR:8:self
+unit badselfw;
+
+struct Box {
+    value: i32,
+
+    fn bad(self: Self) -> &i32 {
+        return &self.value;
+    }
+}
+
+

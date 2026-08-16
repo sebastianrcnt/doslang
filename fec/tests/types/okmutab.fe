@@ -1,0 +1,12 @@
+unit okmutab;
+
+fn takes_shared(s: []u8) -> u8 { return s[0]; }
+
+fn main() -> i32 {
+    var raw: [3]u8 = [1, 2, 3];
+    var s: []mut u8 = raw[..];
+    s[1] = 9;
+    if takes_shared(s) == 1 and raw[1] == 9 { return 0; }
+    return 1;
+}
+

@@ -1,0 +1,7 @@
+unit badstrg;
+fn main() -> i32 {
+    var text: str = "abc";
+    text[0] = 'z';
+    return 0;
+}
+

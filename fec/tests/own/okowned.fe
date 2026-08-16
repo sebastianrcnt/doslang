@@ -1,0 +1,10 @@
+unit okowned;
+
+fn main() -> !void {
+    var p: ^i32 = try mem.create(0);
+    p = try mem.create(0);
+    p.^ = 7;
+    let value: i32 = p.^;
+    defer { mem.destroy(p); }
+}
+

@@ -1,0 +1,8 @@
+// ERROR:6:duplicate
+unit badenam;
+
+error E {
+    One = 1,
+    One = 2,
+}
+

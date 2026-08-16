@@ -1,0 +1,16 @@
+unit oktry2;
+
+error E {
+    Bad = 1,
+}
+
+fn leaf(ok: bool) -> E!i32 {
+    if ok { return 7; }
+    return E.Bad;
+}
+
+fn top() -> E!i32 {
+    return try leaf(true);
+}
+
+

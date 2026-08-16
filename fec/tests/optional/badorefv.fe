@@ -1,0 +1,8 @@
+// ERROR:5:reference
+unit badorefv;
+
+struct Bad {
+    value: ?&i32,
+}
+
+

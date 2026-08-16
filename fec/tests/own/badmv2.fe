@@ -1,0 +1,11 @@
+// ERROR:8:borrow
+unit badmv2;
+
+fn take(p: ^i32) -> void { mem.destroy(p); }
+
+fn bad(p: ^i32) -> void {
+    let r = &p;
+    take(p);
+    let q = r;
+}
+

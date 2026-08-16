@@ -1,0 +1,11 @@
+unit okproj1;
+
+struct Node {
+    value: i32,
+}
+
+fn touch(p: ?&mut Node) -> void {
+    p.?.value = 7;
+}
+
+

@@ -1,0 +1,12 @@
+unit baddrop;
+
+struct Box {
+    value: i32,
+    fn drop(self: &mut Self) { self.value = 0; }
+}
+
+fn bad() -> void {
+    var b: Box = Box{ value: 1 };
+    b.drop();
+}
+

@@ -1,0 +1,7 @@
+unit badfverb;
+
+fn main() -> i32 {
+    @print("{q}", 1);
+    return 0;
+}
+

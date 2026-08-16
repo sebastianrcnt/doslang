@@ -1,0 +1,14 @@
+unit okptvw;
+
+struct Node { value: i32, }
+
+fn keep(p: ?^Node) -> void {
+    var slot = p;
+    if let Some(node) = slot {
+        let value = node.value;
+    }
+    let owned = mem.replace(&mut slot, null).?;
+    mem.destroy(owned);
+}
+
+

@@ -1,5 +1,0 @@
-unit bad_shwr;
-
-fn bad(s: []u8) -> void {
-    s[0] = 1;
-}

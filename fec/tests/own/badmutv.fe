@@ -1,0 +1,12 @@
+// ERROR:7:borrow
+unit badmutv;
+
+fn bad() -> i32 {
+    var x: i32 = 0;
+    let r = &mut x;
+    x = 1;
+    r.^ = 2;
+    return x;
+}
+
+

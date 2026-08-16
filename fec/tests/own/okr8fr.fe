@@ -1,0 +1,15 @@
+unit okr8fr;
+
+fn head(s: []u8) -> &u8 {
+    return &s[0];
+}
+
+fn test() -> u8 {
+    var a: [2]u8 = [1 as u8, 2 as u8];
+    let r = head(a[..]);
+    let v = r.^;
+    a[0] = 7 as u8;
+    return v;
+}
+
+

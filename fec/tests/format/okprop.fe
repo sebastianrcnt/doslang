@@ -1,0 +1,6 @@
+unit okprop;
+
+pub fn propagate(w: io.Writer) -> !void {
+    try @fprint(w, "a{}b", 1);
+}
+

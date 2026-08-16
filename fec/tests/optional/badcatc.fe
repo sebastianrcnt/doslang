@@ -1,0 +1,18 @@
+// ERROR:13:catch
+unit badcatc;
+
+error E {
+    Bad = 1,
+}
+
+fn leaf() -> E!i32 {
+    return E.Bad;
+}
+
+fn bad() -> i32 {
+    let v = leaf() catch |e| {
+        let ignored: i32 = 1;
+    };
+    return v;
+}
+

@@ -1,0 +1,7 @@
+unit badcast;
+
+fn main() -> i32 {
+    let x: i32 = true as i32;
+    return x;
+}
+

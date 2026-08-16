@@ -1,0 +1,7 @@
+unit baddbl;
+
+fn bad(p: ^i32) -> void {
+    mem.destroy(p);
+    mem.destroy(p);
+}
+

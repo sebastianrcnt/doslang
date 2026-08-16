@@ -1,8 +1,0 @@
-unit okcatmov;
-
-error E { Bad = 1, }
-struct Node { value: i32, }
-
-fn recover(result: E!^Node, fallback: ^Node) -> ^Node {
-    return result catch fallback;
-}

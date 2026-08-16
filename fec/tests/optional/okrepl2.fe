@@ -1,0 +1,13 @@
+unit okrepl2;
+
+struct Node {
+    value: i32,
+}
+
+fn take(p: ?^Node) -> void {
+    var q: ?^Node = p;
+    let n = mem.replace(&mut q, null).?;
+    mem.destroy(n);
+}
+
+

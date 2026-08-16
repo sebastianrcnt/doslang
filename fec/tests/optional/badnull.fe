@@ -1,6 +1,0 @@
-// ERROR:5:null
-unit badnull;
-
-fn bad() -> void {
-    let p = null;
-}

@@ -1,9 +1,0 @@
-// ERROR:6:move
-unit badloop;
-
-fn bad(p: ^i32, again: bool) -> void {
-    while again {
-        mem.destroy(p);
-    }
-    mem.destroy(p);
-}

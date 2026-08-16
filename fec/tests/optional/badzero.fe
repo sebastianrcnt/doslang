@@ -1,6 +1,0 @@
-// ERROR:5:0
-unit badzero;
-
-error E {
-    Zero = 0,
-}

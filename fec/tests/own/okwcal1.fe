@@ -1,0 +1,13 @@
+unit okwcal1;
+
+fn read(r: &i32) -> i32 { return r.^; }
+
+fn test() -> i32 {
+    var x: i32 = 5;
+    let m = &mut x;
+    let value = read(m);
+    m.^ = value + 1;
+    return m.^;
+}
+
+

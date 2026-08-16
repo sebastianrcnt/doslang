@@ -1,9 +1,0 @@
-unit bad_type;
-
-struct Point { x: i32, }
-
-fn main() -> i32 {
-    let p: Point = Point{ x: 1 };
-    @print("{}", p);
-    return 0;
-}

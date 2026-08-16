@@ -1,0 +1,6 @@
+unit okdefer1;
+
+pub fn cleanup(p: ^i32) -> void {
+    defer { mem.destroy(p); }
+}
+

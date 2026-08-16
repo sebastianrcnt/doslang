@@ -1,6 +1,0 @@
-unit bad_mlet;
-
-fn bad() -> void {
-    var raw: [2]u8 = [1, 2];
-    let s: []mut u8 = raw[..];
-}

@@ -1,0 +1,6 @@
+unit badshwr;
+
+fn bad(s: []u8) -> void {
+    s[0] = 1;
+}
+

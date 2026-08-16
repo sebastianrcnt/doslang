@@ -1,5 +1,0 @@
-unit oktrim;
-
-fn trimmed(line: str) -> str {
-    return line.trim();
-}

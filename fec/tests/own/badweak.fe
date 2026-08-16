@@ -1,9 +1,0 @@
-// ERROR:7:mut
-unit badweak;
-
-fn bad() -> void {
-    var x: i32 = 0;
-    let m = &mut x;
-    let s: &i32 = m;
-    let v = s.^;
-}

@@ -1,0 +1,11 @@
+unit oklast1;
+
+fn test() -> i32 {
+    var x: i32 = 0;
+    let r = &mut x;
+    r.^ = 1;
+    x += 1;
+    return x;
+}
+
+

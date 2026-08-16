@@ -1,8 +1,0 @@
-unit okmatch;
-
-fn value(p: ?i32) -> i32 {
-    match p {
-        Some(v) => { return v; }
-        None => { return 0; }
-    }
-}

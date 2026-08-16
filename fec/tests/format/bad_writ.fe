@@ -1,7 +1,0 @@
-unit bad_writ;
-
-fn main() -> i32 {
-    var x: i32 = 0;
-    @fprint(x, "bad");
-    return 0;
-}

@@ -1,0 +1,7 @@
+unit badftry;
+
+fn main() -> i32 {
+    try @print("nope");
+    return 0;
+}
+

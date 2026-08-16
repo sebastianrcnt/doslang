@@ -1,7 +1,0 @@
-unit bad_run;
-
-fn main() -> i32 {
-    var fmt: str = "{}";
-    @print(fmt, 1);
-    return 0;
-}

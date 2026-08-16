@@ -1,7 +1,0 @@
-// ERROR:6:duplicate
-unit badernam;
-
-error E {
-    One = 1,
-    One = 2,
-}
