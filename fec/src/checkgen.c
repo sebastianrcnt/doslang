@@ -358,6 +358,16 @@ FeType *type_from_expr(FeCheckerState *s, FeNode *n, int *ok)
         if (t && t->kind!=FE_TYPE_UNKNOWN) { *ok=1; return t; }
         return unknown(c);
     }
+    /* `binding.Name` names a type in another unit. */
+    if (n->kind==FE_N_MEMBER && n->a && n->a->kind==FE_N_IDENT &&
+        n->b && n->b->text) {
+        FeUnit *bound=binding_unit(s,n->a);
+        if (bound) {
+            FeType *there=unit_type(c,bound,n->b->text);
+            if (there) { *ok=1; return there; }
+        }
+        return unknown(c);
+    }
     if (n->kind==FE_N_CALL && n->a &&
         (n->a->kind==FE_N_IDENT ||
          (n->a->kind==FE_N_MEMBER && n->a->a &&

@@ -504,6 +504,16 @@ void check_method(FeCheck *c, FeNode *fn, FeScope *globals,
     FeCheckerState s;
     FeNode *x;
     FeType *t;
+    FeBindSave self_save;
+    /* `Self` names the type a method belongs to, wherever it appears -- in a
+       signature, and in `Self{ .. }`. Binding it as a type makes both work the
+       same way, and the same way a generic instance already worked. */
+    self_save.count=c->types.param_count;
+    {
+        unsigned i;
+        for(i=0;i<FE_TYPE_PARAM_MAX;++i) self_save.params[i]=c->types.params[i];
+    }
+    bind_self(c,owner);
     s.c=c;
     s.globals=globals;
     s.scope=scope_new(&s,globals);
@@ -521,6 +531,7 @@ void check_method(FeCheck *c, FeNode *fn, FeScope *globals,
                    local_cname(c,x->text ? x->text : "arg"),x);
     }
     if(fn->c) check_stmt(&s,fn->c);
+    pop_bindings(c,&self_save);
 }
 
 int m7_actual_compatible(FeType *want, FeType *got, FeNode *value)

@@ -1,13 +1,60 @@
-unit mem;
+unit std.mem;
+import std.sys;
 
-pub fn create(value: T) -> !^T;
-pub fn destroy(p: *void);
-pub fn alloc_slice(T: type, n: usize) -> !^[]T;
-pub fn replace(dst: &mut T, value: T) -> T;
-pub fn copy(dst: []mut u8, src: []u8);
+// `create`, `destroy`, `alloc_slice` and `replace` are compiler intrinsics:
+// they need to know the type they are handed, which no signature can say.
+// What is written here is what can be written in Ferro.
+
+/// A block of storage handed out in pieces, released all at once.
+///
+/// SPEC R11 answers recursive and graph-shaped data with an arena that owns
+/// the values and integer handles that reference them. This is that arena. A
+/// handle is an offset, so it stays valid while the arena does, and comparing
+/// two handles is comparing two numbers.
 pub struct Arena {
-    ptr: *void,
-    pub fn init() -> Arena { return Arena{ ptr: null }; }
-    pub fn reset(self: &mut Self) { }
-    pub fn drop(self: &mut Self) { }
+    bytes: ^[]mut u8,
+    used: usize,
+
+    pub fn with_capacity(n: usize) -> !Self {
+        let room: ^[]mut u8 = try mem.alloc_slice(u8, n);
+        return Self{ bytes: room, used: 0 };
+    }
+
+    pub fn size(self: &Self) -> usize { return self.used; }
+
+    pub fn room(self: &Self) -> usize { return self.bytes.^.n; }
+
+    /// Reserve `n` bytes aligned to `align` and give back where they start.
+    /// Failure is running out of room, which the caller decides what to do
+    /// about; the arena never grows behind your back, because a handle that
+    /// moved would no longer mean anything.
+    pub fn alloc(self: &mut Self, n: usize, align: usize) -> !usize {
+        var at: usize = self.used;
+        if align > 1 {
+            let over: usize = at % align;
+            if over != 0 { at = at + align - over; }
+        }
+        if at + n > self.bytes.^.n { return error.ArenaFull; }
+        self.used = at + n;
+        return at;
+    }
+
+    /// One byte at a handle. Reading and writing go through here so that a
+    /// handle can be checked once, in one place.
+    pub fn at(self: &Self, handle: usize) -> !u8 {
+        if handle >= self.used { return error.BadHandle; }
+        return self.bytes.^[handle];
+    }
+
+    pub fn put(self: &mut Self, handle: usize, value: u8) -> !void {
+        if handle >= self.used { return error.BadHandle; }
+        self.bytes.^[handle] = value;
+        return;
+    }
+
+    /// Forget everything handed out so far. Every handle from before is stale;
+    /// that is the trade an arena makes.
+    pub fn reset(self: &mut Self) -> void { self.used = 0; }
+
+    pub fn drop(self: &mut Self) -> void { mem.destroy(self.bytes); }
 }

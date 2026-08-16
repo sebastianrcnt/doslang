@@ -1,0 +1,39 @@
+// EXIT:0
+// OUTPUT:handles 0 4 8
+// OUTPUT:value 65
+// OUTPUT:full
+// OUTPUT:reset 0
+// OUTPUT:balanced
+unit arena;
+import std.io;
+import std.mem;
+import std.sys;
+
+// SPEC R11: recursive and graph-shaped data is answered by an arena that owns
+// the values and integer handles that point into it. This is that shape.
+
+fn run() -> !void {
+    var a: mem.Arena = try mem.Arena.with_capacity(16);
+    let first: usize = try a.alloc(4, 4);
+    let second: usize = try a.alloc(4, 4);
+    let third: usize = try a.alloc(4, 4);
+    @print("handles {} {} {}\n", first, second, third);
+    try a.put(first, 65);
+    let got: u8 = try a.at(first);
+    @print("value {}\n", got);
+    let over: usize = a.alloc(64, 1) catch |e| {
+        @print("full\n");
+        a.reset();
+        @print("reset {}\n", a.size());
+        return;
+    };
+    @print("unexpected room {}\n", over);
+    return;
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() != sys.frees() { @print("leaked\n"); return 2; }
+    @print("balanced\n");
+    return 0;
+}

@@ -515,6 +515,12 @@ void lower_global(Lower *L, FeNode *n)
     fe_ir_global(L->m, n->cname, ir_type(t), size, ir_align(t), init);
 }
 
+/* A declaration with type parameters is a pattern, not code. */
+int struct_is_generic(const FeNode *decl)
+{
+    return decl && decl->a && decl->a->children != 0;
+}
+
 int fn_is_generic(const FeNode *fn)
 {
     FeNode *p;
@@ -594,6 +600,13 @@ int fe_lower_program(FeCheck *c, FeIrModule *out)
         for (n = unit->ast.root ? unit->ast.root->children : 0; n; n = n->next)
             if (n->kind == FE_N_GLOBAL || n->kind == FE_N_CONST)
                 lower_global(&L, n);
+            else if (n->kind == FE_N_STRUCT && !struct_is_generic(n)) {
+                /* A method is a function whose first parameter is the value it
+                   was reached through; the storage is the same either way. */
+                FeNode *m;
+                for (m = n->children; m; m = m->next)
+                    if (m->kind == FE_N_FN && m->c) lower_fn(&L, m);
+            }
             else if (n->kind == FE_N_FN && !n->c) {
                 /* A declaration with no body is something the linker will
                    find: the runtime, or a C library. */
