@@ -1,0 +1,30 @@
+name: Apply PR A payload
+
+on:
+  push:
+    branches:
+      - agent/freeze-m6-m9-semantics
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/freeze-m6-m9-semantics
+      - name: Apply semantic freeze payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .pr-a/payload.* | base64 -d | tar -xzf - -C .
+          rm -rf .pr-a
+          rm -f .github/workflows/apply-pr-a.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "freeze M6-M9 semantics"
+          git push origin HEAD:agent/freeze-m6-m9-semantics
