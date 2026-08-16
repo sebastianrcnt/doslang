@@ -144,9 +144,10 @@ unsigned fe_ir_load(FeIrModule *m, FeIrBlock *b, FeIrType t, FeIrPlace p)
     return result(m, b, v);
 }
 
-void fe_ir_store(FeIrModule *m, FeIrBlock *b, FeIrPlace p, unsigned value)
+void fe_ir_store(FeIrModule *m, FeIrBlock *b, FeIrPlace p, unsigned value,
+                 FeIrType t)
 {
-    FeIrValue *v = emit(m, b, FE_IR_STORE, FE_IR_VOID);
+    FeIrValue *v = emit(m, b, FE_IR_STORE, t);
     if (!v) return;
     v->place = p;
     v->a = value;

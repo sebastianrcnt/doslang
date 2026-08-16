@@ -17,6 +17,9 @@
 typedef struct LowerVar {
     const char *cname;
     unsigned local;
+    /* An aggregate parameter arrives as an address, so the slot holds a
+       pointer and the value is one dereference away. */
+    int by_address;
 } LowerVar;
 
 typedef struct Lower {
@@ -45,6 +48,8 @@ typedef struct Slot {
 
 static Slot lower_expr(Lower *L, FeNode *n);
 static void lower_stmt(Lower *L, FeNode *n);
+static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
+                       unsigned long size);
 
 static void fail(Lower *L, const char *why, FeNode *n)
 {
@@ -163,20 +168,19 @@ static unsigned declare_var(Lower *L, const char *cname, const FeType *t,
     if (L->var_count < LOWER_MAX_LOCALS) {
         L->vars[L->var_count].cname = cname;
         L->vars[L->var_count].local = local;
+        L->vars[L->var_count].by_address = 0;
         ++L->var_count;
     }
     return local;
 }
 
-static int find_var(Lower *L, const char *cname, unsigned *out)
+static LowerVar *find_var(Lower *L, const char *cname)
 {
     unsigned i;
     if (!cname) return 0;
     for (i = L->var_count; i > 0; --i)
-        if (L->vars[i - 1].cname && strcmp(L->vars[i - 1].cname, cname) == 0) {
-            *out = L->vars[i - 1].local;
-            return 1;
-        }
+        if (L->vars[i - 1].cname && strcmp(L->vars[i - 1].cname, cname) == 0)
+            return &L->vars[i - 1];
     return 0;
 }
 
@@ -185,6 +189,50 @@ static int find_var(Lower *L, const char *cname, unsigned *out)
 static FeIrBlock *new_block(Lower *L)
 {
     return fe_ir_block(L->m, L->fn);
+}
+
+/* A check that must hold. `ok` is a condition; when it is false the program
+   stops where it is. `--no-checks` removes the comparison and the branch, not
+   just the message, which is the whole point of the flag. */
+static void guard(Lower *L, unsigned ok, FeIrTrap reason, unsigned long line)
+{
+    FeIrBlock *bad = new_block(L);
+    FeIrBlock *cont = new_block(L);
+    fe_ir_br(L->b, ok, cont->id, bad->id);
+    L->b = bad;
+    fe_ir_trap(L->b, reason, line);
+    L->b = cont;
+}
+
+/* Somewhere to build an aggregate that has no home of its own yet. */
+static unsigned scratch(Lower *L, const FeType *t, const char *why)
+{
+    return fe_ir_local(L->m, L->fn, ir_type(t), ir_size(t), ir_align(t), why);
+}
+
+/* A slice is a pointer and a length, in that order. Both the compiler and the
+   runtime read it this way, so the offsets live here and nowhere else. */
+#define SLICE_PTR_OFFSET 0L
+#define SLICE_LEN_OFFSET 4L
+
+/* The number of elements an indexable place holds, and where the first element
+   is. An array is its own storage; a slice points at someone else's. */
+static void indexable_parts(Lower *L, Slot base, const FeType *t,
+                            unsigned *data, unsigned *length, FeNode *n)
+{
+    if (t && t->kind == FE_TYPE_ARRAY) {
+        *data = as_address(L, base, n);
+        *length = fe_ir_const(L->m, L->b, FE_IR_I32, (long)t->length);
+        return;
+    }
+    if (!base.is_place) { fail(L, "a slice with no place", n); *data = 0; *length = 0; return; }
+    *data = fe_ir_load(L->m, L->b, FE_IR_PTR,
+                       fe_ir_at_temp(as_address(L, base, n), SLICE_PTR_OFFSET));
+    {
+        FeIrPlace lp = base.place;
+        lp.offset += SLICE_LEN_OFFSET;
+        *length = fe_ir_load(L->m, L->b, FE_IR_I32, lp);
+    }
 }
 
 /* ---------------------------------------------------------- expressions --- */
@@ -268,12 +316,12 @@ static Slot lower_logical(Lower *L, FeNode *n, int is_and)
     unsigned right;
     L->b = entry;
     left = as_value(L, lower_expr(L, n->a), n->a);
-    fe_ir_store(L->m, L->b, fe_ir_at_local(result, 0), left);
+    fe_ir_store(L->m, L->b, fe_ir_at_local(result, 0), left, FE_IR_I8);
     if (is_and) fe_ir_br(L->b, left, rhs->id, join->id);
     else fe_ir_br(L->b, left, join->id, rhs->id);
     L->b = rhs;
     right = as_value(L, lower_expr(L, n->b), n->b);
-    fe_ir_store(L->m, L->b, fe_ir_at_local(result, 0), right);
+    fe_ir_store(L->m, L->b, fe_ir_at_local(result, 0), right, FE_IR_I8);
     fe_ir_jmp(L->b, join->id);
     L->b = join;
     return slot_place(fe_ir_at_local(result, 0), FE_IR_I8, 1);
@@ -329,9 +377,15 @@ static Slot lower_expr(Lower *L, FeNode *n)
                                       literal_value(n)),
                           it == FE_IR_VOID ? FE_IR_I32 : it);
     case FE_N_IDENT: {
-        unsigned local;
-        if (find_var(L, n->cname, &local))
-            return slot_place(fe_ir_at_local(local, 0), it, ir_size(t));
+        LowerVar *var = find_var(L, n->cname);
+        if (var) {
+            if (var->by_address) {
+                unsigned p = fe_ir_load(L->m, L->b, FE_IR_PTR,
+                                        fe_ir_at_local(var->local, 0));
+                return slot_place(fe_ir_at_temp(p, 0), it, ir_size(t));
+            }
+            return slot_place(fe_ir_at_local(var->local, 0), it, ir_size(t));
+        }
         if (n->cname)
             return slot_place(fe_ir_at_global(n->cname, 0), it, ir_size(t));
         fail(L, "an unresolved name", n);
@@ -380,6 +434,19 @@ static Slot lower_expr(Lower *L, FeNode *n)
             unsigned p = as_value(L, lower_expr(L, n->a), n->a);
             return slot_place(fe_ir_at_temp(p, 0), it, ir_size(t));
         }
+        /* `.n` is how many elements there are, which an array knows at
+           compile time and a slice carries beside its pointer. */
+        if (n->b && n->b->text && !strcmp(n->b->text, "n")) {
+            FeType *bt = n->a ? n->a->sem_type : 0;
+            Slot base;
+            if (bt && bt->kind == FE_TYPE_ARRAY)
+                return slot_value(fe_ir_const(L->m, L->b, FE_IR_I32,
+                                              (long)bt->length), FE_IR_I32);
+            base = lower_expr(L, n->a);
+            if (!base.is_place) { fail(L, "a length of a temporary", n); return slot_void(); }
+            base.place.offset += SLICE_LEN_OFFSET;
+            return slot_place(base.place, FE_IR_I32, 4);
+        }
         /* A field is a constant offset from the base. */
         {
             FeType *base = n->a ? n->a->sem_type : 0;
@@ -400,6 +467,58 @@ static Slot lower_expr(Lower *L, FeNode *n)
             b.place.offset += (long)field->offset;
             return slot_place(b.place, it, ir_size(t));
         }
+    case FE_N_INDEX: {
+        FeType *bt = n->a ? n->a->sem_type : 0;
+        FeType *elem = bt ? bt->elem : 0;
+        Slot base;
+        unsigned data;
+        unsigned length;
+        unsigned index;
+        unsigned scale;
+        unsigned offset;
+        unsigned addr;
+        if (n->c || !n->b) { fail(L, "a slice expression", n); return slot_void(); }
+        base = lower_expr(L, n->a);
+        indexable_parts(L, base, bt, &data, &length, n);
+        index = as_value(L, lower_expr(L, n->b), n->b);
+        if (!L->c->no_checks) {
+            unsigned ok = fe_ir_binary(L->m, L->b, FE_IR_LT, FE_IR_I32,
+                                       index, length, 1);
+            guard(L, ok, FE_TRAP_BOUNDS, n->loc.line);
+        }
+        scale = fe_ir_const(L->m, L->b, FE_IR_I32, (long)ir_size(elem));
+        offset = fe_ir_binary(L->m, L->b, FE_IR_MUL, FE_IR_I32, index, scale, 1);
+        addr = fe_ir_binary(L->m, L->b, FE_IR_ADD, FE_IR_PTR, data, offset, 1);
+        return slot_place(fe_ir_at_temp(addr, 0), ir_type(elem), ir_size(elem));
+    }
+    case FE_N_ARRAY_INIT: {
+        unsigned local = scratch(L, t, "array");
+        FeType *elem = t ? t->elem : 0;
+        unsigned long step = ir_size(elem);
+        long at = 0;
+        FeNode *x;
+        for (x = n->children; x; x = x->next) {
+            Slot v = lower_expr(L, x);
+            store_into(L, fe_ir_at_local(local, at), v, x, step);
+            at += (long)step;
+        }
+        return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
+    }
+    case FE_N_STRUCT_INIT: {
+        unsigned local = scratch(L, t, "struct");
+        FeNode *f;
+        for (f = n->children; f; f = f->next) {
+            FeFieldType *field;
+            Slot v;
+            if (f->kind != FE_N_FIELD) continue;
+            field = fe_type_field(t, f->text);
+            if (!field) { fail(L, "an unresolved field", f); return slot_void(); }
+            v = lower_expr(L, f->a);
+            store_into(L, fe_ir_at_local(local, (long)field->offset), v, f,
+                       ir_size(field->type));
+        }
+        return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(t));
+    }
     case FE_N_CALL:
         return lower_call(L, n);
     case FE_N_EXPR:
@@ -420,7 +539,7 @@ static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
         fe_ir_copy(L->m, L->b, dst, value.place, size);
         return;
     }
-    fe_ir_store(L->m, L->b, dst, as_value(L, value, n));
+    fe_ir_store(L->m, L->b, dst, as_value(L, value, n), value.type);
 }
 
 static void lower_return(Lower *L, FeNode *n)
@@ -429,8 +548,9 @@ static void lower_return(Lower *L, FeNode *n)
     if (!n->a) { fe_ir_ret(L->b, 0, 0); return; }
     v = lower_expr(L, n->a);
     if (L->fn->returns_by_address) {
-        store_into(L, fe_ir_at_temp(L->ret_local, 0), v, n,
-                   ir_size(L->ret_type));
+        unsigned dst = fe_ir_load(L->m, L->b, FE_IR_PTR,
+                                  fe_ir_at_local(L->ret_local, 0));
+        store_into(L, fe_ir_at_temp(dst, 0), v, n, ir_size(L->ret_type));
         fe_ir_ret(L->b, 0, 0);
         return;
     }
@@ -550,13 +670,15 @@ static void lower_fn(Lower *L, FeNode *fn)
     for (p = fn->a ? fn->a->children : 0; p; p = p->next) {
         FeType *pt = fe_type_from_ast(&L->c->types, p->a);
         /* An aggregate parameter arrives as an address. */
-        unsigned local = ir_type(pt) == FE_IR_MEM
+        int by_address = ir_type(pt) == FE_IR_MEM;
+        unsigned local = by_address
             ? fe_ir_local(L->m, f, FE_IR_PTR, 4, 4, p->text)
             : fe_ir_local(L->m, f, ir_type(pt), ir_size(pt), ir_align(pt),
                           p->text);
         if (L->var_count < LOWER_MAX_LOCALS) {
             L->vars[L->var_count].cname = p->cname;
             L->vars[L->var_count].local = local;
+            L->vars[L->var_count].by_address = by_address;
             ++L->var_count;
         }
     }

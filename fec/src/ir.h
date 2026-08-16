@@ -160,7 +160,10 @@ FeIrPlace fe_ir_at_temp(unsigned temp, long offset);
 /* Instructions. Each returns the destination temporary where there is one. */
 unsigned fe_ir_const(FeIrModule *m, FeIrBlock *b, FeIrType t, long v);
 unsigned fe_ir_load(FeIrModule *m, FeIrBlock *b, FeIrType t, FeIrPlace p);
-void     fe_ir_store(FeIrModule *m, FeIrBlock *b, FeIrPlace p, unsigned v);
+/* `t` is how wide the write is. Without it a one-byte value would be stored
+   four bytes wide and take its neighbours with it. */
+void     fe_ir_store(FeIrModule *m, FeIrBlock *b, FeIrPlace p, unsigned v,
+                     FeIrType t);
 unsigned fe_ir_addr(FeIrModule *m, FeIrBlock *b, FeIrPlace p);
 unsigned fe_ir_binary(FeIrModule *m, FeIrBlock *b, FeIrOp op, FeIrType t,
                       unsigned a, unsigned c, int is_unsigned);

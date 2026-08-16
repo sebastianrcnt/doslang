@@ -1,0 +1,12 @@
+// EXIT:10
+unit arith;
+
+fn main() -> i32 {
+    let a: i32 = 7;
+    let b: i32 = 6;
+    var r: i32 = a * b;
+    r = r - 2;
+    r = r / 4;
+    if r == 10 { return r; }
+    return 99;
+}

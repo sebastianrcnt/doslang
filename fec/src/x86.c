@@ -204,9 +204,8 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
         load_place_base(fr, &v->place, out);
         place_addr(fr, &v->place, addr);
         load_temp(fr, v->a, "eax", out);
-        fprintf(out, "        mov     %s %s, %s\n", word_of(v->type == FE_IR_VOID
-                    ? FE_IR_I32 : v->type), addr, reg_of(v->type == FE_IR_VOID
-                    ? FE_IR_I32 : v->type, 0));
+        fprintf(out, "        mov     %s %s, %s\n", word_of(v->type), addr,
+                reg_of(v->type, 0));
         break;
     case FE_IR_ADDR:
         load_place_base(fr, &v->place, out);

@@ -1,0 +1,12 @@
+// EXIT:1
+unit logic;
+
+fn side(v: i32) -> bool { return v > 0; }
+
+fn main() -> i32 {
+    let a: bool = true and side(1);
+    let b: bool = false or side(2);
+    let c: bool = not side(0);
+    if a and b and c { return 1; }
+    return 0;
+}
