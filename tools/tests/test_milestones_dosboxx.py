@@ -6,7 +6,8 @@ import warnings
 import pytest
 
 from ferrolang_vm.dosboxx import SuiteRun, run_suite
-from ferrolang_vm.suite import Case, all_cases
+from ferrolang_vm.registry import all_cases
+from ferrolang_vm.suite import Case
 
 
 def _number(name: str) -> int:

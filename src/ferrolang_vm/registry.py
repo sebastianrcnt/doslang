@@ -1,118 +1,191 @@
-"""Explicit M1--M3 commands and expectations from TEST-DOS.BAT."""
+"""Milestone case registry: DOS commands and their expected exit status.
+
+Only commands live here; the ``.fe`` fixtures stay under ``fec/tests`` and are
+copied into the disposable DOS filesystem by the runner. Case order is load
+bearing -- ``emit`` must precede ``build`` must precede ``run`` for the same
+fixture, because each step consumes the previous step's output.
+"""
 from __future__ import annotations
 
 from .suite import Case
 
+PASS = "TESTS\\PASS"
+FAIL = "TESTS\\FAIL"
+STD = "STD"
+M2 = "TESTS\\M2"
+M3 = "TESTS\\M3"
+M4 = "TESTS\\M4"
+M5 = "TESTS\\M5"
+M6 = "TESTS\\M6"
+OUT = "OUT"
 
-def _c(milestone: int, name: str, command: str, ok: bool = True) -> Case:
+# Emitted-C basenames that were hand-shortened for DOS 8.3. Keyed by milestone
+# because the same fixture name maps to different outputs across milestones
+# (``bad-type`` is BAD-TY in M2 but BAD-TYP in M4). The shortenings are not
+# consistent -- M2 cut to six characters, M4 to seven, and several were never
+# required at all since BAD-COND is already a legal 8.3 name. Preserved verbatim;
+# changing one renames a file inside the DOS run, so re-verify if you touch it.
+_OUT83 = {
+    (2, "bad-cond"): "BAD-CO",
+    (2, "bad-cast"): "BAD-CA",
+    (2, "bad-asgn"): "BAD-AS",
+    (2, "bad-unk"): "BAD-UN",
+    (2, "bad-ari"): "BAD-AR",
+    (2, "bad-type"): "BAD-TY",
+    (2, "bad-ret"): "BAD-RE",
+    (2, "bad-unit"): "BAD-UI",
+    (2, "bad-void"): "BAD-VO",
+    (4, "bad-type"): "BAD-TYP",
+    (4, "bad-writ"): "BAD-WRI",
+    (5, "bad-dest"): "BAD-DES",
+}
+
+
+def _case(milestone: int, name: str, command: str, ok: bool = True) -> Case:
     return Case(f"m{milestone}-{name}", milestone, command, ok)
 
 
-CASES: list[Case] = []
-for _name in ("basic", "literals", "keybuilt", "v012form"):
-    CASES.append(_c(1, f"{_name}-parse", f"FEC.EXE --dump-ast TESTS\\PASS\\{_name.upper()}.FE"))
-for _name in ("core", "fmt", "io", "list", "map", "mem", "str", "sys"):
-    CASES.append(_c(1, f"std-{_name}-parse", f"FEC.EXE --dump-ast STD\\{_name.upper()}.FE"))
-for _name in ("misssemi", "unclcomm", "logical"):
-    CASES.append(_c(1, f"{_name}-reject", f"FEC.EXE --dump-ast TESTS\\FAIL\\{_name.upper()}.FE", False))
+def _fe(directory: str, name: str) -> str:
+    return f"{directory}\\{name.upper()}.FE"
 
-for _name in ("hello", "scopes"):
-    _upper = _name.upper()
-    CASES.extend([
-        _c(2, f"{_name}-emit", f"FEC.EXE --target=bits32 --emit-c TESTS\\M2\\{_upper}.FE -o TESTS\\M2\\{_upper}.C"),
-        _c(2, f"{_name}-build", f"WCL386 -q -za -bt=dos -fe=TESTS\\M2\\{_upper}.EXE TESTS\\M2\\{_upper}.C"),
-        _c(2, f"{_name}-run", f"TESTS\\M2\\{_upper}.EXE"),
-    ])
-CASES.extend([
-    _c(2, "castwhil-emit", "FEC.EXE --target=bits16 --emit-c TESTS\\M2\\CASTWHIL.FE -o TESTS\\M2\\CAST16.C"),
-    _c(2, "castwhil-build", "WCL -q -za -bt=dos -fe=TESTS\\M2\\CAST16.EXE TESTS\\M2\\CAST16.C"),
-    _c(2, "castwhil-run", "TESTS\\M2\\CAST16.EXE"),
-])
-_m2_outputs = {
-    "bad-cond": "BAD-CO", "bad-cast": "BAD-CA", "bad-asgn": "BAD-AS",
-    "bad-unk": "BAD-UN", "bad-ari": "BAD-AR", "bad-type": "BAD-TY",
-    "bad-ret": "BAD-RE", "bad-unit": "BAD-UI", "bad-void": "BAD-VO",
-}
-for _name, _output in _m2_outputs.items():
-    CASES.append(_c(2, f"{_name}-reject", "FEC.EXE --target=bits32 --emit-c "
-                            f"TESTS\\M2\\{_name.upper()}.FE -o TESTS\\M2\\{_output}.C", False))
 
-def _m3_runtime(name: str) -> list[Case]:
-    upper = name.upper()
+def _emit(source: str, output: str, *, target: str = "bits32",
+          flags: tuple[str, ...] = (), output_first: bool = False) -> str:
+    """``fec`` invocation that translates ``source`` to C at ``output``.
+
+    ``output_first`` reproduces the M6 cases, which pass ``-o`` before the input
+    file while every other milestone passes it after.
+    """
+    parts = ["FEC.EXE", f"--target={target}", *flags, "--emit-c"]
+    parts += ["-o", output, source] if output_first else [source, "-o", output]
+    return " ".join(parts)
+
+
+def _wcl(exe: str, *sources: str, bits: int = 32, strict: bool = False,
+         defines: tuple[str, ...] = ()) -> str:
+    """Open Watcom invocation. ``strict`` is the M4 ``-wx -wcd=202`` pairing:
+    warnings are errors except W202, which the generated C trips on unused
+    helpers (see AGENTS.md)."""
+    parts = ["WCL386" if bits == 32 else "WCL", "-q", "-za"]
+    if strict:
+        parts += ["-wx", "-wcd=202"]
+    parts += ["-bt=dos", *defines, f"-fe={exe}", *sources]
+    return " ".join(parts)
+
+
+def _dump_ast(milestone: int, directory: str, names: tuple[str, ...], *,
+              suffix: str, ok: bool = True, prefix: str = "") -> list[Case]:
     return [
-        _c(3, f"{name}-emit", f"FEC.EXE --target=bits32 --emit-c TESTS\\M3\\{upper}.FE -o TESTS\\M3\\{upper}.C"),
-        _c(3, f"{name}-build", f"WCL386 -q -za -bt=dos -fe=TESTS\\M3\\{upper}.EXE TESTS\\M3\\{upper}.C"),
-        _c(3, f"{name}-run", f"TESTS\\M3\\{upper}.EXE"),
+        _case(milestone, f"{prefix}{name}-{suffix}",
+              f"FEC.EXE --dump-ast {_fe(directory, name)}", ok)
+        for name in names
     ]
 
 
-for _name in ("struct", "enum", "array", "mutable"):
-    CASES.extend(_m3_runtime(_name))
-for _name in ("bad-mlet", "bad-shwr"):
-    CASES.append(_c(3, f"{_name}-reject", "FEC.EXE --target=bits32 --emit-c "
-                            f"TESTS\\M3\\{_name.upper()}.FE -o TESTS\\M3\\{_name.upper()}.C", False))
-for _name in ("str", "for", "nested", "char", "arrayctx"):
-    CASES.extend(_m3_runtime(_name))
-for _name in ("bounds", "slcbound"):
-    _upper = _name.upper()
-    CASES.extend([
-        _c(3, f"{_name}-emit", f"FEC.EXE --target=bits32 --emit-c TESTS\\M3\\{_upper}.FE -o TESTS\\M3\\{_upper}.C"),
-        _c(3, f"{_name}-build", f"WCL386 -q -za -bt=dos -fe=TESTS\\M3\\{_upper}.EXE TESTS\\M3\\{_upper}.C"),
-        _c(3, f"{_name}-trap", f"TESTS\\M3\\{_upper}.EXE", False),
-    ])
-CASES.extend([
-    _c(3, "bounds-no-checks-emit", "FEC.EXE --target=bits32 --no-checks --emit-c TESTS\\M3\\BOUNDS.FE -o TESTS\\M3\\BOUNDS-N.C"),
-    _c(3, "bounds-no-checks-build", "WCL386 -q -za -bt=dos -fe=TESTS\\M3\\BOUNDS-N.EXE TESTS\\M3\\BOUNDS-N.C"),
-])
-for _name in ("badfld", "badmat", "badarr", "badcycle", "badstr", "badchar", "badfield", "badindex"):
-    CASES.append(_c(3, f"{_name}-reject", "FEC.EXE --target=bits32 --emit-c "
-                            f"TESTS\\M3\\{_name.upper()}.FE -o TESTS\\M3\\{_name.upper()}.C", False))
-
-"""Explicit M4--M5 cases from TEST-DOS.BAT and M6 fixture expectations.
-
-Only commands and their expected status live here; the ``.fe`` fixtures stay
-under ``fec/tests`` and are copied by the runner.
-"""
-def _c(milestone: int, name: str, command: str, ok: bool) -> Case:
-    return Case(f"m{milestone}-{name}", milestone, command, ok)
+def _rejects(milestone: int, directory: str, names: tuple[str, ...], *,
+             suffix: str = "") -> list[Case]:
+    """Fixtures that must fail to compile. The emitted-C path is still spelled
+    out because ``fec`` needs an ``-o`` even when it is expected to bail."""
+    return [
+        _case(milestone, f"{name}-{suffix}" if suffix else name,
+              _emit(_fe(directory, name),
+                    f"{directory}\\{_OUT83.get((milestone, name), name.upper())}.C"),
+              False)
+        for name in names
+    ]
 
 
-CASES.extend([
-    _c(4, "format", "FEC.EXE --target=bits32 --emit-c TESTS\\M4\\FORMAT.FE -o TESTS\\M4\\FORMAT.C", True),
-    _c(4, "format-build", "WCL386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\\M4\\FORMAT.EXE TESTS\\M4\\FORMAT.C", True),
-    _c(4, "format-run", "TESTS\\M4\\FORMAT.EXE", True),
-    _c(4, "try-fpr", "FEC.EXE --target=bits32 --emit-c TESTS\\M4\\TRY-FPR.FE -o TESTS\\M4\\TRY-FPR.C", True),
-    _c(4, "try-fpr-build", "WCL386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\\M4\\TRY-FPR.EXE TESTS\\M4\\TRY-FPR.C", True),
-    _c(4, "try-fpr-run", "TESTS\\M4\\TRY-FPR.EXE", True),
-    _c(4, "prop", "FEC.EXE --target=bits32 --emit-c TESTS\\M4\\PROP.FE -o TESTS\\M4\\PROP.C", True),
-    _c(4, "prop-build", "WCL386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\\M4\\PROP.EXE TESTS\\M4\\PROPTEST.C", True),
-    _c(4, "prop-run", "TESTS\\M4\\PROP.EXE", True),
-])
+def _triple(milestone: int, name: str, directory: str, *, stem: str | None = None,
+            target: str = "bits32", bits: int = 32, strict: bool = False,
+            build_source: str | None = None, emit_suffix: str | None = "emit",
+            run_suffix: str = "run", run_ok: bool = True) -> list[Case]:
+    """emit -> build -> run for one fixture.
 
-_m4_outputs = {"bad-type": "BAD-TYP", "bad-writ": "BAD-WRI"}
-for _name in ("bad-ari", "bad-verb", "bad-run", "bad-type", "bad-try", "bad-writ", "bad-bufw", "bad-many", "bad-open", "bad-cls"):
-    _output = _m4_outputs.get(_name, _name.upper())
-    CASES.append(_c(4, _name, "FEC.EXE --target=bits32 --emit-c "
-                           f"TESTS\\M4\\{_name.upper()}.FE -o TESTS\\M4\\{_output}.C", False))
+    ``stem`` renames the C/EXE pair when the fixture name does not fit 8.3 or
+    collides (M2 castwhil emits CAST16). ``build_source`` compiles a different
+    file than the one emitted (M4 prop emits PROP.C but builds PROPTEST.C, which
+    ``#include``s it).
+    """
+    stem = stem or name.upper()
+    cfile = f"{directory}\\{stem}.C"
+    exe = f"{directory}\\{stem}.EXE"
+    emit_id = f"{name}-{emit_suffix}" if emit_suffix else name
+    return [
+        _case(milestone, emit_id, _emit(_fe(directory, name), cfile, target=target)),
+        _case(milestone, f"{name}-build",
+              _wcl(exe, build_source or cfile, bits=bits, strict=strict)),
+        _case(milestone, f"{name}-{run_suffix}", exe, run_ok),
+    ]
 
-for _name in ("defer", "owned"):
-    CASES.append(_c(5, _name, "FEC.EXE --target=bits32 --emit-c "
-                           f"TESTS\\M5\\{_name.upper()}.FE -o TESTS\\M5\\{_name.upper()}.C", True))
-for _name in ("bad-move", "bad-dest", "bad-drop", "bad-dbl", "bad-cond", "bad-proj", "bad-clos", "bad-loop"):
-    _output = "BAD-DES" if _name == "bad-dest" else _name.upper()
-    CASES.append(_c(5, _name, "FEC.EXE --target=bits32 --emit-c "
-                           f"TESTS\\M5\\{_name.upper()}.FE -o TESTS\\M5\\{_output}.C", False))
-CASES += [
-    _c(5, "runtime", "FEC.EXE --target=bits32 --emit-c TESTS\\M5\\RUNTIME.FE -o TESTS\\M5\\RUNT-G.C", True),
-    _c(5, "runtime-build", "WCL386 -q -za -bt=dos -dmalloc=m5_malloc -dfree=m5_free -fe=TESTS\\M5\\RUNTIME.EXE TESTS\\M5\\RUNT-G.C TESTS\\M5\\RUNTIME.C", True),
-    _c(5, "runtime-run", "TESTS\\M5\\RUNTIME.EXE", True),
+
+CASES: list[Case] = [
+    # -- M1: parse only -------------------------------------------------------
+    *_dump_ast(1, PASS, ("basic", "literals", "keybuilt", "v012form"), suffix="parse"),
+    *_dump_ast(1, STD, ("core", "fmt", "io", "list", "map", "mem", "str", "sys"),
+               suffix="parse", prefix="std-"),
+    *_dump_ast(1, FAIL, ("misssemi", "unclcomm", "logical"), suffix="reject", ok=False),
+
+    # -- M2: first generated C ------------------------------------------------
+    *_triple(2, "hello", M2),
+    *_triple(2, "scopes", M2),
+    *_triple(2, "castwhil", M2, stem="CAST16", target="bits16", bits=16),
+    *_rejects(2, M2, ("bad-cond", "bad-cast", "bad-asgn", "bad-unk", "bad-ari",
+                      "bad-type", "bad-ret", "bad-unit", "bad-void"), suffix="reject"),
+
+    # -- M3: aggregates, strings, bounds checks -------------------------------
+    *_triple(3, "struct", M3),
+    *_triple(3, "enum", M3),
+    *_triple(3, "array", M3),
+    *_triple(3, "mutable", M3),
+    *_rejects(3, M3, ("bad-mlet", "bad-shwr"), suffix="reject"),
+    *_triple(3, "str", M3),
+    *_triple(3, "for", M3),
+    *_triple(3, "nested", M3),
+    *_triple(3, "char", M3),
+    *_triple(3, "arrayctx", M3),
+    # These two must trap at runtime: the bounds check is the feature under test.
+    *_triple(3, "bounds", M3, run_suffix="trap", run_ok=False),
+    *_triple(3, "slcbound", M3, run_suffix="trap", run_ok=False),
+    _case(3, "bounds-no-checks-emit",
+          _emit(_fe(M3, "bounds"), f"{M3}\\BOUNDS-N.C", flags=("--no-checks",))),
+    _case(3, "bounds-no-checks-build",
+          _wcl(f"{M3}\\BOUNDS-N.EXE", f"{M3}\\BOUNDS-N.C")),
+    *_rejects(3, M3, ("badfld", "badmat", "badarr", "badcycle", "badstr", "badchar",
+                      "badfield", "badindex"), suffix="reject"),
+
+    # -- M4: formatting and error propagation ---------------------------------
+    *_triple(4, "format", M4, strict=True, emit_suffix=None),
+    *_triple(4, "try-fpr", M4, strict=True, emit_suffix=None),
+    *_triple(4, "prop", M4, strict=True, emit_suffix=None,
+             build_source=f"{M4}\\PROPTEST.C"),
+    *_rejects(4, M4, ("bad-ari", "bad-verb", "bad-run", "bad-type", "bad-try",
+                      "bad-writ", "bad-bufw", "bad-many", "bad-open", "bad-cls")),
+
+    # -- M5: defer and ownership ----------------------------------------------
+    _case(5, "defer", _emit(_fe(M5, "defer"), f"{M5}\\DEFER.C")),
+    _case(5, "owned", _emit(_fe(M5, "owned"), f"{M5}\\OWNED.C")),
+    *_rejects(5, M5, ("bad-move", "bad-dest", "bad-drop", "bad-dbl", "bad-cond",
+                      "bad-proj", "bad-clos", "bad-loop")),
+    # The runtime case links the generated C against a hand-written allocator
+    # shim, so malloc/free are redirected at compile time.
+    _case(5, "runtime", _emit(_fe(M5, "runtime"), f"{M5}\\RUNT-G.C")),
+    _case(5, "runtime-build",
+          _wcl(f"{M5}\\RUNTIME.EXE", f"{M5}\\RUNT-G.C", f"{M5}\\RUNTIME.C",
+               defines=("-dmalloc=m5_malloc", "-dfree=m5_free"))),
+    _case(5, "runtime-run", f"{M5}\\RUNTIME.EXE"),
+
+    # -- M6: borrow checking (R1--R8) -----------------------------------------
+    *[_case(6, name, f"FEC.EXE --check {_fe(M6, name)}", False) for name in (
+        "badarg", "badbinit", "badbrmov", "baddefer", "badfld", "badglob", "badgmut",
+        "badinv", "badlocsl", "badloop", "badmove", "badmut", "badmut2", "badptr",
+        "badret", "badrfld", "badridx", "badscop", "badself", "badshwr", "badslfld",
+        "badtwo", "badup", "badweak")],
+    *[_case(6, name, _emit(_fe(M6, name), f"{OUT}\\{name.upper()}.C",
+                           output_first=True)) for name in (
+        "okbranch", "okdefer", "okglobcp", "oklast", "okr8free", "okr8join",
+        "okr8meth", "okr8stat", "okrebor", "okrtlast", "okshare", "okslreb",
+        "okstatic", "oktemp", "oktrim", "okwcall")],
 ]
-
-for _name in ("badarg", "badbinit", "badbrmov", "baddefer", "badfld", "badglob", "badgmut", "badinv", "badlocsl", "badloop", "badmove", "badmut", "badmut2", "badptr", "badret", "badrfld", "badridx", "badscop", "badself", "badshwr", "badslfld", "badtwo", "badup", "badweak"):
-    CASES.append(_c(6, _name, f"FEC.EXE --check TESTS\\M6\\{_name.upper()}.FE", False))
-for _name in ("okbranch", "okdefer", "okglobcp", "oklast", "okr8free", "okr8join", "okr8meth", "okr8stat", "okrebor", "okrtlast", "okshare", "okslreb", "okstatic", "oktemp", "oktrim", "okwcall"):
-    CASES.append(_c(6, _name, f"FEC.EXE --target=bits32 --emit-c -o OUT\\{_name.upper()}.C TESTS\\M6\\{_name.upper()}.FE", True))
-
 
 def all_cases(*, through: int = 6, only: int | None = None) -> list[Case]:
     if only is not None:
