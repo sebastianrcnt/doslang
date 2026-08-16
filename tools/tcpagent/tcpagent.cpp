@@ -38,17 +38,42 @@ static unsigned long ticks(void) {
     _bios_timeofday(_TIME_GETCLOCK,&value);
     return (unsigned long)value;
 }
+/* The BIOS tick is 18.2065 Hz, so one tick is 5.49254 hundredths of a second.
+   549/100 keeps the error under 0.05% and cannot overflow 32 bits for a delta
+   up to a full day (1573040 ticks * 549 fits). Plain delta/18 ran 1.1% fast. */
 static void elapsed_text(unsigned long started,char *out) {
     unsigned long now=ticks(),delta=now>=started?now-started:now+(1573040UL-started);
-    sprintf(out,"%lu.%02lus",delta/18UL,(delta%18UL)*100UL/18UL);
+    unsigned long hundredths=delta*549UL/100UL;
+    sprintf(out,"%lu.%02lus",hundredths/100UL,hundredths%100UL);
+}
+
+/* Open Watcom's DOS conio has no textattr()/textcolor() -- it offers only
+   cprintf/cputs/getch and friends -- and ANSI escapes are not interpreted on
+   the installed FreeDOS console. So let cprintf lay the line out (it scrolls
+   correctly) and then repaint the attribute bytes of the cells it just wrote.
+   The cursor sits at column 0 of the row after the line, which is what lets us
+   find those cells without tracking scrolling ourselves. */
+#define TIMESTAMP_WIDTH 9
+static void colorize(unsigned total,int attr) {
+    unsigned char __far *vram; unsigned cols,used,row,col,start,k;
+    if(*(unsigned char __far *)MK_FP(0x0040,0x0049)==7) return;  /* MDA: no color */
+    cols=*(unsigned __far *)MK_FP(0x0040,0x004A);
+    if(cols<40||cols>132) cols=80;
+    used=(total+cols-1)/cols; if(!used) used=1;
+    row=*(unsigned char __far *)MK_FP(0x0040,0x0051);
+    if(row<used) return;            /* line scrolled off the top; nothing to paint */
+    start=row-used;
+    vram=(unsigned char __far *)MK_FP(0xB800,0);
+    for(k=0;k<total;++k) {
+        row=start+k/cols; col=k%cols;
+        vram[((unsigned)row*cols+col)*2+1]=(unsigned char)(k<TIMESTAMP_WIDTH?0x08:attr);
+    }
 }
 static void log_line(int attr,const char *fmt,...) {
     struct dostime_t now; va_list ap; char text[760];
     _dos_gettime(&now); va_start(ap,fmt); vsprintf(text,fmt,ap); va_end(ap);
-    /* Open Watcom's DOS conio has no textattr(), and ANSI escapes are not
-       interpreted on the installed FreeDOS console. Keep output clean. */
-    (void)attr;
     cprintf("%02u:%02u:%02u %s\r\n",now.hour,now.minute,now.second,text);
+    colorize(TIMESTAMP_WIDTH+(unsigned)strlen(text),attr);
     { FILE *f=fopen("C:\\TCPAGENT.LOG","a");
       if(f){fprintf(f,"%02u:%02u:%02u %s\n",now.hour,now.minute,now.second,text);fclose(f);} }
 }
@@ -58,6 +83,12 @@ static void init_log(void) {
     if(size>262144L){remove("C:\\TCPAGENT.OLD");rename("C:\\TCPAGENT.LOG","C:\\TCPAGENT.OLD");}
     f=fopen("C:\\TCPAGENT.LOG","a");
     if(f){fputs("--- TCPAGENT start ---\n",f);fclose(f);}
+}
+/* PUT completes either here in command_put (zero length) or in the receive loop
+   once the body arrives, so keep the one line both paths emit in one place. */
+static void put_finished(void) {
+    char elapsed[24]; elapsed_text(put_started,elapsed);
+    log_line(0x0A,"< PUT %s OK %s",put_path,elapsed);
 }
 
 void __interrupt __far ctrl_break(void) { stop_requested=1; }
@@ -120,60 +151,71 @@ static int decode_path(const char *hex,char *path,int cap) {
 }
 static void command_read(char *args) {
     char path[260],*off=strchr(args,' '); FILE *f; long pos; size_t count; int eof;
-    if(!off){error_text("READ requires path and offset");return;} *off++='\0';
-    if(!decode_path(args,path,sizeof(path))){error_text("Invalid path encoding");return;}
-    pos=atol(off); f=fopen(path,"rb"); if(!f){error_text("Cannot open file");return;}
-    if(fseek(f,pos,SEEK_SET)){fclose(f);error_text("Cannot seek file");return;}
+    if(!off){log_line(0x0C,"< READ ERR missing offset");error_text("READ requires path and offset");return;} *off++='\0';
+    if(!decode_path(args,path,sizeof(path))){log_line(0x0C,"< READ ERR bad path encoding");error_text("Invalid path encoding");return;}
+    pos=atol(off); log_line(0x0B,"> READ %s @%ld",path,pos);
+    f=fopen(path,"rb"); if(!f){log_line(0x0C,"< READ ERR cannot open");error_text("Cannot open file");return;}
+    if(fseek(f,pos,SEEK_SET)){fclose(f);log_line(0x0C,"< READ ERR cannot seek");error_text("Cannot seek file");return;}
     count=fread(data,1,CHUNK_SIZE,f); eof=count<CHUNK_SIZE; fclose(f);
+    log_line(0x0A,"< READ %uB eof=%d",(unsigned)count,eof);
     sprintf(linebuf,"OK %d ",eof); write_text(linebuf); write_hex(data,count); write_text("\r\n");
 }
 static void command_write(char *args) {
     char path[260],*mode=strchr(args,' '),*payload; FILE *f; int count;
-    if(!mode){error_text("WRITE requires path, mode and data");return;} *mode++='\0';
-    payload=strchr(mode,' '); if(!payload){error_text("WRITE requires data");return;} *payload++='\0';
-    if(!decode_path(args,path,sizeof(path))){error_text("Invalid path encoding");return;}
-    count=decode_hex(payload,data,CHUNK_SIZE); if(count<0){error_text("Invalid data encoding");return;}
-    f=fopen(path,mode[0]=='A'?"ab":"wb"); if(!f){error_text("Cannot write file");return;}
-    if(count&&fwrite(data,1,count,f)!=(size_t)count){fclose(f);error_text("Short write");return;}
-    fclose(f); ok_data((const unsigned char *)"",0);
+    if(!mode){log_line(0x0C,"< WRITE ERR missing mode");error_text("WRITE requires path, mode and data");return;} *mode++='\0';
+    payload=strchr(mode,' '); if(!payload){log_line(0x0C,"< WRITE ERR missing data");error_text("WRITE requires data");return;} *payload++='\0';
+    if(!decode_path(args,path,sizeof(path))){log_line(0x0C,"< WRITE ERR bad path encoding");error_text("Invalid path encoding");return;}
+    count=decode_hex(payload,data,CHUNK_SIZE); if(count<0){log_line(0x0C,"< WRITE ERR bad data encoding");error_text("Invalid data encoding");return;}
+    log_line(0x0B,"> WRITE %s %c %dB",path,mode[0]=='A'?'A':'T',count);
+    f=fopen(path,mode[0]=='A'?"ab":"wb"); if(!f){log_line(0x0C,"< WRITE ERR cannot open");error_text("Cannot write file");return;}
+    if(count&&fwrite(data,1,count,f)!=(size_t)count){fclose(f);log_line(0x0C,"< WRITE ERR short write");error_text("Short write");return;}
+    fclose(f); log_line(0x0A,"< WRITE OK"); ok_data((const unsigned char *)"",0);
 }
 static void command_put(char *args) {
     char path[260],*length_text=strchr(args,' ');
-    if(!length_text){error_text("PUT requires path and length");return;}
+    if(!length_text){log_line(0x0C,"< PUT ERR missing length");error_text("PUT requires path and length");return;}
     *length_text++='\0';
-    if(!decode_path(args,path,sizeof(path))){error_text("Invalid path encoding");return;}
+    if(!decode_path(args,path,sizeof(path))){log_line(0x0C,"< PUT ERR bad path encoding");error_text("Invalid path encoding");return;}
     put_remaining=strtoul(length_text,0,10); strcpy(put_path,path); put_started=ticks();
-    log_line(0x0B,"> PUT %s %luB",path,put_remaining);
+    log_line(0x0B,"> PUT %s %luB",put_path,put_remaining);
     put_file=fopen(path,"wb");
-    if(!put_file){put_remaining=0;log_line(0x0C,"< PUT ERR cannot open");error_text("Cannot write file");return;}
-    if(!put_remaining){char elapsed[24];fclose(put_file);put_file=0;elapsed_text(put_started,elapsed);log_line(0x0A,"< PUT OK %s",elapsed);ok_data((const unsigned char *)"",0);}
+    if(!put_file){put_remaining=0;log_line(0x0C,"< PUT %s ERR cannot open",put_path);error_text("Cannot write file");return;}
+    if(!put_remaining){fclose(put_file);put_file=0;put_finished();ok_data((const unsigned char *)"",0);}
 }
 static void command_get(char *args) {
-    char path[260]; FILE *f; long length; size_t count;
-    if(!decode_path(args,path,sizeof(path))){error_text("Invalid path encoding");return;}
-    f=fopen(path,"rb"); if(!f){error_text("Cannot open file");return;}
+    char path[260],elapsed[24]; FILE *f; long length; size_t count; unsigned long started=ticks();
+    if(!decode_path(args,path,sizeof(path))){log_line(0x0C,"< GET ERR bad path encoding");error_text("Invalid path encoding");return;}
+    log_line(0x0B,"> GET %s",path);
+    f=fopen(path,"rb"); if(!f){log_line(0x0C,"< GET %s ERR cannot open",path);error_text("Cannot open file");return;}
     fseek(f,0,SEEK_END); length=ftell(f); fseek(f,0,SEEK_SET);
     sprintf(linebuf,"DATA %ld\r\n",length); write_text(linebuf);
     while((count=fread(data,1,CHUNK_SIZE,f))>0) if(send_all(data,count)<0)break;
-    fclose(f);
+    fclose(f); elapsed_text(started,elapsed);
+    log_line(0x0A,"< GET OK %ldB %s",length,elapsed);
 }
 static void command_hash(char *args) {
-    char path[260]; FILE *f; size_t count; unsigned i; unsigned long length=0,hash=2166136261UL;
-    if(!decode_path(args,path,sizeof(path))){error_text("Invalid path encoding");return;}
-    f=fopen(path,"rb"); if(!f){error_text("Cannot open file");return;}
+    char path[260],elapsed[24]; FILE *f; size_t count; unsigned i;
+    unsigned long length=0,hash=2166136261UL,started=ticks();
+    if(!decode_path(args,path,sizeof(path))){log_line(0x0C,"< HASH ERR bad path encoding");error_text("Invalid path encoding");return;}
+    log_line(0x0B,"> HASH %s",path);
+    f=fopen(path,"rb"); if(!f){log_line(0x0C,"< HASH %s ERR cannot open",path);error_text("Cannot open file");return;}
     while((count=fread(data,1,CHUNK_SIZE,f))>0){length+=(unsigned long)count;for(i=0;i<count;++i){hash^=data[i];hash*=16777619UL;}}
-    fclose(f); sprintf(linebuf,"STAT %lu %08lX\r\n",length,hash); write_text(linebuf);
+    fclose(f); elapsed_text(started,elapsed);
+    log_line(0x0A,"< HASH %luB %08lX %s",length,hash,elapsed);
+    sprintf(linebuf,"STAT %lu %08lX\r\n",length,hash); write_text(linebuf);
 }
 static void command_list(char *args) {
     char path[260],pattern[300],output[CHUNK_SIZE]; struct find_t found;
-    unsigned used=0; int rc;
-    if(!decode_path(args,path,sizeof(path))){error_text("Invalid path encoding");return;}
+    unsigned used=0,entries=0; int rc,truncated=0;
+    if(!decode_path(args,path,sizeof(path))){log_line(0x0C,"< LIST ERR bad path encoding");error_text("Invalid path encoding");return;}
+    log_line(0x0B,"> LIST %s",path);
     strcpy(pattern,path); if(pattern[0]&&pattern[strlen(pattern)-1]!='\\') strcat(pattern,"\\"); strcat(pattern,"*.*");
     rc=_dos_findfirst(pattern,_A_NORMAL|_A_RDONLY|_A_HIDDEN|_A_SYSTEM|_A_SUBDIR|_A_ARCH,&found);
     while(rc==0) { char entry[100]; int len;
-        if(strcmp(found.name,".")&&strcmp(found.name,"..")) { sprintf(entry,"%s\t%lu\t%s\n",found.name,found.size,(found.attrib&_A_SUBDIR)?"DIR":"FILE"); len=strlen(entry); if(used+(unsigned)len>=sizeof(output)) break; memcpy(output+used,entry,len); used+=(unsigned)len; }
+        if(strcmp(found.name,".")&&strcmp(found.name,"..")) { sprintf(entry,"%s\t%lu\t%s\n",found.name,found.size,(found.attrib&_A_SUBDIR)?"DIR":"FILE"); len=strlen(entry); if(used+(unsigned)len>=sizeof(output)) {truncated=1;break;} memcpy(output+used,entry,len); used+=(unsigned)len; ++entries; }
         rc=_dos_findnext(&found);
     }
+    log_line(truncated?0x0E:0x0A,"< LIST %u entries%s",entries,truncated?" (truncated)":"");
     ok_data((unsigned char *)output,used);
 }
 static void command_exec(char *args) {
@@ -202,6 +244,7 @@ static void command_exec(char *args) {
 }
 static void process_line(char *line) {
     char *cmd=line,*args=strchr(line,' '); if(args)*args++='\0';else args=cmd+strlen(cmd);
+    /* PING is deliberately not logged: wait-ready polls it twice a second. */
     if(!strcmp(cmd,"PING"))ok_data((const unsigned char *)"PONG",4);
     else if(!strcmp(cmd,"READ"))command_read(args);
     else if(!strcmp(cmd,"WRITE"))command_write(args);
@@ -210,8 +253,8 @@ static void process_line(char *line) {
     else if(!strcmp(cmd,"HASH"))command_hash(args);
     else if(!strcmp(cmd,"LIST"))command_list(args);
     else if(!strcmp(cmd,"EXEC"))command_exec(args);
-    else if(!strcmp(cmd,"QUIT")){ok_data((const unsigned char *)"BYE",3);stop_requested=1;}
-    else { char message[96]; sprintf(message,"Unknown command: %.70s",cmd); error_text(message); }
+    else if(!strcmp(cmd,"QUIT")){log_line(0x07,"* QUIT received");ok_data((const unsigned char *)"BYE",3);stop_requested=1;}
+    else { char message[96]; sprintf(message,"Unknown command: %.70s",cmd); log_line(0x0C,"< ERR %s",message); error_text(message); }
 }
 static int connect_host(void) {
     IpAddr_t host={10,0,2,2}; int8_t rc;
@@ -241,10 +284,10 @@ int main(void) {
                 if(put_remaining) {
                     unsigned available=(unsigned)(rc-i);
                     unsigned take=put_remaining<available ? (unsigned)put_remaining : available;
-                    if(fwrite(data+i,1,take,put_file)!=(size_t)take){fclose(put_file);put_file=0;put_remaining=0;error_text("Short write");}
+                    if(fwrite(data+i,1,take,put_file)!=(size_t)take){fclose(put_file);put_file=0;put_remaining=0;log_line(0x0C,"< PUT %s ERR short write (disk full?)",put_path);error_text("Short write");}
                     else {
                         put_remaining-=take; i+=(int)take-1;
-                        if(!put_remaining){char elapsed[24];fclose(put_file);put_file=0;elapsed_text(put_started,elapsed);log_line(0x0A,"< PUT OK %s",elapsed);ok_data((const unsigned char *)"",0);}
+                        if(!put_remaining){fclose(put_file);put_file=0;put_finished();ok_data((const unsigned char *)"",0);}
                     }
                 } else if(c=='\r'||c=='\n') {
                     if(used){linebuf[used]='\0';process_line(linebuf);used=0;}
