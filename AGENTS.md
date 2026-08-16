@@ -10,38 +10,39 @@ DOS용 시스템 프로그래밍 언어 Ferro와 그 컴파일러 `fec`. 규범 
 | `SPEC.md` | 언어 명세. 유일한 규범 문서. 구현 지시서와 표준 라이브러리 명세는 별도 문서 |
 | `tools/README.md` | 호스트 요구사항, 최초 셋업, 자동화 구조 |
 
-개발 환경과 테스트 명령 목록·플래그는 CLI로 확인한다.
+개발 환경과 테스트 명령 목록·플래그는 다음 CLI로 확인한다.
 
 ```powershell
-uv run ferro-dos --help
-uv run ferro-dos <command> --help
-uv run ferro-test --help
+uv run python tests/run.py --help
 ```
 
 ## 검증 규칙
 
-- 컴파일러와 생성 C는 DOSBox-X 내부의 고정된 Open Watcom으로 컴파일한다.
-  컴파일러와 bits16은 `WCL`, bits32 생성 C는 `WCL386`을 쓴다.
-- 호스트 C 컴파일러 결과는 검증으로 인정하지 않는다. 호스트는 편집, Git, 다운로드,
-  격리 작업공간 준비에만 쓴다.
-- 실행마다 만들어지는 authoritative workspace는 `C:\FEC`다. 호스트에서는
-  `.dosboxx/runs/<run>/FEC`에 대응한다.
-- 완료하려는 기능을 직접 검사하는 pytest case가 통과해야 한다. 테스트가 증명하지
+- 컴파일러는 현재 프런트엔드만 구현되어 있다. 범위: lexer/parser/types/own/check/resolve.
+- 코드 생성기(백엔드/IR/`lowering`)는 아직 없다.
+- 호스트 C 컴파일러는 구현/검증 대상이 아니다. 호스트는 편집, Git, 다운로드, 격리
+  작업공간 준비에만 쓴다.
+- 완료하려는 기능을 직접 검사하는 `pytest` case가 통과해야 한다. 테스트가 증명하지
   않는 기능은 완료로 처리하지 않는다.
+- `uv run python tests/run.py` 는 프런트엔드 검증 엔트리이다.
 - VGA 데모처럼 수동 검증이 필요한 항목은 자동 완료 게이트에서 제외한다.
+- 실행 환경은 `.dosboxx/`와 `tests/run.py`로 준비되며, 과거 VM 이미지/호스트 바이너리는
+  완료 근거로 쓰지 않는다.
 
 ## 빌드 함정
 
-- 컴파일러는 16비트 large model로 빌드한다. small model은 메모리 부족으로 실패한다.
-- 링크는 `*.obj` 와일드카드로 한다. DOS 명령줄 길이 제한 때문에 오브젝트를 나열할
-  수 없다. `fec/build-dos.bat`는 먼저 stale object를 지운다.
-- M4 Watcom 테스트는 `-wx -wcd=202`를 쓴다. 생성 C의 보수적 미사용 helper 때문에
-  W202만 끄고 나머지 경고는 오류로 유지한다.
-- fixture는 DOS 8.3 이름으로 실행한다. 긴 이름은 registry에서 명시적으로 줄인다.
-- `R:`은 읽기 전용 저장소, `W:`은 읽기 전용 Watcom이다. 빌드 산출물은 반드시
-  임시 `C:\FEC`에 쓴다.
-- 실패 분석이 필요하면 `ferro-test --keep-failed` 또는 `ferro-dos --keep`으로
-  임시 작업공간을 보존한다.
+- [백엔드 복귀 시 유효] 컴파일러는 16비트 large model로 빌드한다. small model은
+  메모리 부족으로 실패한다.
+- [백엔드 복귀 시 유효] 링크는 `*.obj` 와일드카드로 한다. DOS 명령줄 길이 제한 때문에
+  오브젝트를 개별 열거할 수 없다.
+- [백엔드 복귀 시 유효] M4 Watcom 테스트는 `-wx -wcd=202`를 쓴다. 생성 C의 보수적 미
+  사용 helper 때문에 W202만 끄고 나머지 경고는 오류로 유지한다.
+- [백엔드 복귀 시 유효] fixture는 DOS 8.3 이름으로 실행한다. 긴 이름은 registry에서
+  명시적으로 줄인다.
+- [백엔드 복귀 시 유효] `R:`은 읽기 전용 저장소, `W:`은 읽기 전용 Watcom이다.
+  빌드 산출물은 반드시 임시 `C:\FEC`에 쓴다.
+- [백엔드 복귀 시 유효] 실패 분석이 필요하면 `tests/run.py`의 `--keep-failed` 또는
+  런처 플래그로 임시 작업공간을 보존한다.
 
 ## 작업 흐름
 
