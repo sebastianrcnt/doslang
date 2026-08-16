@@ -866,53 +866,51 @@ static void m7_check_stmt(FeCheckerState *s, FeNode *n)
             m7_check_if_let(s,n);
         else {
             FeType *cond;
+            FeFlowSlot base[FE_M7_FLOW_CAP];
+            FeFlowSlot left[FE_M7_FLOW_CAP];
+            FeFlowSlot right[FE_M7_FLOW_CAP];
+            FeOwnState *own_base;
+            FeOwnState *own_left;
+            FeOwnState *own_right;
+            FeFlowBorrow *borrow_base;
+            FeFlowBorrow *borrow_left;
+            FeFlowBorrow *borrow_right;
+            unsigned count;
+            unsigned i;
             cond=m7_check_expr(s,n->a);
             if (known(cond) && cond->kind!=FE_TYPE_BOOL)
                 err(s->c,n->loc,"if condition must be bool");
-            /* Reuse the verified branch merge by letting the M6 statement
-               machinery handle branches that contain no M7-only nodes. */
-            if (!m7_node_feature(n->b) && !m7_node_feature(n->c))
-                check_stmt(s,n);
-            else {
-                FeFlowSlot base[FE_M7_FLOW_CAP];
-                FeFlowSlot left[FE_M7_FLOW_CAP];
-                FeFlowSlot right[FE_M7_FLOW_CAP];
-                FeOwnState *own_base;
-                FeOwnState *own_left;
-                FeOwnState *own_right;
-                FeFlowBorrow *borrow_base;
-                FeFlowBorrow *borrow_left;
-                FeFlowBorrow *borrow_right;
-                unsigned count;
-                unsigned i;
-                m7_capture_flow(s,base,&own_base,&borrow_base,&count);
-                m7_check_stmt(s,n->b);
-                flow_capture(s->scope,left,count);
-                own_left=flow_own_new(s,count);
-                borrow_left=flow_borrow_new(s,count);
-                flow_own_capture(left,own_left,count);
-                flow_borrow_capture(left,borrow_left,count);
-                m7_restore_flow(base,own_base,borrow_base,count);
-                if (n->c) m7_check_stmt(s,n->c);
-                if (n->c) {
-                    flow_capture(s->scope,right,count);
-                    own_right=flow_own_new(s,count);
-                    borrow_right=flow_borrow_new(s,count);
-                    flow_own_capture(right,own_right,count);
-                    flow_borrow_capture(right,borrow_right,count);
-                } else {
-                    own_right=flow_own_new(s,count);
-                    borrow_right=flow_borrow_new(s,count);
-                    for (i=0;i<count;++i) right[i]=base[i];
-                    if (own_right && own_base)
-                        for (i=0;i<count;++i) own_right[i]=own_base[i];
-                    if (borrow_right && borrow_base)
-                        for (i=0;i<count;++i) borrow_right[i]=borrow_base[i];
-                }
-                flow_merge(base,left,right,count);
-                flow_own_merge(base,own_left,own_right,count);
-                flow_borrow_merge(base,borrow_left,borrow_right,count);
+            /* Once a function is on the M7 checker path, branch bodies must
+               remain on that path as well.  In particular, return T inside
+               E!T relies on contextual success construction even when the
+               branch itself contains no surface M7 syntax. */
+            m7_capture_flow(s,base,&own_base,&borrow_base,&count);
+            m7_check_stmt(s,n->b);
+            flow_capture(s->scope,left,count);
+            own_left=flow_own_new(s,count);
+            borrow_left=flow_borrow_new(s,count);
+            flow_own_capture(left,own_left,count);
+            flow_borrow_capture(left,borrow_left,count);
+            m7_restore_flow(base,own_base,borrow_base,count);
+            if (n->c) m7_check_stmt(s,n->c);
+            if (n->c) {
+                flow_capture(s->scope,right,count);
+                own_right=flow_own_new(s,count);
+                borrow_right=flow_borrow_new(s,count);
+                flow_own_capture(right,own_right,count);
+                flow_borrow_capture(right,borrow_right,count);
+            } else {
+                own_right=flow_own_new(s,count);
+                borrow_right=flow_borrow_new(s,count);
+                for (i=0;i<count;++i) right[i]=base[i];
+                if (own_right && own_base)
+                    for (i=0;i<count;++i) own_right[i]=own_base[i];
+                if (borrow_right && borrow_base)
+                    for (i=0;i<count;++i) borrow_right[i]=borrow_base[i];
             }
+            flow_merge(base,left,right,count);
+            flow_own_merge(base,own_left,own_right,count);
+            flow_borrow_merge(base,borrow_left,borrow_right,count);
         }
         break;
     case FE_N_MATCH:
