@@ -1,3 +1,6 @@
+// ERROR:9:unknown name
+// io.buf_writer was the callback-based writer that 351e5db replaced with the
+// Writer handle enum. This fixture keeps it from coming back.
 unit bad_bufw;
 
 fn main() -> void {
