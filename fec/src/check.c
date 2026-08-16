@@ -1,4 +1,5 @@
 #include "check.h"
+#include "own.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -49,50 +50,15 @@ static int known(FeType *t)
     return t && t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_ERROR;
 }
 
-static int is_copy_type(FeType *t)
-{
-    unsigned i;
-    if (!t) return 1;
-    if (t->kind==FE_TYPE_OWNED) return 0;
-    if (t->kind==FE_TYPE_REF || t->kind==FE_TYPE_SLICE) return !t->ref_mut;
-    if (t->kind==FE_TYPE_ARRAY) return is_copy_type(t->elem);
-    if (t->kind==FE_TYPE_STRUCT) {
-        if (t->has_drop) return 0;
-        for (i=0;i<t->field_count;i++) if (!is_copy_type(t->fields[i].type)) return 0;
-    }
-    if (t->kind==FE_TYPE_ENUM)
-        for (i=0;i<t->variant_count;i++) {
-            unsigned j;
-            for (j=0;j<t->variants[i].field_count;j++)
-                if (!is_copy_type(t->variants[i].fields[j].type)) return 0;
-        }
-    return 1;
-}
-
 static void mark_moved(FeCheckerState *s, FeNode *n, FeType *t)
 {
-    FeSym *sym;
-    if (!n || !t || is_copy_type(t)) return;
-    if(n->kind==FE_N_INDEX && t->kind==FE_TYPE_SLICE &&
-       (n->c || !n->b)) return;
-    if(n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX) {
-        err(s->c,n->loc,
-            "cannot move a non-Copy value out of a projection; use mem.replace");
-        return;
-    }
-    if(n->kind!=FE_N_IDENT) return;
-    sym=find_symbol(s->scope,n->text ? n->text : "");
-    if (sym) {
-        if (s->defer_depth) {
-            if (sym->decl) sym->decl->flags |= 0x200U;
-        } else {
-            sym->moved=1;
-            /* Mark this consuming expression, not the declaration. Branches
-               may move conditionally; the declaration's runtime live flag
-               must remain available to guard cleanup on the other path. */
-            n->flags |= 0x100U;
-        }
-    }
+    FeSym *sym=0;
+    if (n && n->kind==FE_N_IDENT)
+        sym=find_symbol(s->scope,n->text ? n->text : "");
+    fe_own_mark_consumed(s->c->diags,
+                         sym ? &sym->moved : 0,
+                         sym ? sym->decl : 0,
+                         n,t,s->defer_depth != 0);
 }
 
 static int compatible(FeType *want, FeType *got, FeNode *value)
@@ -244,7 +210,7 @@ static FeSym *add_symbol(FeCheckerState *s, FeScope *scope,
     sym->fn = fn;
     sym->mutable = mutable;
     sym->initialized = initialized;
-    sym->moved = 0;
+    sym->moved = FE_OWN_AVAILABLE;
     sym->decl = decl;
     if (decl) {
         decl->cname = cname;
@@ -329,9 +295,8 @@ static void flow_merge(FeFlowSlot *base, FeFlowSlot *left, FeFlowSlot *right,
 {
     unsigned i;
     for (i=0; i<count; ++i) {
-        base[i].sym->moved = left[i].moved==1 && right[i].moved==1 ? 1 :
-            (left[i].moved || right[i].moved ? 2 : 0);
-        base[i].sym->initialized = left[i].initialized && right[i].initialized;
+        base[i].sym->moved=fe_own_merge_move(left[i].moved,right[i].moved);
+        base[i].sym->initialized=left[i].initialized && right[i].initialized;
     }
 }
 
@@ -579,8 +544,7 @@ static FeType *check_identifier(FeCheckerState *s, FeNode *n, int read)
     }
     n->cname = sym->cname;
     n->sem_type = sym->type;
-    if (sym->moved == 1) err(s->c,n->loc,"use of moved value");
-    else if (sym->moved == 2) err(s->c,n->loc,"use of possibly moved value");
+    fe_own_check_use(s->c->diags,sym->moved,n->loc);
     if (read && !sym->initialized && !sym->fn)
         err(s->c, n->loc, "use of uninitialized variable");
     return sym->type;
@@ -1007,8 +971,7 @@ static void check_match(FeCheckerState *s, FeNode *n)
             have_merged=1;
         } else {
             for(i=0;i<flow_count;++i) {
-                merged[i].moved=merged[i].moved==1 && current[i].moved==1 ? 1 :
-                    (merged[i].moved || current[i].moved ? 2 : 0);
+                merged[i].moved=fe_own_merge_move(merged[i].moved,current[i].moved);
                 merged[i].initialized=merged[i].initialized && current[i].initialized;
             }
         }
@@ -1233,7 +1196,7 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         flow_capture(s->scope,body,flow_count);
         for (i=0;i<flow_count;++i) {
             entry2[i]=base[i];
-            if(body[i].moved!=base[i].moved) entry2[i].moved=2;
+            entry2[i].moved=fe_own_loop_entry(base[i].moved,body[i].moved);
             if(!body[i].initialized) entry2[i].initialized=0;
         }
         flow_restore(entry2,flow_count);
@@ -1242,7 +1205,7 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         if (s->loop_depth) --s->loop_depth;
         flow_capture(s->scope,body,flow_count);
         for(i=0;i<flow_count;++i) {
-            if(body[i].moved) entry2[i].moved=2;
+            entry2[i].moved=fe_own_loop_exit(entry2[i].moved,body[i].moved);
             if(!body[i].initialized) entry2[i].initialized=0;
         }
         flow_restore(entry2,flow_count);
