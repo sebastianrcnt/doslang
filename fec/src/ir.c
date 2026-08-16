@@ -215,12 +215,16 @@ void fe_ir_copy(FeIrModule *m, FeIrBlock *b, FeIrPlace dst, FeIrPlace src,
 
 void fe_ir_jmp(FeIrBlock *b, unsigned target)
 {
+    if (b->terminated) return;
+    b->terminated = 1;
     b->term = FE_IR_JMP;
     b->target = target;
 }
 
 void fe_ir_br(FeIrBlock *b, unsigned cond, unsigned t, unsigned f)
 {
+    if (b->terminated) return;
+    b->terminated = 1;
     b->term = FE_IR_BR;
     b->cond = cond;
     b->target = t;
@@ -229,6 +233,8 @@ void fe_ir_br(FeIrBlock *b, unsigned cond, unsigned t, unsigned f)
 
 void fe_ir_ret(FeIrBlock *b, unsigned value, int has_value)
 {
+    if (b->terminated) return;
+    b->terminated = 1;
     b->term = FE_IR_RET;
     b->ret_value = value;
     b->has_ret_value = has_value;
@@ -236,6 +242,8 @@ void fe_ir_ret(FeIrBlock *b, unsigned value, int has_value)
 
 void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, unsigned long line)
 {
+    if (b->terminated) return;
+    b->terminated = 1;
     b->term = FE_IR_TRAP;
     b->trap = reason;
     b->trap_line = line;

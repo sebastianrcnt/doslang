@@ -88,6 +88,10 @@ typedef struct FeIrBlock {
     int has_ret_value;
     FeIrTrap trap;
     unsigned long trap_line;
+    /* Set once a terminator is chosen. Lowering asks before appending a
+       jump, so a `return` inside a branch is not overwritten by the jump
+       to the join block. */
+    int terminated;
     struct FeIrBlock *next;
 } FeIrBlock;
 

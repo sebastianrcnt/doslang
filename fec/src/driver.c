@@ -1,6 +1,7 @@
 #include "parser.h"
 #include "check.h"
 #include "resolve.h"
+#include "lower.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +17,7 @@ static char *read_file(const char *name, unsigned long *size)
 
 static void usage(void)
 {
-    puts("usage: fec [--dump-tokens|--dump-ast|--check] file.fe [--no-checks]");
+    puts("usage: fec [--dump-tokens|--dump-ast|--check|--dump-ir] file.fe [--no-checks]");
 }
 
 static void dump_tokens(const char *src, unsigned long n, const char *file,
@@ -37,7 +38,7 @@ static void dump_tokens(const char *src, unsigned long n, const char *file,
 
 int main(int argc, char **argv)
 {
-    int i,dump=0,dump_tok=0,check_only=0,no_checks=0;
+    int i,dump=0,dump_tok=0,check_only=0,no_checks=0,dump_ir=0;
     const char *file=0;
     unsigned long n;
     char *src;
@@ -51,13 +52,14 @@ int main(int argc, char **argv)
         if(strcmp(argv[i],"--dump-ast")==0) dump=1;
         else if(strcmp(argv[i],"--dump-tokens")==0) dump_tok=1;
         else if(strcmp(argv[i],"--check")==0) check_only=1;
+        else if(strcmp(argv[i],"--dump-ir")==0) dump_ir=1;
         else if(strcmp(argv[i],"--no-checks")==0) no_checks=1;
         else if(strncmp(argv[i],"--target=",9)==0 || strncmp(argv[i],"--model=",8)==0 || strcmp(argv[i],"--strip-error-names")==0) { }
         else if(argv[i][0]!='-') file=argv[i];
         else if(strcmp(argv[i],"--help")==0){usage();return 0;}
         else {fprintf(fe_diag_stream(),"fec: unknown option %s\n",argv[i]);return 2;}
     }
-    if((dump?1:0)+(dump_tok?1:0)+(check_only?1:0)>1){
+    if((dump?1:0)+(dump_tok?1:0)+(check_only?1:0)+(dump_ir?1:0)>1){
         fprintf(fe_diag_stream(),"fec: choose only one output mode\n");
         return 2;
     }
@@ -92,6 +94,13 @@ int main(int argc, char **argv)
         if(ok){
             fe_check_init(&check,&build,&d,pointer_bits,no_checks);
             if(!fe_check_program(&check)) ok=0;
+            if(ok && dump_ir){
+                FeIrModule ir;
+                fe_ir_module_init(&ir);
+                if(!fe_lower_program(&check,&ir)) ok=0;
+                else fe_ir_dump(&ir,stdout);
+                fe_ir_module_destroy(&ir);
+            }
             fe_check_destroy(&check);
         }
         fe_build_destroy(&build);
