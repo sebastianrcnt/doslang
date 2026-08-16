@@ -18,11 +18,16 @@ VM 자동화 **명령 목록과 플래그는 문서가 아니라 CLI가 규범**
 ```powershell
 uv run ferro-vm --help
 uv run ferro-vm <command> --help
+uv run ferro-test --help
 ```
 
 ## 검증 규칙
 
-- **실행 검증은 QEMU FreeDOS 내부에서만 한다.** DOSBox는 쓰지 않는다.
+- 개발 중 빠른 회귀 검사는 `uv run ferro-test run --through <milestone>`로
+  DOSBox-X에서 수행한다.
+  이 경로도 컴파일러 A를 DOS 내부 Open Watcom으로 매번 새로 빌드한다.
+- **마일스톤의 최종 공식 검증은 QEMU FreeDOS 내부에서만 한다.** DOSBox-X 결과는
+  개발용 smoke test이며 완료 게이트를 대체하지 않는다.
 - 컴파일러 A와 생성 C 모두 VM 안의 Open Watcom으로 컴파일한다.
   컴파일러 A와 bits16은 `WCL`, bits32 생성 C는 `WCL386`.
 - **호스트에서 컴파일하지 않는다.** WSL이나 호스트 C 컴파일러 결과는 정식 검증으로

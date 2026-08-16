@@ -7,6 +7,9 @@
 !.qemu/share/*.c
 .qemu/share/fec/
 
+# Reproducible DOSBox-X/Open Watcom development cache and ephemeral runs
+.dosboxx/
+
 .qemu/*.qcow2
 .qemu/*.img
 .qemu/*.iso
