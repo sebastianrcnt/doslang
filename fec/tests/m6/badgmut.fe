@@ -1,0 +1,9 @@
+// ERROR:7:global
+unit badgmut;
+
+var VALUE: i32 = 0;
+
+fn bad() -> void {
+    let r = &mut VALUE;
+    r.^ = 1;
+}

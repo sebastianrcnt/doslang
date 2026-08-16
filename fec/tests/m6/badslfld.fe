@@ -1,0 +1,6 @@
+// ERROR:5:reference
+unit badslfld;
+
+struct Bad {
+    bytes: []u8,
+}

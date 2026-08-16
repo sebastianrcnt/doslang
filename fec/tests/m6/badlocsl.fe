@@ -1,0 +1,7 @@
+// ERROR:6:reference
+unit badlocsl;
+
+fn bad() -> []u8 {
+    let a: [2]u8 = [1 as u8, 2 as u8];
+    return a[..];
+}

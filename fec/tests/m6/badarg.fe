@@ -1,0 +1,10 @@
+// ERROR:8:self
+unit badarg;
+
+struct Box {
+    value: i32,
+
+    fn bad(self: &Self, other: &i32) -> &i32 {
+        return other;
+    }
+}

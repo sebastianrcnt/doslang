@@ -1,0 +1,10 @@
+unit okglobcp;
+
+var VALUE: i32 = 7;
+
+fn read(r: &i32) -> i32 { return r.^; }
+
+fn test() -> i32 {
+    let local = VALUE;
+    return read(&local);
+}

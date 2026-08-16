@@ -1,0 +1,9 @@
+// ERROR:7:global
+unit badglob;
+
+var VALUE: i32 = 0;
+
+fn bad() -> i32 {
+    let r = &VALUE;
+    return r.^;
+}

@@ -1,0 +1,5 @@
+unit okorelse;
+
+fn value(p: ?i32) -> i32 {
+    return p orelse 9;
+}

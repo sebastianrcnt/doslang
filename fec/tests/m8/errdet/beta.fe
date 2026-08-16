@@ -1,0 +1,5 @@
+unit beta;
+
+pub fn fail() -> !void {
+    return error.Busy;
+}

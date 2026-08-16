@@ -1,0 +1,6 @@
+// ERROR:4:reference
+unit badptr;
+
+fn bad(p: *&i32) -> void {
+    return;
+}

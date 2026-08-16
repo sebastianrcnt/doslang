@@ -1,0 +1,13 @@
+unit lib;
+
+fn bump_i32(v: i32) -> i32 {
+    return v + 1;
+}
+
+pub fn bump(comptime T: type, v: T) -> T {
+    comptime if T == i32 {
+        return bump_i32(v);
+    } else {
+        return v;
+    }
+}

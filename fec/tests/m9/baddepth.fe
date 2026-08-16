@@ -1,0 +1,10 @@
+// ERROR:9:depth
+unit baddepth;
+
+struct Box(T) {
+    value: T,
+}
+
+fn bad() -> void {
+    var x: Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(Box(i32)))))))))))))))))))))))))))))))));
+}

@@ -1,0 +1,15 @@
+unit oknested;
+
+struct Box(T) {
+    value: T,
+
+    pub fn new(v: T) -> Self {
+        return Self{ value: v };
+    }
+}
+
+fn test() -> i32 {
+    let inner: Box(i32) = Box(i32).new(3);
+    let outer: Box(Box(i32)) = Box(Box(i32)).new(inner);
+    return outer.value.value;
+}

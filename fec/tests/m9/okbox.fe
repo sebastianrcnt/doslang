@@ -1,0 +1,18 @@
+unit okbox;
+
+struct Box(T) {
+    value: T,
+
+    pub fn new(v: T) -> Self {
+        return Self{ value: v };
+    }
+
+    pub fn get(self: &Self) -> &T {
+        return &self.value;
+    }
+}
+
+fn test() -> i32 {
+    var b: Box(i32) = Box(i32).new(7);
+    return b.get().^;
+}

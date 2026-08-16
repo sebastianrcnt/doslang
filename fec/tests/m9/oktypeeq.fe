@@ -1,0 +1,13 @@
+unit oktypeeq;
+
+fn kind(comptime T: type) -> i32 {
+    comptime if T == i32 {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+fn test() -> i32 {
+    return kind(i32);
+}

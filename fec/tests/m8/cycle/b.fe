@@ -1,0 +1,5 @@
+// ERROR:3:cycle
+unit b;
+import a;
+
+pub fn b_value() -> i32 { return 1; }

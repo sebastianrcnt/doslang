@@ -1,0 +1,7 @@
+// ERROR:5:Some
+unit badsome;
+
+fn bad() -> i32 {
+    let x = Some(1);
+    return x;
+}

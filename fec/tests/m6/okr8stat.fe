@@ -1,0 +1,5 @@
+unit okr8stat;
+
+fn name() -> str {
+    return "main";
+}
