@@ -3,11 +3,11 @@ unit m5_runtime;
 fn take(p: ^i32) -> void { mem.destroy(p); }
 
 pub fn run(mode: i32) -> i32 {
-    var p: ^i32 = try mem.create(i32);
+    var p: ^i32 = try mem.create(0);
     defer { mem.destroy(p); }
     p.^ = 7;
     if mode == 1 {
-        p = try mem.create(i32);
+        p = try mem.create(0);
         p.^ = 9;
         return p.^;
     }
@@ -16,12 +16,85 @@ pub fn run(mode: i32) -> i32 {
     return p.^ - 7;
 }
 
-pub fn conditional(flag: bool) -> void {
-    var p: ^i32 = try mem.create(i32);
+pub fn conditional(flag: bool) -> !void {
+    var p: ^i32 = try mem.create(0);
     if flag { take(p); }
 }
 
-pub fn argument_cleanup() -> void {
-    let p: ^i32 = try mem.create(i32);
+pub fn argument_cleanup() -> !void {
+    let p: ^i32 = try mem.create(0);
     take(p);
+}
+
+pub fn owned_slice(n: usize) -> !void {
+    let bytes: ^[]u8 = try mem.alloc_slice(u8, n);
+}
+
+struct Holder { p: ^i32 }
+
+pub fn replace_field() -> !void {
+    let first: ^i32 = try mem.create(1);
+    var h: Holder = Holder{ p: first };
+    let second: ^i32 = try mem.create(2);
+    let old: ^i32 = mem.replace(&mut h.p, second);
+    mem.destroy(old);
+}
+
+pub fn loop_cleanup() -> !void {
+    var i: i32 = 0;
+    while i < 2 {
+        let p: ^i32 = try mem.create(i);
+        i += 1;
+        if i == 1 { continue; }
+        break;
+    }
+}
+
+pub fn try_cleanup() -> !void {
+    let first: ^i32 = try mem.create(1);
+    let second: ^i32 = try mem.create(2);
+}
+
+struct PairOwners { first: ^i32, second: ^i32 }
+
+pub fn field_order() -> !void {
+    let first: ^i32 = try mem.create(1);
+    let second: ^i32 = try mem.create(2);
+    let pair: PairOwners = PairOwners{ first: first, second: second };
+}
+
+pub fn defer_order() -> !void {
+    let first: ^i32 = try mem.create(1);
+    defer { mem.destroy(first); }
+    let second: ^i32 = try mem.create(2);
+}
+
+enum Choice { A, B }
+
+pub fn match_cleanup(flag: bool) -> !void {
+    var choice: Choice = Choice.A;
+    if flag { choice = Choice.B; }
+    let p: ^i32 = try mem.create(1);
+    match choice {
+        A => { take(p); }
+        B => { take(p); }
+    }
+}
+
+struct FileLike {
+    handle: i32,
+    fn close(self: Self) -> !void { self.handle = 0; }
+    fn drop(self: &mut Self) { self.handle = 0; }
+}
+
+pub fn close_once() -> !void {
+    let file: FileLike = FileLike{ handle: 7 };
+    try file.close();
+}
+
+pub fn reassign_struct() -> !void {
+    let first: ^i32 = try mem.create(1);
+    var owner: Holder = Holder{ p: first };
+    let second: ^i32 = try mem.create(2);
+    owner = Holder{ p: second };
 }

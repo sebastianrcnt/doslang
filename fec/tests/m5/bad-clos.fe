@@ -1,0 +1,13 @@
+unit m5_bad_consuming_close;
+
+struct FileLike {
+    handle: i32,
+    fn close(self: Self) -> !void { self.handle = 0; }
+    fn drop(self: &mut Self) { self.handle = 0; }
+}
+
+fn bad() -> !void {
+    let file: FileLike = FileLike{ handle: 7 };
+    try file.close();
+    file.close();
+}

@@ -63,12 +63,8 @@ VM 안에서 반복해서 물렸던 것들. 어기면 원인 찾기 어려운 �
 
 ## 현재 상태
 
-- M1~M4 완료 및 QEMU/Open Watcom 검증됨.
-- M5(`^T`, drop, defer, 이동 검사) 진행 중. 남은 것: 모든 경로에서 정확히 1회
-  cleanup, defer와 drop의 선언 역순 병합, `try` 전파 경로 cleanup, `MaybeMoved`
-  런타임 live flag, struct drop과 필드 역순 drop, 분기/루프 상태 합류,
-  누수·이중해제 카운터 harness.
-- `own.c/h`가 아직 없고 소유권 로직이 `check.c`/`emit_c.c`에 들어가 있다. R1~R8
-  전체를 다루는 **M6 착수 시점에 분리한다** (`SPEC.md` §11.3).
+- M1~M5 완료 및 QEMU/Open Watcom 검증됨.
+- 다음은 M6(R1~R8 대여 검사)다. 착수할 때 소유권 로직을 `check.c`/`emit_c.c`에서
+  `own.c/h`로 분리한다 (`SPEC.md` §11.3).
 - v0.1.6에서 R8(파생 반환), R6(마지막 사용까지 대여), R10(전역 대여 금지)이
   바뀌었다. 셋 다 own.c의 상태 기계를 건드리므로 분리 이후에 함께 구현한다.

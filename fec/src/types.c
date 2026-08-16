@@ -21,6 +21,7 @@ static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
     t->tail_slicer = 0;
     t->drop_cname = 0;
     t->alloc_cname = 0;
+    t->replace_cname = 0;
     t->bits = 0;
     t->is_unsigned = 0;
     t->packed = 0;
@@ -200,6 +201,10 @@ FeType *fe_type_owned(FeTypeCtx *ctx, FeType *elem)
     if(t->kind==FE_TYPE_UNKNOWN) {
         t->kind=FE_TYPE_OWNED;
         t->elem=elem;
+        if(elem && elem->kind==FE_TYPE_SLICE) {
+            t->cname=generated_name(ctx,"fe_owned_slice_","type");
+            t->maker=generated_name(ctx,"fe_make_owned_slice_","type");
+        }
     }
     return t;
 }
@@ -220,6 +225,12 @@ FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value)
         }
     }
     return t;
+}
+
+void fe_type_require_replace(FeTypeCtx *ctx, FeType *type)
+{
+    if(type && !type->replace_cname)
+        type->replace_cname=generated_name(ctx,"fe_replace_","type");
 }
 
 FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed)
@@ -410,7 +421,9 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
         t->cycle_state = 2; return;
     }
     if (t->kind == FE_TYPE_OWNED) {
-        t->size = ctx->pointer_bits == 16 ? 2UL : 4UL;
+        t->size = t->elem && t->elem->kind==FE_TYPE_SLICE ?
+            (ctx->pointer_bits == 16 ? 4UL : 8UL) :
+            (ctx->pointer_bits == 16 ? 2UL : 4UL);
         t->align = ctx->pointer_bits == 16 ? 1U : 4U;
         t->cycle_state = 2; return;
     }

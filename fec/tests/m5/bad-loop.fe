@@ -1,0 +1,7 @@
+unit m5_bad_loop_move;
+
+fn take(p: ^i32) -> void { mem.destroy(p); }
+
+fn bad(p: ^i32, again: bool) -> void {
+    while again { take(p); }
+}

@@ -72,7 +72,15 @@ static int is_copy_type(FeType *t)
 static void mark_moved(FeCheckerState *s, FeNode *n, FeType *t)
 {
     FeSym *sym;
-    if (!n || !t || is_copy_type(t) || n->kind!=FE_N_IDENT) return;
+    if (!n || !t || is_copy_type(t)) return;
+    if(n->kind==FE_N_INDEX && t->kind==FE_TYPE_SLICE &&
+       (n->c || !n->b)) return;
+    if(n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX) {
+        err(s->c,n->loc,
+            "cannot move a non-Copy value out of a projection; use mem.replace");
+        return;
+    }
+    if(n->kind!=FE_N_IDENT) return;
     sym=find_symbol(s->scope,n->text ? n->text : "");
     if (sym) {
         if (s->defer_depth) {
@@ -258,6 +266,31 @@ void fe_check_init(FeCheck *c, FeAst *ast, FeDiags *diags,
 }
 
 static FeType *check_expr(FeCheckerState *s, FeNode *n);
+
+static FeNode *find_method(FeCheck *c, FeType *owner, const char *name)
+{
+    FeNode *decl;
+    FeNode *method;
+    if(!owner || !name) return 0;
+    for(decl=c->ast->root ? c->ast->root->children : 0; decl; decl=decl->next)
+        if(decl->kind==FE_N_STRUCT && decl->text &&
+           strcmp(decl->text,owner->name)==0)
+            for(method=decl->children; method; method=method->next)
+                if(method->kind==FE_N_FN && method->text &&
+                   strcmp(method->text,name)==0) return method;
+    return 0;
+}
+
+static FeType *method_type(FeCheck *c, FeNode *node, FeType *owner)
+{
+    if(node && node->kind==FE_N_TYPE && node->text &&
+       strcmp(node->text,"Self")==0) return owner;
+    if(node && node->kind==FE_N_TYPE && node->text &&
+       (strcmp(node->text,"&")==0 || strcmp(node->text,"&mut")==0) &&
+       node->a && node->a->text && strcmp(node->a->text,"Self")==0)
+        return fe_type_ref(&c->types,owner,strcmp(node->text,"&mut")==0);
+    return node_type(c,node);
+}
 static void check_match(FeCheckerState *s, FeNode *n);
 static void check_stmt(FeCheckerState *s, FeNode *n);
 
@@ -666,12 +699,42 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
                 return n->sem_type;
             }
             if (strcmp(n->a->b->text,"create")==0) {
-                if (!arg || arg->next || arg->kind!=FE_N_IDENT)
-                    err(c,n->loc,"mem.create requires exactly one type argument");
-                a=arg && arg->kind==FE_N_IDENT ?
-                    fe_type_owned(&c->types,fe_type_intern(&c->types,arg->text)) :
-                    fe_type_owned(&c->types,unknown(c));
+                if (!arg || arg->next)
+                    err(c,n->loc,"mem.create requires exactly one value");
+                a=arg ? check_expr(s,arg) : unknown(c);
+                if(arg) mark_moved(s,arg,a);
+                a=fe_type_owned(&c->types,a);
                 n->sem_type=fe_type_error_union(&c->types,a);
+                return n->sem_type;
+            }
+            if (strcmp(n->a->b->text,"alloc_slice")==0) {
+                FeNode *count=arg ? arg->next : 0;
+                FeType *item;
+                if(!arg || arg->kind!=FE_N_IDENT || !count || count->next)
+                    err(c,n->loc,"mem.alloc_slice requires a type and length");
+                item=arg && arg->kind==FE_N_IDENT ?
+                    fe_type_intern(&c->types,arg->text) : unknown(c);
+                b=count ? check_expr(s,count) : unknown(c);
+                if(known(b) && !fe_type_is_integer(b))
+                    err(c,count->loc,"slice length must be an integer");
+                a=fe_type_owned(&c->types,fe_type_slice(&c->types,item));
+                n->sem_type=fe_type_error_union(&c->types,a);
+                return n->sem_type;
+            }
+            if (strcmp(n->a->b->text,"replace")==0) {
+                FeNode *value=arg ? arg->next : 0;
+                if(!arg || !value || value->next)
+                    err(c,n->loc,"mem.replace requires destination and value");
+                a=arg ? check_expr(s,arg) : unknown(c);
+                if(!a || a->kind!=FE_TYPE_REF || !a->ref_mut ||
+                   !arg->a || !lvalue_writable(s,arg->a))
+                    err(c,n->loc,"mem.replace destination must be a mutable place");
+                b=value ? check_expr(s,value) : unknown(c);
+                if(a && a->kind==FE_TYPE_REF && !compatible(a->elem,b,value))
+                    err(c,value->loc,"mem.replace value type mismatch");
+                if(value) mark_moved(s,value,b);
+                n->sem_type=a && a->kind==FE_TYPE_REF ? a->elem : unknown(c);
+                fe_type_require_replace(&c->types,n->sem_type);
                 return n->sem_type;
             }
         }
@@ -701,7 +764,39 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
             n->sem_type=fe_type_intern(&c->types,"usize"); return n->sem_type;
         }
         if (n->a && n->a->kind == FE_N_MEMBER) {
+            FeNode *method;
+            FeNode *self_param;
             et=check_expr(s,n->a->a);
+            method=et && et->kind==FE_TYPE_STRUCT ?
+                find_method(c,et,n->a->b ? n->a->b->text : "") : 0;
+            if(method) {
+                self_param=method->a ? method->a->children : 0;
+                if(!self_param) {
+                    err(c,n->loc,"method requires self parameter");
+                    return unknown(c);
+                }
+                a=method_type(c,self_param->a,et);
+                if(a->kind==FE_TYPE_REF && a->ref_mut &&
+                   !lvalue_writable(s,n->a->a))
+                    err(c,n->loc,"mutable method requires a mutable receiver");
+                if(a->kind!=FE_TYPE_REF) mark_moved(s,n->a->a,et);
+                param=self_param->next;
+                arg=n->children;
+                while(param && arg) {
+                    a=check_expr(s,arg);
+                    b=method_type(c,param->a,et);
+                    if(!compatible(b,a,arg) && a->kind!=FE_TYPE_UNKNOWN)
+                        err(c,arg->loc,"method argument type mismatch");
+                    mark_moved(s,arg,a);
+                    param=param->next;
+                    arg=arg->next;
+                }
+                if(param || arg) err(c,n->loc,"wrong number of method arguments");
+                n->sem_decl=method;
+                n->sem_type=method->b ? method_type(c,method->b,et) :
+                    fe_type_intern(&c->types,"void");
+                return n->sem_type;
+            }
             variant=et && et->kind==FE_TYPE_ENUM ?
                 fe_type_variant(et,n->a->b ? n->a->b->text : "") : 0;
             arg=n->children;
@@ -761,6 +856,13 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
             n->sem_type=a->elem;
             return a->elem;
         }
+        if(a->kind==FE_TYPE_REF && a->elem &&
+           a->elem->kind==FE_TYPE_STRUCT) {
+            field=fe_type_field(a->elem,n->b ? n->b->text : "");
+            if(!field) { err(c,n->loc,"unknown struct field"); return unknown(c); }
+            n->sem_type=field->type;
+            return field->type;
+        }
         if (a->kind == FE_TYPE_OWNED && n->b && n->b->text &&
             strcmp(n->b->text,"^")==0) {
             n->sem_type=a->elem;
@@ -816,6 +918,15 @@ static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
             n->sem_type=base->elem;
             return base->elem;
         }
+        if(base && base->kind==FE_TYPE_REF && base->elem &&
+           base->elem->kind==FE_TYPE_STRUCT) {
+            if(!base->ref_mut)
+                err(s->c,n->loc,"cannot write through shared reference");
+            field=fe_type_field(base->elem,n->b ? n->b->text : "");
+            if(!field) { err(s->c,n->loc,"assignment requires a valid struct field"); return unknown(s->c); }
+            n->sem_type=field->type;
+            return field->type;
+        }
         if (base && base->kind == FE_TYPE_OWNED && n->b && n->b->text &&
             strcmp(n->b->text,"^")==0) {
             n->sem_type=base->elem;
@@ -855,12 +966,17 @@ static void check_match(FeCheckerState *s, FeNode *n)
     FeVariantType *variant;
     int seen[256];
     int wildcard=0;
+    FeFlowSlot base[64], merged[64], current[64];
+    unsigned flow_count;
+    int have_merged=0;
     unsigned i;
     for(i=0;i<256U;i++) seen[i]=0;
     value=check_expr(s,n->a);
     if(!value || value->kind!=FE_TYPE_ENUM) { err(s->c,n->loc,"match requires an enum value"); return; }
+    flow_count=flow_capture(s->scope,base,64);
     for(arm=n->children;arm;arm=arm->next) {
         FeScope *old=s->scope;
+        flow_restore(base,flow_count);
         if(arm->text && strcmp(arm->text,"_")==0) wildcard=1;
         else {
             variant=fe_type_variant(value,arm->text);
@@ -885,7 +1001,19 @@ static void check_match(FeCheckerState *s, FeNode *n)
         if(arm->a && arm->a->kind==FE_N_BLOCK) check_stmt(s,arm->a);
         else if(arm->a) check_expr(s,arm->a);
         s->scope=old;
+        flow_capture(s->scope,current,flow_count);
+        if(!have_merged) {
+            for(i=0;i<flow_count;++i) merged[i]=current[i];
+            have_merged=1;
+        } else {
+            for(i=0;i<flow_count;++i) {
+                merged[i].moved=merged[i].moved==1 && current[i].moved==1 ? 1 :
+                    (merged[i].moved || current[i].moved ? 2 : 0);
+                merged[i].initialized=merged[i].initialized && current[i].initialized;
+            }
+        }
     }
+    if(have_merged) flow_restore(merged,flow_count);
     if(!wildcard) for(i=0;i<value->variant_count && i<256U;i++) if(!seen[i]) err(s->c,n->loc,"non-exhaustive match");
 }
 
@@ -1073,12 +1201,12 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         --s->defer_depth;
         break;
     case FE_N_IF: {
-        FeFlowSlot base[128], left[128], right[128];
+        FeFlowSlot base[64], left[64], right[64];
         unsigned flow_count;
         a = check_expr(s, n->a);
         if (known(a) && a->kind != FE_TYPE_BOOL)
             err(c, n->loc, "if condition must be bool");
-        flow_count=flow_capture(s->scope,base,128);
+        flow_count=flow_capture(s->scope,base,64);
         check_stmt(s, n->b);
         flow_capture(s->scope,left,flow_count);
         flow_restore(base,flow_count);
@@ -1092,25 +1220,32 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         break;
     }
     case FE_N_WHILE: {
-        FeFlowSlot base[128], body[128];
+        FeFlowSlot base[64], body[64], entry2[64];
         unsigned flow_count;
+        unsigned i;
         a = check_expr(s, n->a);
         if (known(a) && a->kind != FE_TYPE_BOOL)
             err(c, n->loc, "while condition must be bool");
-        flow_count=flow_capture(s->scope,base,128);
+        flow_count=flow_capture(s->scope,base,64);
         if (s->loop_depth < 255U) ++s->loop_depth;
         check_stmt(s, n->b);
         if (s->loop_depth) --s->loop_depth;
         flow_capture(s->scope,body,flow_count);
-        flow_restore(base,flow_count);
-        {
-            unsigned i;
-            for (i=0;i<flow_count;++i) {
-                if (body[i].moved) base[i].moved=2;
-                if (!body[i].initialized) base[i].initialized=0;
-            }
+        for (i=0;i<flow_count;++i) {
+            entry2[i]=base[i];
+            if(body[i].moved!=base[i].moved) entry2[i].moved=2;
+            if(!body[i].initialized) entry2[i].initialized=0;
         }
-        flow_restore(base,flow_count);
+        flow_restore(entry2,flow_count);
+        if (s->loop_depth < 255U) ++s->loop_depth;
+        check_stmt(s,n->b);
+        if (s->loop_depth) --s->loop_depth;
+        flow_capture(s->scope,body,flow_count);
+        for(i=0;i<flow_count;++i) {
+            if(body[i].moved) entry2[i].moved=2;
+            if(!body[i].initialized) entry2[i].initialized=0;
+        }
+        flow_restore(entry2,flow_count);
         break;
     }
     case FE_N_FOR:
@@ -1168,6 +1303,28 @@ static void check_fn(FeCheck *c, FeNode *fn, FeScope *globals)
     s.scope = old;
 }
 
+static void check_method(FeCheck *c, FeNode *fn, FeScope *globals,
+                         FeType *owner)
+{
+    FeCheckerState s;
+    FeNode *x;
+    FeType *t;
+    s.c=c;
+    s.globals=globals;
+    s.scope=scope_new(&s,globals);
+    s.ret=fn->b ? method_type(c,fn->b,owner) : fe_type_intern(&c->types,"void");
+    s.loop_depth=0;
+    s.defer_depth=0;
+    fn->sem_type=s.ret;
+    for(x=fn->a ? fn->a->children : 0; x; x=x->next) {
+        t=method_type(c,x->a,owner);
+        x->sem_type=t;
+        add_symbol(&s,s.scope,x->text,t,0,1,1,
+                   local_cname(c,x->text ? x->text : "arg"),x);
+    }
+    if(fn->c) check_stmt(&s,fn->c);
+}
+
 int fe_check_program(FeCheck *c)
 {
     FeCheckerState s;
@@ -1189,6 +1346,15 @@ int fe_check_program(FeCheck *c)
     check_type_cycles(c);
     fe_type_layout_all(&c->types);
     for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next) {
+        if(n->kind==FE_N_STRUCT) {
+            FeNode *m;
+            char method_name[128];
+            for(m=n->children; m; m=m->next) if(m->kind==FE_N_FN) {
+                sprintf(method_name,"%s_%s",n->text ? n->text : "Type",
+                        m->text ? m->text : "method");
+                m->cname=unit_cname(c,method_name);
+            }
+        }
         if (n->kind == FE_N_GLOBAL || n->kind == FE_N_CONST) {
             t = n->a ? node_type(c, n->a) : unknown(c);
             add_symbol(&s, s.globals, n->text, t, 0,
@@ -1221,6 +1387,13 @@ int fe_check_program(FeCheck *c)
     }
     for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
         if (n->kind == FE_N_FN) check_fn(c, n, s.globals);
+    for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
+        if(n->kind==FE_N_STRUCT) {
+            FeNode *m;
+            t=fe_type_intern(&c->types,n->text);
+            for(m=n->children; m; m=m->next)
+                if(m->kind==FE_N_FN) check_method(c,m,s.globals,t);
+        }
     fe_type_layout_all(&c->types);
     return c->diags->errors == 0;
 }

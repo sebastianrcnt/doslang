@@ -259,14 +259,20 @@ fec.exe --target=bits32 --emit-c TESTS\M5\BAD-DBL.FE -o TESTS\M5\BAD-DBL.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M5\BAD-COND.FE -o TESTS\M5\BAD-COND.C > nul
 if not errorlevel 1 goto test_fail
-if exist TESTS\M5\RUNTIME-G.C del TESTS\M5\RUNTIME-G.C
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-PROJ.FE -o TESTS\M5\BAD-PROJ.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-CLOS.FE -o TESTS\M5\BAD-CLOS.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-LOOP.FE -o TESTS\M5\BAD-LOOP.C > nul
+if not errorlevel 1 goto test_fail
+if exist TESTS\M5\RUNT-G.C del TESTS\M5\RUNT-G.C
 if exist TESTS\M5\RUNTIME.O del TESTS\M5\RUNTIME.O
 if exist TESTS\M5\RUNTIME.EXE del TESTS\M5\RUNTIME.EXE
-fec.exe --target=bits32 --emit-c TESTS\M5\RUNTIME.FE -o TESTS\M5\RUNTIME-G.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M5\RUNTIME.FE -o TESTS\M5\RUNT-G.C > nul
 if errorlevel 1 goto test_fail
 rem Compile generated source and the C89 runtime harness in one WCL386 invocation
 rem so both objects use the same DOS/4GW startup and runtime library.
-wcl386 -q -za -bt=dos -dmalloc=m5_malloc -dfree=m5_free -fe=TESTS\M5\RUNTIME.EXE TESTS\M5\RUNTIME-G.C TESTS\M5\RUNTIME.C
+wcl386 -q -za -bt=dos -dmalloc=m5_malloc -dfree=m5_free -fe=TESTS\M5\RUNTIME.EXE TESTS\M5\RUNT-G.C TESTS\M5\RUNTIME.C
 if errorlevel 1 goto test_fail
 TESTS\M5\RUNTIME.EXE
 if errorlevel 1 goto test_fail

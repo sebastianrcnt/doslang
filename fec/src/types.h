@@ -39,6 +39,7 @@ struct FeType {
     char *tail_slicer;
     char *drop_cname;
     char *alloc_cname;
+    char *replace_cname;
     unsigned bits;
     int is_unsigned;
     int packed;
@@ -77,6 +78,7 @@ FeType *fe_type_mut_slice(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable);
 FeType *fe_type_owned(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value);
+void fe_type_require_replace(FeTypeCtx *ctx, FeType *type);
 FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed);
 FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node);
 FeType *fe_type_declare_error(FeTypeCtx *ctx, const FeNode *node);

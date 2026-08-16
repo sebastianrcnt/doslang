@@ -1,8 +1,10 @@
 unit mem;
 
-pub fn create(T: type) -> !^T;
+pub fn create(value: T) -> !^T;
 pub fn destroy(p: *void);
-pub fn copy(dst: []u8, src: []u8);
+pub fn alloc_slice(T: type, n: usize) -> !^[]T;
+pub fn replace(dst: &mut T, value: T) -> T;
+pub fn copy(dst: []mut u8, src: []u8);
 pub struct Arena {
     ptr: *void,
     pub fn init() -> Arena { return Arena{ ptr: null }; }
