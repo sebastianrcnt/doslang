@@ -72,10 +72,13 @@ int fe_own_place_from_expr(FeNode *expr, FeOwnPlace *place);
 void fe_own_state_init(FeOwnState *state, int initialized);
 int fe_own_access(FeDiags *diags, FeOwnState *state,
                   FeOwnAccessKind access, FeLoc loc);
+int fe_own_call_shared_view(FeDiags *diags, FeOwnState *state, FeLoc loc);
 void fe_own_release_shared(FeOwnState *state);
 void fe_own_release_exclusive(FeOwnState *state);
 FeOwnState fe_own_merge_state(FeOwnState left, FeOwnState right);
 int fe_own_state_equal(const FeOwnState *left, const FeOwnState *right);
+int fe_own_loop_merge_state(FeOwnState entry, FeOwnState backedge,
+                            FeOwnState *merged);
 
 FeOwnProvenance fe_own_provenance_static(void);
 FeOwnProvenance fe_own_provenance_param(unsigned param_index);
