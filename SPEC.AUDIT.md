@@ -265,3 +265,295 @@ M6(borrow checker) 착수 전에 확정해야 하는 소유권·참조 규칙 �
 - M7: try nominal error 일치와 일반 catch를 구현한다.
 - M8/M9: `fe_errors.h`, dependency hash, `fe_generics.c`를 구현한다.
 - M10: volatile/barrier, interrupt-safe 허용 목록, on_exit 복원을 검증한다.
+
+## 2026-08-16 — v0.1.8
+
+M6~M9 구현 전에 함수-local 소유권 분석, optional/error 의미, 계층형 unit/import,
+`.fei` cache와 제네릭 모노모피제이션을 동결했다. compiler A/B가 같은 작은 상태 기계를
+구현하고 DOS와 host에서 같은 source graph를 선택하며 M12 fixpoint에서 byte-identical
+출력을 만들 수 있는지가 공통 판단 기준이다.
+
+### Deterministic expression evaluation order
+
+- 문제: C는 일반 호출 인자와 많은 operand의 평가 순서를 보장하지 않는다. Ferro가 이를
+  그대로 상속하면 side effect뿐 아니라 move, borrow, `try`, defer/drop cleanup 결과가 C
+  compiler와 최적화에 따라 달라진다.
+- 결정: Ferro 일반 표현식은 left-to-right다. 호출은 callee 먼저, 이어서 source 순서의
+  인자, 이항식은 왼쪽 operand 먼저다. `and`/`or`, `orelse`, `catch`는 필요한 우변만
+  평가하는 lazy 연산이다.
+- 근거: source만으로 동작과 cleanup 순서를 예측할 수 있고 compiler A/B의 lower 결과가
+  동일해진다. 함수-local 분석 원칙도 그대로 유지한다.
+- 기각한 대안: target C의 평가 순서에 맡기기. host compiler와 build option에 따라 의미가
+  변해 M12 결정성을 깨므로 기각했다.
+- 구현 영향: lower는 C에서 순서가 보장되지 않는 식을 ordered temporary statement로
+  분해하고 own.c도 같은 순서로 place effect를 처리한다.
+
+### M6 root-granularity borrow tracking
+
+- 문제: field/index별 독립 대여를 허용하려면 projection overlap, 동적 index 동등성,
+  union/alias까지 다루는 별도 alias analysis가 필요하다.
+- 결정: v0.1 대여 상태는 root local/parameter 단위다. `&mut p.a`는 `p` 전체를 잠그고
+  `xs[0]`과 `xs[1]`도 같은 root의 충돌 대여다. projection은 root를 찾는 데만 쓴다.
+- 근거: R1~R8을 함수 하나의 작은 상태 기계로 검사할 수 있어 compiler A와 M11의 B가
+  단순해진다. 보수적 거부일 뿐 memory safety나 표현 결정성은 약화하지 않는다.
+- 기각한 대안: field-sensitive/index-sensitive borrow checking. 편의는 늘지만 compiler A의
+  구현량과 진단 상태가 크게 증가하고 동적 index에는 결국 보수성이 남아 기각했다.
+- 구현 영향: own.c의 borrow key는 projection이 아니라 root symbol이다. M6에는 disjoint
+  field/index도 충돌하는 pass/fail 경계를 고정한다.
+
+### M6 reborrow/coercion 제한
+
+- 문제: `&mut → &`와 `[]mut → []`를 일반 암묵 변환으로 허용하면 새 shared borrow의
+  수명과 원래 exclusive borrow의 재활성화를 결정하는 숨은 coercion/lifetime 시스템이
+  필요하다.
+- 결정: 암묵 약화는 호출 인자 위치의 호출 기간 read-only reborrow만 허용한다. 원래
+  exclusive borrow는 원래 last-use까지 유지하며 일반 `let`/대입의 암묵 약화는 에러다.
+- 근거: API 호출 편의는 확보하면서 수명 annotation 없이 함수-local R6 분석을 유지한다.
+- 기각한 대안: arbitrary implicit reborrow/coercion과 `let s: &T = m` 허용. 대여 종료
+  시점이 숨고 compiler A/B가 별도 coercion graph를 가져야 하므로 기각했다.
+- 구현 영향: check/own은 call argument에만 임시 shared view 전이를 만들고 assignment
+  conversion table에는 추가하지 않는다.
+
+### R8 provenance lattice
+
+- 문제: 여러 return path의 static/parameter 파생 결과, optional null 경로와 method의
+  추가 참조 인자를 합칠 명시 규칙이 없으면 caller borrow가 구현 순서에 따라 달라진다.
+- 결정: provenance를 `Static`과 `Param(N)`으로 정규화한다. method는 `Param(self)`만,
+  자유 함수는 유일한 참조성 parameter만 허용한다. `Static + Param(N)`은 `Param(N)`,
+  서로 다른 `Param`의 합류는 에러다. null 경로는 caller borrow가 없는 경로다.
+- 근거: provenance가 작은 lattice라 함수 본문만 보고 계산하고 시그니처로 전달할 수 있다.
+  lifetime annotation이나 interprocedural inference가 필요 없다.
+- 기각한 대안: arbitrary parameter union provenance 또는 lifetime parameter. caller에서
+  숨은 alias set/전역 분석이 필요해 Ferro 철학과 맞지 않는다.
+- 구현 영향: own.c가 return CFG에서 lattice를 합치고 lowered signature와 `.fei`가
+  provenance metadata를 보존한다.
+
+### M6 branch merge와 loop fixed point
+
+- 문제: `Owned/Moved`, 초기화 여부와 live borrow가 branch/backedge에서 만날 때 단순히
+  한쪽 상태를 고르면 use-after-move를 놓치거나 안전한 borrow를 너무 일찍 푼다.
+- 결정: `Owned + Moved → MaybeMoved`, 경로별 초기화 차이는 `MaybeUninit` 동등 상태로
+  합친다. live borrow는 합집합을 보수적으로 유지하고 incompatible borrow는 약화하지
+  않는다. loop은 진입/종료 상태를 합쳐 두 번째 pass를 돌리고 안정되지 않으면 에러다.
+- 근거: 유한한 함수-local lattice와 기존 2-pass만으로 모든 iteration을 보수적으로
+  근사한다. 첫 iteration만 검사하는 불건전성을 피한다.
+- 기각한 대안: 첫 pass만 검사, 또는 merge에서 borrow를 `Owned`로 되돌리기. loop-carried
+  alias와 조건부 move를 놓치므로 기각했다.
+- 구현 영향: own.c는 branch exit 전에 last-use를 반영하고 merge table/bit state를
+  구현한다. runtime drop에는 `MaybeMoved` live flag가 필요하다.
+
+### M7 contextual null/error-union construction
+
+- 문제: `null`에 독립 타입을 주거나 error union을 일반 implicit conversion으로 다루면
+  타입 추론·overload 후보가 늘고 nominal error 경계가 흐려진다.
+- 결정: `null`은 expected optional/pointer-like type이 유일할 때만 구성된다. expected
+  `E!T` 위치에서는 T가 success, E가 failure를 구성하며 return도 같다. E1/E2 및
+  nominal error/`core.Error` 자동 변환은 없다.
+- 근거: contextual expected type 한 개만 보면 되어 compiler A/B의 local type checker가
+  결정적이고 nominal error 안전성도 유지된다.
+- 기각한 대안: polymorphic null, 일반 union injection conversion, error widening. 숨은
+  conversion 및 overload resolution을 요구하므로 기각했다.
+- 구현 영향: check는 expected-type 전달 위치에서만 null/error construction을 허용하고
+  문맥 없는 `let p = null`을 진단한다.
+
+### M7 error declaration uniqueness
+
+- 문제: code 0 외에도 한 nominal error 선언 안의 중복 member 이름이나 숫자 code는
+  match/format 결과를 모호하게 만든다.
+- 결정: code 0, 중복 이름, 중복 숫자 code를 모두 compile error로 한다. 서로 다른 nominal
+  error 선언끼리는 같은 숫자를 사용할 수 있지만 타입은 계속 다르다.
+- 근거: 선언 하나의 symbol/code table만 검사하면 되고 runtime representation은 바뀌지
+  않는다.
+- 구현 영향: error declaration check가 두 deterministic set을 만들고 중복 위치를 note로
+  표시한다.
+
+### M7 lazy recovery operators / non-Copy extraction
+
+- 문제: `orelse`/`catch` RHS를 eager 평가하면 불필요한 side effect와 move가 생긴다.
+  또한 `Some(x)` pattern이나 projection이 non-Copy payload를 암묵 이동하면 R7과
+  조건부 drop이 불명확해진다.
+- 결정: recovery RHS/handler는 failure 경로에서만 평가한다. optional pattern은 place의
+  borrow/view이고 Copy만 복사한다. non-Copy owned payload 추출은 `mem.replace`로만 하며
+  temporary optional 자동 추출 예외도 두지 않는다.
+- 근거: 평가와 소유권 효과가 같은 CFG 경로를 따르고 기존 projection/R7 상태 기계를
+  재사용한다.
+- 기각한 대안: pattern별 destructive move와 temporary 특례. hidden move와 추가 drop
+  상태를 만들고 source에서 비용이 보이지 않아 기각했다.
+- 구현 영향: lower는 lazy branch를 만들고 own은 실행 경로별 effect를 합친다. pattern
+  binding은 place mutability에 따른 shared/mutable borrow다.
+
+### Hierarchical dotted unit namespace
+
+- 문제: 단일 `unit foo` namespace는 외부 source library가 늘 때 `util`, `types`, `parse`
+  같은 이름 충돌을 피할 수 없다.
+- 결정: `unit_path := ident ('.' ident)*`, `import unit_path [as ident]`의 계층형 canonical
+  이름을 도입한다. import binding은 마지막 segment이고 항상 `binding.member`로 접근한다.
+- 근거: Go와 비슷한 단순 unit 전체 import를 유지하면서 namespace 충돌만 해결한다.
+  resolver에는 relative scope walk나 symbol import가 필요 없다.
+- 기각한 대안: relative/glob/selective imports, re-export, friend/package-private visibility.
+  이름 해석과 캐시 의존 graph가 복잡해져 v0.1에서 제외했다.
+- 구현 영향: lexer keyword 추가는 없고 parser/resolve/diagnostic이 canonical dotted path와
+  optional alias를 보존한다.
+
+### DOS-safe unit naming
+
+- 문제: host의 case sensitivity와 FAT 8.3 규칙이 다르면 같은 source tree가 다른 unit을
+  찾거나 긴 이름 전송 시 변형될 수 있다.
+- 결정: unit segment는 lowercase ASCII, 첫 글자 letter, 이후 letter/digit/underscore,
+  최대 8자로 제한한다. dotted path는 root 아래 `segment/.../last.fe`와 정확히 대응하고
+  비교는 규범적 ASCII case-insensitive mapping을 쓴다.
+- 근거: unit identity가 DOS와 host에서 같고 8.3 alias 생성에 기대지 않는다.
+- 기각한 대안: 일반 Ferro identifier/임의 길이 허용 후 host별 normalization. case-fold와
+  truncation 충돌이 platform-dependent라 기각했다.
+- 구현 영향: entry path suffix로 project root를 계산하고 mismatch/case-variant duplicate를
+  진단한다. canonical identity는 항상 lowercase dotted form이다.
+
+### Deterministic import-root resolution / ambiguity rejection
+
+- 문제: project root, 여러 `-I`, std root를 first-match-wins로 검색하면 `-I` 순서나 host
+  directory 상태가 실제 선택 source를 바꾼다.
+- 결정: 모든 candidate root를 조사하고 동일 unit에 서로 다른 canonical file이 둘 이상
+  있으면 ambiguous error와 path note를 낸다. 같은 실제 file alias만 dedup한다.
+- 근거: build/order/platform과 무관한 source graph를 만들어 `.fei`, generated C와 M12
+  fixpoint를 안정시킨다.
+- 기각한 대안: first-match-wins. 편하지만 shadowing이 command-line order에 숨어 결정성을
+  깨므로 기각했다.
+- 구현 영향: driver는 후보를 canonicalize·정렬한 뒤 identity를 비교하고 첫 성공에서
+  검색을 중단하지 않는다.
+
+### Reserved std namespace
+
+- 문제: flat `io`, `mem`, `fmt`, `sys`는 user library 이름과 충돌하고 compiler 내장 std
+  root를 일반 user root처럼 검색하면 같은 이름이 환경에 따라 shadow된다.
+- 결정: `std` top-level을 compiler-reserved로 하고 `std.io`, `std.mem`, `std.fmt`,
+  `std.sys`를 canonical unit으로 쓴다. 마지막 segment binding 때문에 사용 표면은
+  `io.write`, `mem.replace`로 유지한다. `str`은 import unit이 아니다.
+- 근거: std lookup이 명시적이고 deterministic이며 향후 source package와 충돌하지 않는다.
+- 구현 영향: M8에서 std source layout/unit 선언을 이동하고 builtin std root는 `std.*`에만
+  후보가 된다.
+
+### Source-only external libraries
+
+- 문제: v0.1에서 package manifest/solver나 stable binary ABI까지 정의하면 M8 범위를 넘어
+  `.fei` encoding과 target C ABI를 영구 호환 계약으로 굳히게 된다.
+- 결정: 외부 library는 source tree를 `-I` root로 제공한다. package manager/registry/version
+  solver/manifest 문법과 `.fei + .obj/.lib` binary-only 배포 ABI는 지원하지 않는다.
+- 근거: 언어 import 의미는 작게 유지하고 target/model별로 source에서 결정적으로
+  재컴파일할 수 있다. DOS 배포 도구도 단순하다.
+- 기각한 대안: package manager를 언어 의미론에 결합, binary-only ABI. compiler A와
+  M12 전에 해결할 필요가 없고 호환 부담이 커 기각했다.
+- 구현 영향: `-I`는 source-only candidate root이며 미래 도구도 root 구성만 담당한다.
+
+### `.fei` interface/cache role과 deterministic schema
+
+- 문제: source hash, public interface hash와 compile cache key가 섞여 있었고 `.fei`의
+  최소 논리 정보·결정적 직렬화 조건이 없어 private 변경이 전체 rebuild를 유발하거나
+  host path/timestamp가 fixpoint에 섞일 수 있었다.
+- 결정: 세 hash 개념을 분리하고 `.fei`에 version/target/model, canonical unit, public
+  signatures/layout, anonymous errors, exported generic body/support closure, direct dependency
+  names/hashes를 기록한다. canonical key 순으로 직렬화하며 absolute path/time/build dir를
+  금지한다.
+- 근거: private non-generic 변경은 자기 unit만 재컴파일하고 interface가 같으면 dependent를
+  유지할 수 있다. 같은 graph+target의 `.fei`는 host/build order와 무관하게 byte-identical하다.
+- 기각한 대안: source hash를 interface hash로 재사용, unordered serializer. 구현은 짧지만
+  불필요한 rebuild와 M12 비결정성을 만들어 기각했다.
+- 구현 영향: `.fei` encoding은 자유지만 논리 schema와 sorted serialization을 만족하고
+  driver cache가 dependency interface hash를 사용해야 한다.
+
+### Ferro visibility vs backend linkage
+
+- 문제: Ferro private를 무조건 C `static`으로 방출하면 통합 `fe_generics.c`의 exported
+  instance가 definition unit private helper를 호출할 수 없다.
+- 결정: Ferro private는 resolver visibility일 뿐 C linkage와 동일하지 않다. generic
+  support에 필요한 private top-level symbol은 deterministic unit-mangled linkage와 internal
+  prototype을 가질 수 있다.
+- 근거: source 접근 권한은 유지하면서 단일 통합 generic body 방출을 가능하게 한다.
+- 기각한 대안: `C static == Ferro private`, 또는 private helper를 instance마다 복제.
+  전자는 linkage 실패, 후자는 중복과 비결정적 출력 때문에 기각했다.
+- 구현 영향: resolver는 여전히 cross-unit private 참조를 거부하고 backend/internal header만
+  `.fei` support metadata를 통해 symbol을 연결한다.
+
+### M9 type-only generics
+
+- 문제: user comptime value generic까지 허용하면 값 canonicalization, mangling, expression
+  evaluator와 instance explosion 정책을 M9에서 함께 설계해야 한다.
+- 결정: v0.1 user generic parameter는 `type`만 지원한다. `struct Box(T)`는
+  `comptime T: type` shorthand이며 builtin comptime value와 구별한다.
+- 근거: List/Map과 compiler B에 필요한 추상화를 충족하면서 instance key를 canonical type
+  list로 제한한다. trait/bound도 추가하지 않는다.
+- 기각한 대안: integer/string/bool value generics. M11 필수 기능이 아니고 구현/결정성
+  부담이 커 v0.1 이후로 미룬다.
+- 구현 영향: parser/check가 user generic parameter type을 제한하고 value generic fixture를
+  명시적으로 거부한다.
+
+### M9 no type inference
+
+- 문제: `id(3)`에서 T를 추론하려면 argument constraints, conversion 후보와 향후 overload
+  규칙을 정의해야 하고 진단/instance 발견 순서도 복잡해진다.
+- 결정: generic type argument는 `id(i32, 3)`처럼 항상 명시한다. compiler-known
+  `mem.create(value)` inference는 별도 intrinsic 규칙이다.
+- 근거: call syntax만 보고 instance key가 결정되어 compiler A/B가 단순하고 deterministic하다.
+- 기각한 대안: generic type inference. 편의보다 숨은 constraint solver 비용이 커 기각했다.
+- 구현 영향: generic call arity/type argument check는 명시 목록만 검사하며 inference
+  fallback을 시도하지 않는다.
+
+### Definition-site resolution
+
+- 문제: generic body의 non-dependent 이름을 caller scope에서 다시 찾으면 caller의 import와
+  shadowing에 따라 같은 generic이 다른 코드를 만든다.
+- 결정: 이름은 definition unit에서 고정하고 type-dependent operation만 instantiation 때
+  검사한다. `comptime if`의 선택되지 않은 branch는 parse만 하고 semantic 처리하지 않는다.
+- 근거: lexical 의미와 private support를 유지하고 caller/build order와 무관한 instance를
+  만든다.
+- 기각한 대안: use-site lookup과 selected-out branch의 eager type check. 전자는 의미가
+  불안정하고 후자는 type-specific branch를 불가능하게 해 기각했다.
+- 구현 영향: `.fei`가 body token과 definition-scope symbol/support identity를 전달하고
+  generic.c가 그 환경에서 재검사한다.
+
+### Deterministic monomorphization
+
+- 문제: request 발견 순서대로 instance를 방출하면 unit traversal/hash iteration/parallel
+  build에 따라 `fe_generics.c`와 symbol 순서가 바뀐다.
+- 결정: canonical definition unit + declaration identity + normalized canonical type args를
+  key로 dedup하고 byte ordering으로 정렬한다. prototype 전부를 먼저, body 전부를 나중에
+  같은 canonical 순서로 방출한다.
+- 근거: alias instance가 중복되지 않고 recursion/cross-instance call을 지원하며 M12에서
+  byte-identical output을 만든다.
+- 기각한 대안: first-request order 또는 pointer/insertion-order key. platform/build order에
+  의존해 기각했다.
+- 구현 영향: driver/generic.c가 global request set을 정렬하고 alias를 underlying interned
+  identity로 normalize한다.
+
+### Generic private-support closure
+
+- 문제: exported generic이 private helper/type/const/private generic을 참조하면 signature만
+  담은 `.fei`로 다른 unit에서 안전하게 instantiate할 수 없다.
+- 결정: `.fei`는 필요한 private support dependency의 transitive closure를 compiler-only
+  metadata로 제공한다. 이는 Ferro visibility를 public으로 바꾸지 않는다.
+- 근거: definition-site semantics와 source private API를 동시에 지키며 `fe_generics.c`에서
+  정확한 backend symbol/layout을 사용할 수 있다.
+- 기각한 대안: 모든 support를 source `pub`으로 강제하거나 generic body를 definition unit마다
+  static 복제. API 누출 또는 중복/링크 문제 때문에 기각했다.
+- 구현 영향: interface hash는 exported generic이 관찰하는 support 변화에 반응하고
+  serializer는 closure를 canonical 순서로 기록한다.
+
+### Recursive instantiation semantics
+
+- 문제: 단순 재귀 호출이 같은 instance를 다시 요청할 때마다 depth를 올리면 정상 generic
+  recursion도 limit에 걸리고, 반대로 growing type chain을 dedup만으로 허용하면 무한 생성된다.
+- 결정: pending/known 동일 key 재요청은 재사용하고 depth를 소비하지 않는다. 새로운 distinct
+  instance chain만 증가시키며 32 초과를 에러로 한다.
+- 근거: ordinary recursion은 prototype-first 방출로 처리하고 실제 instance explosion만
+  유한한 local driver 상태로 차단한다.
+- 구현 영향: generic.c는 pending/known set과 distinct chain stack을 구별하고 최초/현재
+  instantiation 위치를 note로 출력한다.
+
+### Canonical C mangling and type identity
+
+- 문제: unit이 계층화되고 generic이 통합 방출되면 host path, pointer address 또는 insertion
+  order 기반 이름은 충돌하거나 run마다 달라질 수 있다.
+- 결정: mangling은 canonical dotted unit + declaration + normalized canonical type args만
+  사용한다. nominal identity는 fully-qualified defining unit+name, alias는 underlying identity다.
+- 근거: collision-free backend linkage와 M12 fixpoint를 동시에 보장한다.
+- 구현 영향: 정확한 escaping 문자는 구현 세부지만 deterministic separator encoding과
+  collision 검사가 필요하며 absolute path/address를 symbol에 포함할 수 없다.

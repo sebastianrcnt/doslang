@@ -1,4 +1,4 @@
-# Ferro 언어 명세 v0.1.7
+# Ferro 언어 명세 v0.1.8
 
 DOS용 시스템 프로그래밍 언어. C만큼 빠르고, 메모리 안전성을 함수 단위 지역 검사만으로 보장한다.
 파일 확장자 `.fe`, 컴파일러 이름 `fec`, 심볼 파일 `.fei`.
@@ -31,7 +31,7 @@ DOS용 시스템 프로그래밍 언어. C만큼 빠르고, 메모리 안전성�
 - CLI: `fec main.fe --target=bits16|bits32 [--model=small|large] [--strip-error-names]`
 - 소스 분기: `comptime if @bits == 16 { ... } else { ... }`
 - `bits32`에서 `far` 키워드를 쓰면 컴파일 에러.
-- 표준 라이브러리는 코어 공용, `sys` 유닛만 타깃별 구현.
+- 표준 라이브러리는 코어 공용, `std.sys` 유닛만 타깃별 구현.
 
 ---
 
@@ -95,7 +95,7 @@ and or not orelse
 
 - **배열은 포인터로 붕괴하지 않는다.** 함수에 넘기려면 `arr[..]`로 슬라이스를 만들거나 `&arr` / `^[N]T`를 쓴다.
 - 슬라이싱: `arr[..]`, `arr[a..b]`(반개구간, 경계 검사), `arr[a..]`, `slice[a..b]`. `let` 배열·공유 슬라이스에서는 `[]T`, `var` 배열·배타 슬라이스에서는 `[]mut T`가 생긴다.
-- `[]mut T`는 `[]T`로, `&mut T`는 `&T`로 **호출 인자 위치에서만** 암묵 재대여할 수 있다. 원래 대여 상태는 배타로 유지되며 다른 저장·대입에는 명시적 `as`가 필요하다.
+- `[]mut T`는 `[]T`로, `&mut T`는 `&T`로 **호출 인자 위치에서만** 암묵 재대여할 수 있다. 이것은 호출 동안의 read-only view이며 원래 배타 대여는 원래 마지막 사용까지 유지된다. 일반 `let`/대입에는 이 암묵 약화를 적용하지 않는다. 장기 shared borrow가 필요하면 root/place에서 명시적으로 새 `&` 또는 shared slice를 만들고 R6 검사를 받는다.
 - `^[]T`는 "슬라이스를 가리키는 포인터"가 아니라 길이를 함께 소유하는 독립 타입이다. R4의 일반 `^T` 대상 제한의 예외이며 `?^[]T`도 허용한다. `*[]T`/`*[]mut T`는 계속 금지한다. `mem.alloc_slice(T, n)`가 반환하고 drop 시 버퍼를 해제한다.
 - `str`은 nominal 타입이 아니라 미리 선언된 `const str = []u8;` type alias다. UTF-8 검증을 보장하지 않으며 문자열 리터럴은 정적 읽기 전용 `[]u8`이다. 따라서 별도 변환 규칙이나 별도 C 표현은 없다.
 
@@ -144,10 +144,12 @@ let v = mem.replace(&mut p, null).?;         // 소유값을 실제로 꺼냄
 ```
 
 - `?T`에서 T가 일반 `^T`, `&T`, `*T`, `fn`이면 널 포인터를 널 표현으로 사용한다. `?^[]T`는 빈 소유 버퍼와 null을 구별해야 하므로 `(bool, ^[]T)` 표현을 사용한다.
+- `null`은 독립 runtime 타입이 없다. expected type으로 정확한 optional 또는 pointer-like 타입을 하나 결정할 수 있는 위치에서만 허용한다. `let p: ?^Node = null;`과 `takes_optional(null);`은 허용하지만 `let p = null;`처럼 문맥이 없거나 둘 이상의 타입으로 해석 가능한 경우는 컴파일 에러다.
 - 검사 없이 역참조 불가. `p.^`는 컴파일 에러, `p.?.^`가 필요.
 - `.?`, `.field`, `[i]`는 place projection이다. projection chain은 값을 이동하지 않는다. Copy 값은 읽기에서 복사되며 비-Copy 값을 projection에서 꺼내는 것은 R7에 따라 금지한다. 실제 추출은 `mem.replace`를 사용한다.
 - `orelse`는 Copy payload를 복사한다. 비-Copy optional 변수 자체에 적용하면 optional 전체를 이동하며, field/index projection의 비-Copy optional에는 직접 적용할 수 없다.
-- `Some`과 `None`은 `if let`과 `match`의 패턴 위치에서만 옵셔널 해체를 의미하는 문맥 키워드다. 다른 위치에서는 일반 식별자이며 §3의 예약어가 아니다.
+- `orelse`는 optional이 `Some`이면 우변을 평가하지 않고, `None`일 때만 우변을 평가하는 lazy 연산이다. 부수 효과·이동·대여도 실행되는 경로에만 적용한다.
+- `Some`과 `None`은 `if let`과 `match`의 패턴 위치에서만 옵셔널 해체를 의미하는 문맥 키워드다. 다른 위치에서는 일반 식별자이며 §3의 예약어가 아니다. 패턴은 place를 파괴적으로 추출하지 않는다. immutable place의 payload binding은 shared borrow/view, mutable place는 필요한 mutable borrow/view이고 Copy payload만 복사할 수 있다. non-Copy payload의 소유권을 꺼내려면 `mem.replace`가 필요하며 temporary optional만 자동 소유 추출하는 예외도 없다.
 
 ### 4.6 에러
 
@@ -165,15 +167,18 @@ fn read_all(path: str) -> !^[]u8 {      // 표준 io는 core.Error로 통일
 }
 ```
 
-- `error` 선언은 `u16` 코드 집합. 코드 0은 "성공" 예약, 사용 불가.
+- `error` 선언은 `u16` 코드 집합. 코드 0은 "성공" 예약이라 사용할 수 없고, 한 선언 안에서 member 이름이나 숫자 code가 중복되면 컴파일 에러다. 서로 다른 nominal error 선언은 같은 숫자 code를 사용할 수 있지만 여전히 다른 타입이다.
+- expected type이 `E!T`인 위치에서는 `T` 값은 success, `E` 값은 failure를 구성한다. 함수의 `return`도 선언된 반환 타입이 `E!T`이면 같은 규칙을 쓴다. 이는 일반 implicit conversion이 아니라 error-union 전용 contextual construction이며, `E1`과 `E2` 또는 nominal error와 `core.Error` 사이의 자동 변환은 없다.
 - `try`는 에러 유니온 반환 함수 안에서만 허용한다. 피연산자의 nominal error 타입은 현재 함수의 error 타입과 정확히 같아야 한다. 다르면 `catch`에서 명시적으로 매핑한다.
 - `catch`는 현재 함수의 반환 타입과 무관하게 어디서든 에러를 그 자리에서 처리할 수 있다.
 - `try e`: 에러면 현재 함수에서 즉시 반환한다.
 - `e catch |x| { ... }`: 블록은 값을 만들 수 없다. 결과 타입이 `void`이면 정상적으로 끝까지 실행할 수 있고, 값 결과가 필요하면 `return`/`break`/`continue`로 탈출하거나 `@trap()`으로 끝나야 한다. 값이 필요하면 아래 짧은 형태를 쓴다. (언어에 블록 표현식을 도입하지 않기 위한 선택. §13 참조.)
 - `e catch default_value`: 짧은 형태. 우변은 식이며 그 값이 결과가 된다.
+- 짧은 `catch`의 우변과 block `catch`의 handler는 피연산자가 error일 때만 평가·실행한다. success이면 handler의 부수 효과·이동·대여가 발생하지 않는다.
 - 서로 다른 error 타입 간 자동 변환 없음. `!T`(기본 에러 집합 `core.Error`)로 통일하거나 명시 매핑.
+- `try`와 `catch`도 field/index/optional projection에서 non-Copy payload를 숨게 이동시키지 않는다. projection에서 소유값을 추출해야 하면 먼저 `mem.replace`로 유효한 대체값을 남긴다.
 - 에러는 값이다. 언와인딩, 스택 추적, 소멸자 이외의 자동 정리 없음.
-- 실패를 복구하지 않고 트랩으로 바꾸려면 `expr catch @trap()`을 쓴다. v0.1.2에는 별도 `must` 키워드를 두지 않는다.
+- 실패를 복구하지 않고 트랩으로 바꾸려면 `expr catch @trap()`을 쓴다. v0.1에는 별도 `must` 키워드를 두지 않는다.
 
 `error.Name`은 선언된 error 타입을 만들지 않고 기본 `core.Error`의 이름 있는
 멤버를 참조하는 익명 에러 값이다. 각 유닛은 사용한 이름을 `.fei`에 기록한다.
@@ -183,7 +188,9 @@ fn read_all(path: str) -> !^[]u8 {      // 표준 io는 core.Error로 통일
 따라서 서로 다른 유닛의 `error.Name`은 같은 값이고 빌드 순서와 병렬 컴파일에도
 결과가 결정적이며 `switch` case 라벨로 쓸 수 있다.
 이름 집합이 바뀌면 `fe_errors.h`와 그 헤더에 의존하는 오브젝트를 무효화하지만,
-각 유닛의 `.c`는 재방출하지 않는다. `.fei`는 이름만 기록하므로 무효화되지 않는다.
+각 유닛의 `.c`는 재방출하지 않는다. 각 `.fei`는 그 unit이 사용하는 이름 집합만
+기록하므로 global 번호 재배정 때문에 다시 쓰지 않으며, source에서 이름 사용 자체가
+바뀐 unit의 `.fei` interface만 갱신한다.
 빌드 디렉터리 이력에 따라 번호가 달라지는 append-only 표는 금지한다.
 유닛 단위 `--emit-c`는 전체 이름 집합을 알 수 없으므로 `--error-table=<파일>`로
 확정된 표를 받아야 하며, 없으면 컴파일 에러다.
@@ -229,9 +236,23 @@ fn read_all(path: str) -> !^[]u8 {      // 표준 io는 core.Error로 통일
 
 **R6 (배타성).** `&mut x`가 살아있는 동안 `x`에 대한 다른 참조 생성, 직접 읽기/쓰기, 이동이 금지된다. `&x`(공유)는 여러 개 동시 가능하지만 그동안 `x`에 쓰기/이동 금지.
 
+v0.1의 대여 상태는 **root local/parameter 단위**로 추적한다. projection은 place의 root를 찾는 데만 쓰며 field-sensitive/index-sensitive 독립성을 증명하지 않는다. 따라서 `&mut p.a`는 `p` 전체를 배타 대여하고 그동안 `p.b`의 읽기·쓰기·대여도 금지한다. `&mut xs[0]`과 `&mut xs[1]`도 서로 다른 index라는 이유로 분리하지 않고 같은 root `xs`의 충돌 대여로 본다. 이는 compiler A/B의 함수-local 상태 기계를 작고 결정적으로 유지하기 위한 v0.1의 의도적인 보수성이다.
+
+```fe
+var p = Pair{ a: 1, b: 2 };
+let r = &mut p.a;
+p.b = 3;                    // 에러: root p가 배타 대여 중
+r.^ = 4;
+
+let a = &mut xs[0];
+let b = &mut xs[1];         // 에러: 둘 다 root xs를 대여
+a.^ = 1;
+b.^ = 2;
+```
+
 참조의 생존 구간은 **참조 변수의 마지막 사용 지점까지**다. 그 이후에는 원본에 대한 접근·이동이 다시 허용된다. 조건부 흐름에서는 모든 경로의 마지막 사용 중 가장 나중 지점을 취한다. 임시 참조(`f(&x)`)는 그 문장 끝까지다. `defer` 블록에서 사용한 참조와 그 원본의 대여는 해당 defer가 실행되는 스코프 끝까지 연장한다.
 
-호출 인자 위치의 `&mut T → &T`, `[]mut T → []T` 약화는 새 공유 대여가 아니라 기존 배타 대여의 읽기 전용 재대여다. 호출이 끝날 때 재대여만 끝나며 원래 배타 대여의 생존 구간은 유지된다.
+호출 인자 위치의 `&mut T → &T`, `[]mut T → []T` 약화는 새 장기 공유 대여가 아니라 기존 배타 대여의 읽기 전용 재대여다. callee를 평가한 뒤 해당 인자를 평가하는 시점부터 호출이 끝날 때까지만 임시 재대여가 존재하고, 원래 배타 대여는 원래 마지막 사용까지 유지된다. 일반 `let`/대입에서는 암묵 약화를 허용하지 않으므로 `let s: &i32 = m;`(`m: &mut i32`)은 컴파일 에러다. 별도의 lifetime/coercion 시스템은 두지 않는다.
 
 이 판정은 함수 지역 liveness 분석이며 함수 밖 정보를 쓰지 않으므로 §1.2를 위반하지 않는다.
 
@@ -250,7 +271,14 @@ x += 1;         // OK — 여기서 r의 대여는 이미 끝났다
 
 **(b) 정적 파생.** 반환값이 문자열 리터럴 또는 `static` 선언에서 파생된 경우. 이때는 참조성 파라미터가 없어도 된다.
 
-호출 지점에서 R8(a)의 결과는 **정해진 파생 원본을 대여한 것으로 취급**한다. 즉 결과를 지역 변수에 바인딩할 수 있으며, 그 대여가 사는 동안 원본에 R6·R7이 그대로 적용된다. R8(b)의 결과는 대여를 만들지 않는다.
+참조성 반환의 provenance는 인터페이스에서 다음 둘로 정규화한다.
+
+- `Static`: 문자열 리터럴 또는 `static`에서 파생되어 caller local borrow를 만들지 않는다.
+- `Param(N)`: 시그니처로 정해진 하나의 참조성 parameter에서 파생된다. 메서드는 `Param(self)`만 허용하며 다른 참조성 인자에서 파생되면 에러다. 자유 함수는 기존 규칙대로 참조성 parameter가 정확히 하나여야 한다.
+
+control-flow 합류는 `Static + Static → Static`, `Static + Param(N) → Param(N)`, `Param(N) + Param(N) → Param(N)`이다. 서로 다른 `Param` provenance가 합류하면 컴파일 에러다. `?&T`/`?[]T`의 `null` 반환 경로는 caller borrow를 만들지 않는 경로이므로 static/null 경로와 `Param(N)` 경로가 합쳐지면 전체를 보수적으로 `Param(N)`으로 본다. 이 provenance는 함수 시그니처와 lowered `.fei` interface metadata에 기록할 수 있어야 한다.
+
+호출 지점에서 `Param(N)` 결과는 **정해진 파생 원본을 대여한 것으로 취급**한다. 즉 결과를 지역 변수에 바인딩할 수 있으며, 그 대여가 사는 동안 원본에 R6·R7이 그대로 적용된다. `Static` 결과는 caller local borrow를 만들지 않는다.
 
 ```fe
 let t = line.trim();                         // 내장 alias 메서드 R8(a)                         // OK. line은 t의 대여 구간 동안 잠긴다
@@ -282,7 +310,7 @@ fn f(r: &mut i32) { G = 5; }   // r과 G가 같은 곳을 가리키는지 f는 �
 fn g() { f(&mut G); }          // 제한이 없으면 g의 지역 검사는 통과한다
 ```
 
-- 전역에는 `^T`나 `drop` 있는 타입을 둘 수 없다. `shared`, `atomic`, `critical`, `interrupt fn`은 v0.1.2에서 `bits16` 전용이며 `bits32`에서 사용하면 컴파일 에러다.
+- 전역에는 `^T`나 `drop` 있는 타입을 둘 수 없다. `shared`, `atomic`, `critical`, `interrupt fn`은 v0.1에서 `bits16` 전용이며 `bits32`에서 사용하면 컴파일 에러다.
 
 **R11 (재귀·그래프 구조).** `^T`는 R4의 2급 참조가 아니므로 소유가 한 방향인 단방향 리스트와 트리는 필드에 저장할 수 있다. 반면 양방향 리스트·순환·일반 그래프는 역방향 필드에 `^T`를 두면 R1의 단일 소유권을 위반하고 `&T`를 두면 R4를 위반한다. 이런 구조는 아레나/배열이 값을 소유하고 `u16`/`u32` 인덱스 핸들이 간선을 나타내도록 구현한다. 표준 라이브러리 `mem.Arena`를 사용할 수 있으며, 핸들 역참조 때 세대 번호 또는 경계 검사를 사용해 해제된 항목 접근을 막아야 한다.
 
@@ -293,8 +321,9 @@ fn g() { f(&mut G); }          // 제한이 없으면 g의 지역 검사는 통�
 ### 6.1 EBNF
 
 ```
-unit        := 'unit' ident ';' import* decl*
-import      := 'import' ident ';'
+unit        := 'unit' unit_path ';' import* decl*
+unit_path   := ident ('.' ident)*
+import      := 'import' unit_path ['as' ident] ';'
 
 decl        := ['pub'] (fn_decl | struct_decl | enum_decl | error_decl
                        | const_decl | global_decl) | comptime_decl
@@ -344,14 +373,15 @@ pattern     := ident                      // 배리언트, 페이로드 없음
              | 'Some' '(' ident ')' | 'None'
              | int_literal | char_literal | 'true' | 'false' | '_'
 
-type        := ident ['.' ident]
-             | '?' type | '!' type | ident '!' type
+qualified_name := ident ('.' ident)*
+type        := qualified_name
+             | '?' type | '!' type | qualified_name '!' type
              | '^' type | '&' ['mut'] type | '*' type
              | 'far' ('^' | '*' | '&' ['mut']) type
              | 'far' 'fn' '(' [type (',' type)*] ')' ['->' type]
              | '[' expr ']' type | '[' ']' ['mut'] type
              | 'fn' '(' [type (',' type)*] ')' ['->' type]
-             | ident '(' type (',' type)* ')'      // 제네릭 인스턴스
+             | qualified_name '(' type (',' type)* ')' // 제네릭 인스턴스
 
 catch_expr  := expr 'catch' ['|' ident '|'] (expr | block)
 orelse_expr := expr 'orelse' expr
@@ -359,6 +389,7 @@ orelse_expr := expr 'orelse' expr
 
 `member`의 `pub`은 필드와 메서드 모두에 개별로 붙는다(§8). 필드와 메서드는 순서를
 섞어 쓸 수 있다. `catch`의 블록 형태는 값을 만들지 않으며 §4.6의 규칙을 따른다.
+`unit_path` segment의 lexical 제한과 source path 대응은 §8.1이 규정한다.
 
 ### 6.2 표현식 우선순위 (낮음 → 높음)
 
@@ -383,6 +414,8 @@ orelse_expr := expr 'orelse' expr
 
 - `and`, `or`는 단축 평가한다. 호스트 C 방출에서는 각각 `&&`, `||`로
   매핑하며, 평가 순서와 단락 규칙은 Ferro 의미론을 그대로 유지한다.
+- `orelse`와 `catch`도 lazy다. 좌변이 각각 `Some`/success이면 우변 또는 handler를
+  평가하지 않는다(§4.5·§4.6).
 - `as`는 후위 우선순위(단항보다 강함)지만 단항 연산자 바로 뒤에 `as`가 나타나면 모호한 비용을 숨기지 않도록 괄호를 강제한다. `(-x) as u32`와 `-(x as u32)`는 허용하고 `-x as u32`는 컴파일 에러다.
 - `..`는 일반 표현식 연산자가 아니며 `for` 헤더에서만 쓸 수 있다.
 - 비교 연산 체이닝 금지(`a < b < c`는 에러).
@@ -416,7 +449,8 @@ orelse_expr := expr 'orelse' expr
 ```fe
 @print("x={} y={x} name={s}\n", a, b, s);
 ```
-→ lower 단계에서 개념적으로 다음처럼 전개한다:
+→ lower 단계에서 개념적으로 다음처럼 전개한다. 아래 `io`와 `fmt`는 각각 canonical
+`std.io`, `std.fmt` 유닛을 가리킨다.
 ```
 io.write(out, "x=");
 var t1: [12]u8 = undefined; io.write(out, fmt.fmt_int_i32(t1[..], a));
@@ -432,7 +466,7 @@ io.write(out, " name="); io.write(out, s); io.write(out, "\n");
 - verb: `{}` 기본(정수/bool/char/str 자동), `{x}` 16진, `{c}` 문자, `{s}` 문자열/슬라이스, `{b}` 불린. `{{`는 `{` 이스케이프.
 - `{}` 개수와 인자 개수 불일치 → 컴파일 에러.
 - 인자 타입에 대응하는 `fmt.fmt_*` 함수가 없으면 컴파일 에러(메시지에 타입명 표시).
-- 자릿수/폭/정렬 지정자는 v0.1.1에 없음. 필요하면 `fmt.fmt_int_pad`를 직접 호출.
+- 자릿수/폭/정렬 지정자는 v0.1에 없음. 필요하면 `fmt.fmt_int_pad`를 직접 호출.
 - `@fprint`의 첫 인자는 Copy 핸들 `io.Writer`(§10)다.
 - `@print`는 `io.Writer.Stdout`에 기록하며 저수준 writer 오류를 삼키고 `void`를 반환한다.
   따라서 `try @print(...)`는 컴파일 에러다.
@@ -450,7 +484,7 @@ io.write(out, " name="); io.write(out, s); io.write(out, "\n");
 
 ```fe
 unit vga;
-import sys;
+import std.sys;
 
 const WIDTH: u16 = 320;
 const HEIGHT: u16 = 200;
@@ -470,7 +504,7 @@ pub fn put_pixel(x: u16, y: u16, c: u8) {
 
 ```fe
 unit main;
-import io;
+import std.io;
 
 fn count_lines(path: str) -> !usize {
     var f = try io.open(path, io.Read);
@@ -547,16 +581,150 @@ pub fn main() -> !void {
 - 함수의 `comptime` 파라미터는 §9 제네릭.
 - 재귀 평가 깊이 제한 256, 초과 시 에러.
 
+### 7.6 표현식 평가 순서
+
+- 일반 표현식의 평가 순서는 소스의 왼쪽에서 오른쪽이다.
+- 함수·메서드 호출은 callee를 먼저 평가하고 인자를 소스 순서대로 왼쪽에서 오른쪽으로 평가한다. 자동 `self` projection도 callee 평가의 일부다.
+- 이항 연산자는 왼쪽 operand를 먼저, 오른쪽 operand를 나중에 평가한다.
+- `and`와 `or`는 왼쪽 operand로 결과가 정해지면 오른쪽을 평가하지 않는다. `orelse`와 `catch`도 §4.5·§4.6에 따라 우변/handler가 필요한 경로에서만 평가한다.
+- 이 순서는 부수 효과뿐 아니라 move, borrow의 시작·마지막 사용, `try` 전파와 defer/drop cleanup 순서를 결정한다.
+- C backend는 C 자체의 미지정 평가 순서에 의존할 수 없다. C에서 순서가 보장되지 않는 호출 인자, 일반 이항 operand 등의 부수 효과·이동·대여는 lower 단계에서 순서가 명시된 temporary statement로 분해한다. `and`/`or` 같은 C의 단락 규칙을 직접 사용하더라도 Ferro의 lazy 의미를 그대로 보존해야 한다.
+
 ---
 
 ## 8. 유닛과 빌드
 
-- 파일 하나 = 유닛 하나. 첫 줄은 `unit <이름>;`이며 파일명과 일치해야 함.
-- `import bar;` → 같은 검색 경로의 `bar.fe`. 접근은 `bar.name`.
-- `pub` 붙은 선언만 외부 노출. 구조체 필드도 개별 `pub` 필요.
-- 순환 import 금지(에러).
-- 유닛 컴파일 시 `.fei` 생성: pub 선언 시그니처, 타입 레이아웃, 제네릭 본문 토큰과 제네릭 전용 private 심볼 시그니처. 재컴파일 cache key는 해당 소스 해시뿐 아니라 직접·간접 의존 유닛의 `.fei` 해시를 포함한다.
-- 검색 경로: `-I <dir>`, 기본은 현재 디렉터리 + `<fec>/std`.
+파일 하나가 유닛 하나다. 유닛의 canonical identity는 fully-qualified dotted unit path이며
+모든 cross-unit 타입·선언·제네릭 identity, `.fei`, C mangling, cache key와 진단에서 같은
+이름을 사용한다.
+
+```fe
+unit game.main;
+
+import game.render;
+import tinyjson.parse;
+import net.http as http;
+import std.io;
+```
+
+import는 항상 유닛 전체를 가져오며 member는 local unit binding으로 한정해 접근한다.
+기본 binding은 마지막 segment이므로 `import tinyjson.parse;` 뒤에는
+`parse.read(...)`, `import std.io;` 뒤에는 `io.write(...)`를 쓴다. `as`가 있으면 그
+alias가 binding이다.
+
+v0.1은 relative import(`.foo`, `..foo`), glob/selective import, `pub import` re-export,
+package-private/friend visibility를 지원하지 않는다.
+
+### 8.1 unit 이름과 source path
+
+unit path의 각 segment는 ASCII lowercase `a`~`z`로 시작하고 이후에는 `a`~`z`,
+`0`~`9`, `_`만 쓸 수 있으며 최대 8자다. 일반 Ferro identifier는 계속 case-sensitive이고
+이 제한은 unit path에만 적용한다. `game.main`, `tinyjson.parse`는 허용하지만
+`TinyJson.Parse`, `very_long_library_name`은 unit path로 허용하지 않는다. 이 규칙은
+FAT/DOS 8.3과 case-sensitive host에서 같은 source가 같은 유닛으로 해석되게 한다.
+
+unit path는 import root 아래의 상대 source path와 정확히 대응한다. canonical identity는
+항상 dotted path이고 실제 path separator만 host/DOS에 맞게 바꾼다.
+
+```
+tinyjson.parse  -> tinyjson/parse.fe
+game.world.map  -> game/world/map.fe
+```
+
+entry source의 선언이 `unit game.main;`이고 실제 파일이
+`C:/PROJECT/SRC/GAME/MAIN.FE`이면 file path 끝의 `game/main.fe` suffix를 ASCII
+case-insensitive 방식으로 비교해 제거하고 project source root `C:/PROJECT/SRC`를 얻는다.
+unit path/file path 대응은 host filesystem의 기본 case 규칙이 아니라 이 규범적 비교를
+써서 DOS와 모든 host에서 같게 처리한다. suffix가 일치하지 않으면 컴파일 에러이며 같은
+unit 선언을 임의 위치에서 조용히 허용하지 않는다. case-sensitive host에 `game/main.fe`와
+`GAME/MAIN.FE`가 별도 실제 파일로 함께 있으면 §8.2의 서로 다른 후보이므로 ambiguous다.
+
+### 8.2 import root와 모호성
+
+candidate root는 다음 집합이다.
+
+1. entry source에서 계산한 project source root
+2. 사용자가 지정한 각 `-I <dir>`
+3. `std.*`에 대해서만 compiler 내장 std root
+
+`std` 최상위 namespace는 compiler-reserved이며 user unit은 선언할 수 없다. 일반 user
+unit은 compiler std root에서 찾지 않는다. 표준 유닛은 `import std.io;`,
+`import std.mem;`, `import std.fmt;`, `import std.sys;`처럼 가져온다. `str`은 계속 built-in
+`[]u8` alias와 alias-method namespace이며 import unit이 아니다.
+
+root를 순서대로 검사해 첫 성공을 고르지 않고 모든 candidate를 조사한다. 동일 canonical
+unit path에 대해 서로 다른 실제 source file이 둘 이상 발견되면 다음 형태의 compile
+error를 내고 각 실제 path를 note로 표시한다.
+
+```
+ambiguous unit 'foo.bar'
+note: ...
+note: ...
+```
+
+filesystem canonicalization 결과 같은 실제 파일이 여러 root 또는 path alias로 발견된
+경우만 하나로 취급할 수 있다. 따라서 `-I` 순서, 디렉터리 열거 순서, host 환경이 source
+선택을 바꾸지 않는다.
+
+### 8.3 binding, visibility와 외부 library
+
+한 unit에서 import binding은 다른 unit-scope declaration/import binding과 충돌할 수 없다.
+`import foo.net; import bar.net;`은 둘 다 `net`을 만들므로 에러이며 두 번째를
+`import bar.net as bar_net;`처럼 alias해야 한다. alias는 일반 Ferro identifier다.
+
+visibility는 private과 `pub` 두 단계뿐이다. private 선언은 같은 unit에서만 보이고,
+`pub` 선언과 개별 `pub` field/method만 import한 모든 caller에서 보인다. dotted prefix는
+권한이 아니므로 `game.foo`와 `game.bar`는 서로의 private 선언에 접근할 수 없다. public
+function parameter/return, public field 등 외부 signature에 나타나는 nominal type은
+importer가 이름을 해석할 수 있어야 하며 private nominal type을 public API에 노출하면
+컴파일 에러다.
+
+v0.1 외부 library는 source-only import root다. 예를 들어 `-I deps`와
+`deps/tinyjson/parse.fe`가 있으면 `import tinyjson.parse;`로 사용한다. package manager,
+registry, version solver, manifest dependency 문법은 v0.1에 없다. 미래 package manager도
+dependency source tree를 import root에 배치하고 `-I`를 구성하는 도구일 뿐 Ferro import
+의미론을 바꾸지 않는다. `.fei + .obj/.lib`만 배포하는 binary-only package ABI도 v0.1은
+지원하지 않는다.
+
+### 8.4 `.fei` interface와 cache
+
+`.fei`는 incremental compilation interface, build cache metadata, 다른 unit에서의 generic
+instantiation을 위한 compiler interface다. 물리적 binary/text encoding은 구현 세부지만
+논리적으로 최소한 다음을 표현할 수 있어야 한다.
+
+- magic/format version, Ferro SPEC/compiler interface version
+- target과 해당하는 경우 bits16 memory model
+- canonical unit name
+- public symbol signature와 public nominal type identity/layout
+- anonymous `error.Name` name set
+- exported generic declaration metadata와 body token stream
+- exported generic이 요구하는 private support symbol metadata
+- direct dependency canonical unit name과 dependency interface hash
+
+`.fei` serialization은 결정적이어야 한다. unordered container iteration을 그대로 쓰지
+않고 canonical key/name의 byte ordering으로 정렬해 serialize한다. absolute host path,
+timestamp, build directory를 기록하지 않는다. 같은 source/interface graph와 target/model이면
+build order와 host path에 관계없이 byte-identical `.fei`가 목표다.
+
+다음 hash는 구별한다.
+
+- **source hash**: 해당 unit source 내용 변화 감지
+- **interface hash**: dependent unit이 관찰하는 `.fei` 의미 정보의 hash
+- **compile cache key**: source hash, target/model/options와 실제 재컴파일에 필요한
+  direct/indirect dependency interface hash를 포함한 key
+
+private non-generic 구현만 바뀌어 public/generic-visible interface가 같으면 해당 unit은
+재컴파일하지만 interface hash는 유지되어 dependent unit을 재컴파일하지 않아도 된다.
+public signature/layout 또는 exported generic이 관찰하는 private support 정보가 바뀌면
+interface hash가 바뀐다.
+
+### 8.5 순환과 canonical identity
+
+순환 import는 컴파일 에러다. fully-qualified dotted unit path와 선언 이름이 nominal
+identity의 기준이므로 `tinyjson.value.Value`와 `tinyjson.value.Box`처럼 표시한다. nominal
+struct/enum/error는 defining unit + declaration name으로 구별되고 type alias는 새 nominal
+identity를 만들지 않는다. 이 canonical identity 규칙은 §9 generic cache와 §11.4 C
+mangling에도 그대로 적용한다.
 
 ```
 fec main.fe --target=bits32 -o game.exe
@@ -565,14 +733,14 @@ fec main.fe --emit-c -o out/          # 트랜스파일 결과만
 fec --dump-ast main.fe
 ```
 
-### 8.1 CLI 플래그 (전체)
+### 8.6 CLI 플래그 (전체)
 
 | 플래그 | 의미 | 규정 |
 |---|---|---|
 | `--target=bits16\|bits32` | 타깃 선택 | §2 |
 | `--model=small\|large` | `bits16` 메모리 모델 | §2 |
 | `-o <경로>` | 출력 파일 또는 디렉터리 | §8 |
-| `-I <디렉터리>` | 유닛 검색 경로 추가 | §8 |
+| `-I <디렉터리>` | source-only import candidate root 추가 | §8.2·§8.3 |
 | `--emit-c` | 트랜스파일 결과만 생성 | §8 |
 | `--dump-ast` | AST 덤프 | §8 |
 | `--no-checks` | 경계·오버플로·`.?` 검사 제거 | §7.4 |
@@ -584,7 +752,8 @@ fec --dump-ast main.fe
 
 ## 9. 제네릭
 
-`comptime` 파라미터 기반 모노모피제이션.
+`comptime` type 파라미터 기반 모노모피제이션. v0.1의 user-defined generic parameter는
+`type`만 지원한다.
 
 ```fe
 pub struct List(T) {
@@ -607,24 +776,75 @@ let m = max(i32, 3, 7);
 var xs: List(u8) = List(u8).new();
 ```
 
-- 인스턴스화 시 타입 인자를 대입해 본문을 재검사하고 코드를 생성한다. 인스턴스 캐시 키는 `(선언, 타입 인자 목록)`.
-- 제약(trait bound) 없음. 본문에서 쓰는 연산이 그 타입에 없으면 **인스턴스화 시점에** 에러(에러 메시지에 인스턴스화 위치를 표시할 것).
-- 이름 해석은 항상 정의 유닛의 스코프에서 한다. `.fei`에 제네릭 본문 토큰과 본문이 참조하는 private 심볼의 제네릭 전용 시그니처를 저장한다. 이 표시는 Ferro source의 `pub` 접근 권한을 넓히지 않는다.
-- 최종 build driver는 모든 사용 유닛의 인스턴스 요청을 합치고 중복 제거해 단일 `fe_generics.c`에 방출한다. 사용 유닛별 external 중복 심볼이나 `static` 코드 복제를 만들지 않는다.
-- comptime에서 type 값의 `==`/`!=`, `@is_int(T)`, `@is_ptr(T)`를 허용한다. 타입 인터닝 identity로 평가하며 런타임 type reflection은 없다.
-- 재귀적 인스턴스화 깊이 제한 32.
+- `fn id(comptime T: type, x: T) -> T`를 기본형으로 하며 `struct Box(T)`와
+  `enum Maybe(T)`의 `T`는 `comptime T: type`의 shorthand다. `comptime N: usize`,
+  comptime string/bool 등 user value generic은 지원하지 않는다. compiler builtin의 기존
+  comptime value는 user generic parameter가 아니다.
+- generic type argument는 항상 명시한다. `id(i32, 3)`은 허용하지만 `id(3)`에서 T를
+  추론하지 않는다. `mem.create(value)`처럼 별도로 정의된 compiler-known intrinsic
+  inference는 일반 generic inference가 아니다.
+- generic struct/enum의 method는 enclosing type parameter를 사용할 수 있다. 그러나
+  method/function이 enclosing type parameter 외에 별도의 새 generic parameter list를
+  선언하는 generic-method 기능은 v0.1에 없다.
+- 인스턴스화 시 타입 인자를 대입해 type-dependent operation을 재검사하고 코드를
+  생성한다. trait/bound와 overload resolution은 없다. 본문 연산이 해당 타입에서 invalid면
+  definition/body의 실제 연산 위치를 primary error로 표시하고 각 caller에 `instantiated
+  here` note를 붙인다. nested instance는 가능한 범위에서 instantiation chain을 표시한다.
+- generic body의 이름은 항상 definition unit scope에서 해석한다. non-dependent name은
+  정의 시 그 symbol로 고정되며 caller의 같은 이름은 영향을 주지 않는다. private support
+  symbol도 definition unit의 것을 쓴다. `comptime if`의 선택되지 않는 branch는 parse만
+  하고 semantic name resolution/type checking/codegen을 하지 않는다.
+- generic instance의 canonical key는 **canonical definition unit + canonical declaration
+  identity + canonical type argument list**다. type alias는 새 nominal identity가 아니므로
+  underlying/interned canonical type identity로 정규화한다. 따라서 `const Word = i32;` 뒤의
+  `id(Word, 1)`과 `id(i32, 2)`는 같은 instance다.
+- 최종 build driver는 모든 unit의 instance request를 모아 canonical key로 중복 제거하고
+  key의 byte ordering으로 정렬한다. 먼저 필요한 prototype을 결정적 순서로 방출하고 이어서
+  body를 같은 순서로 단일 `fe_generics.c`에 방출한다. request 발견 순서, hash iteration,
+  build order에 의존하거나 사용 unit별 external/static 중복 코드를 만들지 않는다.
+- exported generic이 definition unit의 private symbol을 참조하면 `.fei`는 다른 unit에서
+  instantiate하는 데 필요한 support dependency의 transitive closure를 기록한다. private
+  non-generic function은 signature와 backend link identity, private nominal type은 필요한
+  identity/layout/signature, comptime const는 evaluated value/type, private generic은 body
+  token stream과 자기 support dependency를 제공한다. 이 compiler/link metadata는 Ferro
+  source visibility를 public으로 바꾸지 않는다.
+
+```fe
+unit lib;
+
+fn helper(x: i32) -> i32 { return x + 1; }
+
+pub fn bump(comptime T: type, x: T) -> T {
+    comptime if T == i32 { return helper(x); }
+    return x;
+}
+```
+
+다른 unit이 요청한 `lib.bump(i32)` instance는 generated internal C symbol을 통해
+`helper`를 호출할 수 있지만, 다른 Ferro source가 `lib.helper`를 직접 참조할 수는 없다.
+
+- 재귀적 인스턴스화의 distinct-instance chain 제한은 32다. 이미 pending/known인 동일
+  canonical instance key를 다시 요청하는 recursion은 pending instance를 재사용하고 depth를
+  소비하지 않는다. 새로운 distinct instance가 연쇄적으로 생길 때만 depth가 증가하며
+  32를 초과하면 최초/현재 위치와 instance chain을 포함한 compile error를 낸다.
+- comptime에서 type 값의 `==`/`!=`, `@is_int(T)`, `@is_ptr(T)`를 허용한다. canonical
+  interned type identity로 평가하며 런타임 type reflection은 없다.
 
 ---
 
 ## 10. 표준 라이브러리 (최소 집합)
 
-- **core**: `panic`, `set_panic_handler`, `Error`(기본 에러 집합), `assert`.
-- **mem**: `create(value: T) -> !^T`(T는 값에서 추론), `destroy(p)`, `alloc_slice(T, n) -> !^[]T`, `replace(dst: &mut T, value: T) -> T`, `copy(dst: []mut u8, src: []u8)`, `set(dst: []mut u8, v: u8)`, `Arena{ init, alloc, reset, drop }`. 초기화되지 않은 힙을 안전 코드에 반환하는 `create(T)` 형태는 없다. `replace`는 이전 값을 이동해 반환하고 새 값으로 자리를 초기화하며 부분 이동과 재귀 구조의 반복 drop에 사용한다.
+표준 라이브러리는 reserved `std` namespace 아래에 있으며 `import std.io;`처럼 명시적으로
+가져온다. import 뒤의 local binding은 마지막 segment라 기존처럼 `io.write`, `mem.replace`
+형태로 사용한다. 실제 `fec/std` source 배치는 M8에서 이 canonical unit path에 맞춘다.
+
+- **`std.core`**: `panic`, `set_panic_handler`, `Error`(기본 에러 집합), `assert`.
+- **`std.mem`**: `create(value: T) -> !^T`(T는 값에서 추론), `destroy(p)`, `alloc_slice(T, n) -> !^[]T`, `replace(dst: &mut T, value: T) -> T`, `copy(dst: []mut u8, src: []u8)`, `set(dst: []mut u8, v: u8)`, `Arena{ init, alloc, reset, drop }`. 초기화되지 않은 힙을 안전 코드에 반환하는 `create(T)` 형태는 없다. `replace`는 이전 값을 이동해 반환하고 새 값으로 자리를 초기화하며 부분 이동과 재귀 구조의 반복 drop에 사용한다.
 - **문자열/바이트**: `str`은 `[]u8` alias다. 내장 alias 메서드 `eq`, `find`, `starts_with`, `split_at`, `parse_int`, `trim`, `to_cstr`, `from_cstr`를 `line.trim()`처럼 호출하며 `str` 이름의 import 유닛은 두지 않는다. 소유 문자열 `String`은 `^[]u8`을 감싸고 `as_str(self: &Self) -> str`을 제공한다.
-- **list**: `List(T)`.
-- **map**: `Map(K, V)`(오픈 어드레싱, K는 정수 또는 `String`). `String` key map은 key buffer를 소유하고 조회에는 `get_str(self: &Self, key: str) -> ?&V`를 제공한다.
-- **fmt**: sink를 소유하지 않는 순수 변환 함수 모음. `fmt_int_i8/i16/i32/u8/u16/u32(buf: []mut u8, v) -> str`, `fmt_hex_*`, `fmt_char`, `fmt_bool`, `fmt_error`, `fmt_int_pad`를 제공한다. 반환 slice는 buf에서 파생된 R8(a) 결과다. `fmt_error`는 `--strip-error-names`를 따른다.
-- **io**:
+- **`std.list`**: `List(T)`.
+- **`std.map`**: `Map(K, V)`(오픈 어드레싱, K는 정수 또는 `String`). `String` key map은 key buffer를 소유하고 조회에는 `get_str(self: &Self, key: str) -> ?&V`를 제공한다.
+- **`std.fmt`**: sink를 소유하지 않는 순수 변환 함수 모음. `fmt_int_i8/i16/i32/u8/u16/u32(buf: []mut u8, v) -> str`, `fmt_hex_*`, `fmt_char`, `fmt_bool`, `fmt_error`, `fmt_int_pad`를 제공한다. 반환 slice는 buf에서 파생된 R8(a) 결과다. `fmt_error`는 `--strip-error-names`를 따른다.
+- **`std.io`**:
   ```fe
   pub enum Writer { Stdout, Stderr, File(u16), Null }
   pub enum Reader { Stdin, File(u16) }
@@ -632,8 +852,8 @@ var xs: List(u8) = List(u8).new();
   둘 다 정수 payload만 가진 Copy handle이며 참조나 raw context pointer를 저장하지 않는다. `io.write(w: Writer, buf: []u8) -> !usize`, `io.read(r: Reader, buf: []mut u8) -> !usize`가 실제 I/O를 수행한다. 닫힌 fd 또는 재사용된 fd를 가진 복사 handle은 I/O 오류나 의도하지 않은 파일 접근이라는 논리 오류를 만들 수 있지만 dangling memory access는 만들지 않는다.
   - `File{ open, create, read(self: &mut Self, []mut u8), write(self: &mut Self, []u8), seek, size, writer, reader, close }`.
   - `close(self: Self) -> !void`는 File을 소비하는 일반 메서드이며 `drop`이 아니다. 내부 handle을 먼저 invalid 상태로 만든 뒤 닫기 오류를 반환하므로 함수 종료의 자동 drop은 no-op이다. `drop`은 아직 열린 handle만 오류를 무시하고 닫는다. `drop` 직접 호출 금지는 유지한다.
-  - 안전한 표준 라이브러리 API는 대여 대상을 가리키는 raw pointer를 값에 숨겨 반환해서는 안 된다. 따라서 v0.1.2에는 함수 포인터/`*void` 기반 Writer·Reader나 buffer Writer가 없다. `@sprint`는 대상 slice에 직접 복사한다.
-- **sys**: `exit`, `on_exit(f: fn() -> void) -> !void`, `args`, `env`, `ticks`, `int21(regs)`, `dpmi_*`(bits32), `port_in/out`, `far_copy`(bits16). `on_exit`은 allocation 없는 고정 크기 callback registry이며 가득 차면 오류를 반환한다.
+  - 안전한 표준 라이브러리 API는 대여 대상을 가리키는 raw pointer를 값에 숨겨 반환해서는 안 된다. 따라서 v0.1에는 함수 포인터/`*void` 기반 Writer·Reader나 buffer Writer가 없다. `@sprint`는 대상 slice에 직접 복사한다.
+- **`std.sys`**: `exit`, `on_exit(f: fn() -> void) -> !void`, `args`, `env`, `ticks`, `int21(regs)`, `dpmi_*`(bits32), `port_in/out`, `far_copy`(bits16). `on_exit`은 allocation 없는 고정 크기 callback registry이며 가득 차면 오류를 반환한다.
 
 ---
 
@@ -703,16 +923,28 @@ fec/
 | `?T` (그 외) | `struct { unsigned char has; T v; }` |
 | `E!T` | `struct { uint16_t e; T v; }`, `!void`는 `uint16_t` |
 | `shared [atomic] var x: T` | `volatile T x` |
-| struct | `struct fe_<unit>_<Name>` |
+| struct | `struct fe_<canonical-unit>_<Name>` |
 | enum | `struct { uint8_t tag; union { ... } u; }`, 배리언트 256개 초과 시 `uint16_t tag` |
-| 함수 | `fe_<unit>_<name>`, 메서드는 `fe_<unit>_<Type>_<name>` |
-| 제네릭 인스턴스 | `fe_<unit>_<Name>__<타입인자맹글>` |
+| 함수 | `fe_<canonical-unit>_<name>`, 메서드는 `fe_<canonical-unit>_<Type>_<name>` |
+| 제네릭 인스턴스 | `fe_<canonical-unit>_<Name>__<canonical-type-args>` |
 
 세부:
+- **canonical mangling**: C symbol은 canonical dotted unit path + declaration name + canonical
+  type argument list를 collision-free하게 encode한다. `.`의 separator/escaping 문자는 구현
+  세부지만 host path, pointer address, insertion/hash iteration order를 사용할 수 없다.
+  type alias는 canonical underlying identity를 쓰고 nominal struct/enum/error는 fully-qualified
+  defining unit + name을 쓴다. generic instance 이름도 같은 key에서만 생성해 M12 fixpoint에서
+  byte-identical해야 한다.
+- **Ferro visibility와 C linkage**: Ferro `private`는 source name visibility이며 반드시 C
+  `static`을 뜻하지 않는다. exported generic instance가 definition unit의 private helper를
+  호출할 수 있도록 generic body가 필요로 하는 private top-level function/global을
+  deterministic unit-mangled external C symbol로 방출하고 내부 generated header에 prototype을
+  제공할 수 있다. 이는 resolver의 private 접근을 완화하지 않으며 다른 Ferro unit source의
+  직접 참조는 계속 에러다. 필요한 closure는 §9와 `.fei` metadata가 제공한다.
 - **오버플로 검사**: `fe_add_i16(a, b, LINE)` 인라인 함수. `--no-checks`면 매크로가 `((a)+(b))`로 축약.
 - **경계 검사**: `fe_idx_T(s, i, LINE)` → `(i < s.n ? s.p[i] : (fe_trap_bounds(LINE), s.p[0]))`. `for` 루프는 직접 인덱스.
 - **`try`**: `{ Ttmp t = expr; if (t.e) return (RetT){ t.e }; }` 후 `t.v` 사용. defer/소멸자가 있으면 return 전에 정리 코드 삽입.
-- **`catch`**: `t.e`가 참일 때 블록 실행, 바인딩 변수는 `t.e`.
+- **`catch`**: `t.e`가 참일 때만 block 또는 짧은 RHS를 평가하고 바인딩 변수는 `t.e`다.
 - **`defer`/소멸자**: lower 단계에서 스코프 종료 지점(정상 흐름, `return`, `break`, `continue`, `try` 전파)마다 역순 호출을 명시적으로 삽입. C의 goto 라벨을 써도 되고 복제해도 된다(A는 복제, B는 goto 권장).
 - **조건부 이동**: 이동 여부가 분기에 따라 다르면 `unsigned char fe_live_<var> = 1;` 플래그 삽입, drop 전에 검사.
 - **`match`**: `switch (x.tag)`. Copy payload는 지역 변수로 복사하고 non-Copy projection payload는 R7에 따라 참조로만 바인딩한다. 소유값 추출은 match 전 `mem.replace`로 수행한다.
@@ -721,8 +953,15 @@ fec/
 - **참조와 aliasing**: `&T` → `const T*` 방출은 aliasing 가정을 하지 않는다. `&mut T`에도 `restrict`를 붙이지 않으며, M13/M14 네이티브 백엔드도 noalias를 가정하지 않는다. R6의 배타성은 R10의 전역 대여 금지가 함께 성립할 때만 프로그램 전체에서 유지되므로, 방출 단계에서 이를 최적화 근거로 쓰지 않는다.
 - **에러 코드**: 드라이버가 emit 전에 확정한 `error.Name`의 `u16` 코드를 단일 `fe_errors.h`의 `#define`으로 방출한다(§4.6). 모든 유닛 C가 이 헤더를 include하므로 에러 `match`를 `switch`로 방출할 수 있고 이름 집합 변경 시 C 재방출 없이 오브젝트만 무효화한다.
 - **논리 연산**: `and`, `or`, `not`은 각각 C의 `&&`, `||`, `!`로 방출한다. `and`와 `or`는 C의 시퀀스 포인트와 단축 평가를 그대로 사용한다.
+- **평가 순서**: §7.6의 callee-first, operand/argument left-to-right 순서를 지킨다. C가
+  순서를 보장하지 않는 일반 호출 인자와 이항 operand에 부수 효과·move·borrow가 있으면
+  lower가 순서대로 temporary statement를 만들고 emit은 그 결과만 조합한다. cleanup과
+  `try` 전파도 같은 순서를 따른다.
 - **공유 상태와 임계 구역**: `shared`는 `volatile`로 방출한다. bits16의 `critical`은 compiler barrier → FLAGS 저장 → `cli` 순서로 진입하고 모든 이탈에서 저장한 FLAGS 복원 → compiler barrier 순서로 끝낸다. GCC 계열은 `asm volatile("" ::: "memory")`, Open Watcom/Borland는 optimizer가 내용을 볼 수 없는 별도 runtime 함수 호출 경계를 사용한다. 한 명령 크기의 `shared atomic` 단일 접근은 volatile load/store만 방출한다.
-- **방출 순서**: `fe_errors.h` → typedef 전방선언 → struct 정의(의존 위상 정렬) → 전역 → 함수 프로토타입 → 함수 본문 → 통합 `fe_generics.c`.
+- **방출 순서**: `fe_errors.h` → typedef 전방선언 → struct 정의(동률을 canonical name으로
+  끊는 의존 위상 정렬) → 전역 → 함수 프로토타입 → 함수 본문 → 통합 `fe_generics.c`.
+  unordered container나 source 발견 순서에 기대지 않는다. `fe_generics.c`는 canonical
+  instance prototype을 먼저, body를 나중에 각각 key byte ordering으로 방출한다.
 - 유닛 하나당 `.c` 하나, `.fei`에서 필요한 부분은 `.h`로 생성한다. 제네릭 인스턴스 본문은 유닛 C에 중복 방출하지 않는다.
 
 ### 11.5 own.c 알고리즘
@@ -732,16 +971,45 @@ fec/
 Uninit | Owned | Moved | MaybeMoved | Shared(n) | Exclusive
 ```
 
+초기화 여부가 경로마다 다른 합류에는 `MaybeUninit` 또는 같은 의미의 별도 bit/state를
+사용할 수 있다. projection은 root local/parameter를 찾는 데만 사용하고 field/index별
+대여 상태는 만들지 않는다(R6).
+
 1. 먼저 AST를 역방향 순회해 각 참조 변수의 경로별 마지막 사용을 계산한다. `defer` 안의 사용은 해당 스코프 끝으로 올린다.
-2. AST를 문장 순서로 순회하며 상태 전이한다. 표현식의 place 사용을 읽기 / 이동 / `&` 대여 / `&mut` 대여 / 쓰기 / projection으로 분류한다.
+2. AST를 §7.6의 평가 순서로 순회하며 상태 전이한다. 표현식의 place 사용을 읽기 / 이동 / `&` 대여 / `&mut` 대여 / 쓰기 / projection으로 분류하고 projection의 root 상태를 갱신한다.
 3. 이동: `Owned → Moved`. `Moved`/`MaybeMoved` 사용 시 에러(최초 이동 위치를 표시). field/index/`.?` projection의 비-Copy 이동은 R7에 따라 거부하고 `mem.replace`만 허용한다.
-4. `&x`: `Owned → Shared(n+1)`. `&mut x`: `Owned → Exclusive`. 역방향 pass가 계산한 마지막 사용에서 해제하며 임시는 문장 끝에 해제한다.
-5. 호출 인자의 `&mut → &`, `[]mut → []`는 Exclusive를 유지하는 임시 공유 view로 검사한다.
+4. `&place`: root의 `Owned → Shared(n+1)`. `&mut place`: root의 `Owned → Exclusive`. 역방향 pass가 계산한 마지막 사용에서 해제하며 임시는 문장 끝에 해제한다. 서로 다른 field/index도 같은 root 상태와 충돌한다.
+5. 호출 인자의 `&mut → &`, `[]mut → []`만 Exclusive를 유지하는 호출 기간의 임시 shared view로 검사한다. 일반 `let`/대입에는 이 implicit transition을 적용하지 않는다.
 6. `Shared`/`Exclusive` 상태에서 금지된 쓰기/이동/재대여를 진단한다(R6).
-7. **분기 합류**: `if`/`match`의 각 브랜치를 독립 상태로 계산 후 병합. `Owned` + `Moved` → `MaybeMoved`(사용 에러, drop은 런타임 플래그).
-8. **루프**: 본문을 2회 순회. 1회차 종료 상태를 진입 상태와 병합해 2회차 실행, 상태가 수렴하지 않으면 에러.
+7. **분기 합류**: `if`/`match`의 각 branch를 독립 상태로 계산한다. branch exit 전에 last-use/liveness에 따라 끝난 borrow를 먼저 해제하고 다음 규칙으로 병합한다.
+
+   | 왼쪽 | 오른쪽 | 결과 |
+   |---|---|---|
+   | 같은 상태 | 같은 상태 | 같은 상태 |
+   | `Owned` | `Moved` | `MaybeMoved` |
+   | `Moved` | `Owned` | `MaybeMoved` |
+   | `MaybeMoved` | `Owned`/`Moved`/`MaybeMoved` | `MaybeMoved` |
+   | `Uninit` | `Owned` 등 initialized 상태 | `MaybeUninit` 또는 동등 상태 |
+
+   merge는 좌우 대칭이다. `MaybeMoved`/`MaybeUninit` 값의 이후 읽기·이동은 에러이고 drop은 필요한 runtime live
+   flag를 쓴다. 한 경로에서만 borrow가 계속 살아 있으면 합류 뒤에도 살아 있는 것으로
+   보수적으로 취급한다. `Shared(n)`과 `Shared(m)`은 필요한 live shared borrow의 합집합을
+   보존하고 단순 count 구현에서는 적어도 `Shared(max(n,m))`으로 합친다. 한쪽만
+   `Exclusive`가 live여도 합류 뒤 root를 `Exclusive` 효과로 잠근다. 서로 양립할 수 없는
+   `Shared`/`Exclusive` 상태는 더 약한 상태로 풀지 않고 양쪽 효과를 보존하는 보수적
+   상태로 합치거나 compile error를 낸다. 구현은 state enum/bitset을 확장할 수 있지만 이
+   의미를 만족해야 한다.
+8. **루프 fixed point**: loop 진입 상태로 body를 한 번 분석하고 종료/backedge 상태를
+   진입 상태와 위 규칙으로 병합한다. 그 merged 상태로 body를 두 번째 분석한다. v0.1
+   compiler A는 이 2-pass를 사용하며 두 번째 분석 뒤에도 의미 상태가 안정되지 않으면
+   compile error다. loop 밖에서 생성되어 loop 안에서 이후 사용되는 borrow는 필요하면
+   loop 전체에 걸쳐 live로 보고, body에서 생성된 borrow가 backedge를 넘는 경우도 같은
+   fixed-point에 포함한다. 첫 iteration만 안전하다는 이유로 허용하지 않는다.
 9. R4 위반은 check 단계에서 타입만 보고 거부한다. 단 `static str`은 initializer가 문자열 리터럴인지 함께 확인한다.
-10. R8 결과 바인딩을 허용하고 원본 대여를 결과의 마지막 사용까지 전파한다. 메서드는 self 파생, 자유 함수는 유일한 참조성 파라미터 파생인지 본문에서 확인한다.
+10. R8 반환 경로마다 `Static`/`Param(N)` provenance를 계산하고 §5 R8 lattice로 합류한다.
+    결과 바인딩을 허용하며 `Param(N)` 원본 대여를 결과의 마지막 사용까지 전파한다.
+    메서드는 `Param(self)`만, 자유 함수는 유일한 참조성 parameter의 `Param(N)`만 허용하고
+    provenance를 lowered signature/`.fei`에 기록한다.
 
 에러 메시지 형식: `file:line:col: error: <설명>` + 관련 위치 `file:line:col: note: <최초 이동/대여 위치>`.
 
@@ -755,7 +1023,7 @@ Uninit | Owned | Moved | MaybeMoved | Shared(n) | Exclusive
 | M4 | **`@print`/`@fprint`/`@sprint` 빌트인** (§6.3.1), handle enum `io.Writer`, 순수 `fmt.fmt_*` | `@print` 오류 삼킴, `@fprint` 전파, `@sprint` 잘림/길이와 인자 타입 진단, safe Writer dangling 불가 |
 | M5 | `^T`/`^[]T`, drop, defer, 이동·부분 이동 검사 | 누수/이중해제, 소비 close, `mem.replace` 테스트 통과 |
 | M6 | `&`, `&mut`, 배타성 검사 (own.c 전체) | R1~R8 실패 테스트 통과 |
-| M7 | `?T`, `E!T`, try/catch | io 유닛 동작 |
+| M7 | `?T`, `E!T`, try/catch | `std.io` 유닛 동작 |
 | M8 | 유닛/import/.fei, 의존 hash, `fe_errors.h`, 분리 컴파일, std 초안 | 다중 유닛 증분·결정적 빌드 |
 | M9 | **제네릭** (통합 모노모피제이션) | `fe_generics.c`로 `List(T)`, `Map(K,V)` 중복 없이 빌드 |
 | M10 | bits16 타깃: far, `@seg_ptr`, 메모리 모델, asm, interrupt fn, `shared`/`atomic`/`critical`/`interrupt_safe` | QEMU FreeDOS에서 자동화된 far 포인터·인터럽트 공유 상태 테스트 통과(VGA 데모는 수동/멀티모달 검증 대상이라 완료 게이트에서 제외) |
@@ -788,8 +1056,36 @@ tests/
 - R6·R8 전용 `pass/` 케이스: 참조의 마지막 사용 이후 원본 재접근, 분기별 마지막 사용의 합류, R8(a) 결과를 지역 변수에 바인딩한 뒤 대여 종료 후 원본 접근, R8(b)의 문자열 리터럴 반환, `line.trim()` 형태의 슬라이스 반환 연쇄.
 - `@compile_error`, `@as_far_fn`, `@call_far`의 comptime/타깃/unsafe 제약과 `error.Name`의
   `core.Error` 등록, 결정적 `fe_errors.h`, `--strip-error-names`, `fmt.fmt_error`를 각각 pass/fail로 검증한다.
+- **M6 필수 edge case**:
+  - 서로 다른 struct field의 `&mut`라도 같은 root borrow 충돌, 서로 다른 array index도 같은 root borrow 충돌.
+  - 호출 인자의 `&mut → &`/`[]mut → []` 약화 성공과 일반 `let` binding의 같은 암묵 약화 실패.
+  - R8 `Static`/`Param(N)` 합류 성공, 서로 다른 `Param` provenance 합류 실패.
+  - 한 branch에서만 live인 borrow의 보수적 합류, `Owned`/`Moved` 및 초기화 상태 합류.
+  - loop-carried borrow와 move가 2-pass fixed point에서 안정되는 경우와 불안정해 거부되는 경우.
+- **M7 필수 edge case**:
+  - 문맥 없는 `null` 실패와 parameter/명시 타입으로 결정되는 contextual `null` 성공.
+  - error declaration의 code 0, 중복 member 이름, 중복 숫자 code 실패.
+  - `E!T` expected 위치의 success/failure contextual construction과 nominal error 자동 변환 실패.
+  - `orelse`, 짧은/block `catch`의 lazy side effect·move·borrow.
+  - non-Copy `Some` pattern이 destructive extraction이 아님을 확인하고 projection 소유 추출에는 `mem.replace`가 필요함을 검증.
+- **M8 필수 edge case**:
+  - dotted unit/import와 alias, 마지막 segment binding, binding conflict.
+  - unit path/file suffix mismatch, uppercase segment와 8자 초과 segment 거부.
+  - 서로 다른 root의 동일 canonical unit ambiguity와 같은 canonical file 중복 발견의 dedup.
+  - reserved `std.*` lookup, 일반 user unit이 builtin std root에서 발견되지 않음.
+  - private type을 public API에 노출하는 경우 실패와 dotted prefix가 private 권한을 주지 않음.
+  - private-only non-generic 구현 변경 뒤 dependency interface hash 안정 및 dependent cache hit.
+  - source/interface graph와 target/model이 같을 때 build order, `-I` order, absolute checkout path가 달라도 byte-identical `.fei`.
+- **M9 필수 edge case**:
+  - value generic과 generic type inference 거부, 명시 type argument 성공.
+  - alias/underlying type의 instance dedup과 동일 canonical instance body 1회 방출.
+  - exported generic이 definition-unit private helper/private generic을 호출하는 support closure.
+  - 같은 instance recursion의 pending 재사용과 distinct growing-instance chain depth 32 초과 실패.
+  - generic request 발견 순서와 build order가 달라도 byte-identical `fe_generics.c`.
+  - invalid dependent operation의 definition 위치 primary error와 `instantiated here` chain note.
 - 각 마일스톤은 해당 기능의 pass/fail 테스트와 함께 완료한다.
-- 회귀 실행: `make test` — 전 타깃 전 테스트.
+- 정식 회귀 실행은 QEMU FreeDOS 내부 Open Watcom의 `TEST-DOS.BAT`로 전 타깃·마일스톤
+  gate를 확인한다. host compiler 결과는 편집 보조일 뿐 완료 판정에 사용하지 않는다.
 
 ---
 
@@ -839,6 +1135,6 @@ dump(&mut file, buf);          // &mut File → &mut dyn Writer 자동 변환
 - **동적 디스패치 전용.** 제네릭 타입 제약(trait bound)으로는 쓸 수 없다 — 그걸 허용하면 전역 분석이 생긴다.
 - `&dyn I`는 참조이므로 R4가 적용된다(필드 저장 불가). 필드에 담으려면 `^dyn I`(힙 박싱).
 - `^dyn I`의 drop은 vtable 경유. 이 때문에 `?^dyn I`, drop 전개, 제네릭 인자로서의 `dyn` 등 타입 시스템 여러 곳에 케이스가 추가되므로 독립 마일스톤으로 다룬다.
-- 도입 시 `io.Writer`/`io.Reader` handle enum을 `dyn` 기반 API로 교체한다. v0.1.2의 safe API에는 이미 대여 대상을 숨긴 `*void`가 없으므로 이 전환은 기능 확장이지 안전성 수정이 아니다.
+- 도입 시 `io.Writer`/`io.Reader` handle enum을 `dyn` 기반 API로 교체한다. v0.1 safe API에는 이미 대여 대상을 숨긴 `*void`가 없으므로 이 전환은 기능 확장이지 안전성 수정이 아니다.
 
 위 표에 없는 항목(링크타임 최적화, 디버그 정보 포맷, 언어 서버 등)은 도구 영역이며 v0.2 이후 별도 검토.
