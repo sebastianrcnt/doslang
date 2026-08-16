@@ -1,9 +1,8 @@
 """Run every fixture through the front end and check what it reports.
 
-The compiler is a front end now -- lexer, parser, types, ownership -- so a
-fixture is checked by running `fec` on it and looking at two things: whether it
-was accepted, and, when it was rejected, whether the diagnostic is the one the
-fixture asked for.
+A fixture is checked by running `fec` on it and looking at two things: whether
+it was accepted, and, when it was rejected, whether the diagnostic is the one
+the fixture asked for.
 
 A fixture states its expectation in its first line:
 
@@ -17,8 +16,8 @@ not pin the message yet. Anything else must be accepted.
 Fixtures under `parse/` are checked with --dump-ast rather than --check: they
 exercise the grammar, and several are deliberately not well-typed.
 
-This runs on the host in about a second. There is no VM: nothing here executes
-generated code, because there is no code generator.
+This runs on the host in about a second. It checks what the compiler says; what
+the compiled programs actually do is `exec.py`.
 """
 from __future__ import annotations
 
@@ -35,8 +34,6 @@ FIXTURES = ROOT / "fec" / "tests"
 WATCOM = ROOT / ".dosboxx" / "watcom"
 SOURCES = ("arena", "diag", "lexer", "ast", "parser", "types", "m7", "own",
            "check", "resolve", "ir", "lower", "x86", "driver")
-# Fixtures live here until there is a code generator to run them against.
-QUARANTINE = "pending-backend"
 
 MARKER = re.compile(r"^//\s*ERROR:(?:(\d+):)?(.*)$")
 
@@ -116,7 +113,7 @@ def main() -> int:
     args = ap.parse_args()
 
     fec = build(ROOT / ".build")
-    cases = sorted(p for p in FIXTURES.rglob("*.fe") if QUARANTINE not in p.parts)
+    cases = sorted(FIXTURES.rglob("*.fe"))
     if args.select:
         cases = [p for p in cases if args.select in p.as_posix()]
 

@@ -1,0 +1,11 @@
+// EXIT:3
+// OUTPUT:index out of bounds
+// NOCHECKS:0
+unit slicerng;
+
+fn main() -> i32 {
+    let a: [2]i32 = [1, 2];
+    let s: []i32 = a[0..3];
+    let n: i32 = s.n as i32;
+    return n - n;
+}

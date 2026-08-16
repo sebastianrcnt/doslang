@@ -1,6 +1,0 @@
-unit m3_bounds;
-
-fn main() -> i32 {
-    let a: [2]i32 = [1, 2];
-    return a[2];
-}

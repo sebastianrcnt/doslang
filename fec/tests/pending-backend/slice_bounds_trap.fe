@@ -1,7 +1,0 @@
-unit m3_slice_bounds;
-
-fn main() -> i32 {
-    let a: [2]i32 = [1, 2];
-    let s: []i32 = a[0..3];
-    return s.n as i32;
-}

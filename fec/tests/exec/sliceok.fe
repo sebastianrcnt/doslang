@@ -1,0 +1,14 @@
+// EXIT:9
+unit sliceok;
+
+fn total(s: []i32) -> i32 {
+    var sum: i32 = 0;
+    for v in s { sum = sum + v.^; }
+    return sum;
+}
+
+fn main() -> i32 {
+    let a: [5]i32 = [1, 2, 3, 4, 5];
+    let mid: []i32 = a[1..4];
+    return total(mid);
+}
