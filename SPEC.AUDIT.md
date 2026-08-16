@@ -563,7 +563,7 @@ M6~M9 구현 전에 함수-local 소유권 분석, optional/error 의미, 계층
 - 문제: `SPEC.md`는 `try`를 에러 유니온 반환 함수 안에서만 허용하는데, `check.c`의 검사가
   `FE_N_EXPR_STMT`에만 걸려 있어 `var x = try e;`와 `x = try e;`를 통과시킨다.
   `fec/tests/m5/runtime.fe`의 `run`과 `owned.fe`의 `main`이 이 구멍에 의존하고 있었다.
-- 결정: 구멍은 M7과 함께 닫는다. M7 이전 master에서는 닫을 수 없다.
+- 결정: 구멍은 M7과 함께 닫는다. M7 이전 master에서는 닫을 수 없다. (M7에서 해소됨)
 - 근거: 검사를 `try` 표현식으로 옮기면 `run`이 에러 유니온을 반환해야 하는데, master는
   `-> !i32`에서 `return <value>;`도, `-> !void`에서 명시적 `return;`도 거부한다
   ("return type mismatch" / "void expression returned from value function"). 둘 다
