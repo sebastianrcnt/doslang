@@ -61,6 +61,12 @@ void fe_diags_init(FeDiags *d, const char *source, unsigned long source_len)
     d->source_len=source_len;
 }
 
+void fe_diags_source(FeDiags *d, const char *source, unsigned long source_len)
+{
+    d->source=source;
+    d->source_len=source_len;
+}
+
 void fe_diag_error(FeDiags *d, FeLoc loc, const char *msg)
 {
     d->errors++;

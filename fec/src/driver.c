@@ -81,25 +81,27 @@ int main(int argc, char **argv)
         free(src);
         return d.errors?1:0;
     }
-    /* Unit identity before semantic analysis: a unit that is not named
-       correctly, or does not sit where its name says, cannot be resolved from
-       another unit either. */
-    fe_resolve_unit_identity(&ast,&d,file);
-    if(d.errors){
-        fe_ast_destroy(&ast);
-        free(src);
-        return 1;
-    }
-    fe_check_init(&check,&ast,&d,pointer_bits,no_checks);
-    if(!fe_check_program(&check)){
-        fe_ast_destroy(&ast);
-        free(src);
-        return 1;
-    }
-    /* Semantic analysis is the last pass there is. A code generator attaches
-       here; until then --check and the default path are the same thing. */
-    (void)check_only;
     fe_ast_destroy(&ast);
     free(src);
-    return d.errors?1:0;
+    src=0;
+    /* Load the whole unit graph rooted at this file: identity, imports,
+       cycles and bindings. The entry file is parsed a second time as part of
+       it, which costs one file read and keeps the graph the single owner of
+       every unit's AST. */
+    {
+        FeBuild build;
+        unsigned u;
+        int ok=fe_build_load(&build,file,&d);
+        for(u=0;ok && u<build.count;u++){
+            FeUnit *unit=&build.units[u];
+            fe_diags_source(&d,unit->source,unit->size);
+            fe_check_init(&check,&unit->ast,&d,pointer_bits,no_checks);
+            if(!fe_check_program(&check)) ok=0;
+        }
+        fe_build_destroy(&build);
+        /* Semantic analysis is the last pass there is. A code generator
+           attaches here; until then --check and the default path agree. */
+        (void)check_only;
+        return (!ok||d.errors)?1:0;
+    }
 }

@@ -1,4 +1,4 @@
-// ERROR:3:cycle
+// ERROR:cycle
 unit b;
 import a;
 
