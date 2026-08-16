@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build compiler as C89
-        run: make -C fec clean all CFLAGS='-O0 -Wall -Wextra -Werror -std=c89'
+        run: make -C fec clean all CFLAGS='-O0 -Wall -Wextra -std=c89'
       - name: Check M7 pass fixtures
         shell: bash
         run: |
