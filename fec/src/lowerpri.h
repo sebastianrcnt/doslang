@@ -24,7 +24,6 @@
  * register and an aggregate does not fit in one.
  * ------------------------------------------------------------------------- */
 
-#define LOWER_MAX_LOCALS 256
 
 typedef struct LowerVar {
     const char *cname;
@@ -41,8 +40,12 @@ typedef struct Lower {
     FeIrBlock *b;              /* the block being appended to */
     FeType *ret_type;
     unsigned ret_local;        /* hidden result address, when returning mem */
-    LowerVar vars[LOWER_MAX_LOCALS];
+    /* These three grow. A fixed size here does not report a program that is
+       too big -- it quietly drops what does not fit and generates wrong code,
+       which is the worst way for a limit to be reached. */
+    LowerVar *vars;
     unsigned var_count;
+    unsigned var_capacity;
     /* Loop targets, for break and continue. */
     unsigned break_target[32];
     unsigned continue_target[32];
@@ -60,14 +63,16 @@ typedef struct Lower {
         unsigned local;        /* the owned value, otherwise */
         unsigned flag;
         FeType *type;
-    } owed[64];
+    } *owed;
     unsigned owed_count;
+    unsigned owed_capacity;
     /* Every `error.Name` used anywhere in the build, sorted, numbered from one.
        SPEC 4.6: the names are collected rather than declared, and the order is
        fixed by the spelling so that the same program always gets the same
        codes however the build was ordered. */
-    const char *error_names[256];
+    const char **error_names;
     unsigned error_count;
+    unsigned error_capacity;
     int failed;
 } Lower;
 
@@ -85,6 +90,11 @@ typedef struct Slot {
    runtime read it this way, so the offsets live here and nowhere else. */
 #define SLICE_PTR_OFFSET 0L
 #define SLICE_LEN_OFFSET 4L
+
+/* Grow one of the checker's own arrays. Returns zero when there is no more
+   memory, which the caller reports rather than ignores. */
+int lower_reserve(Lower *L, void **items, unsigned *capacity, unsigned needed,
+                  unsigned long item_size);
 
 /* Every definition in lowering, so the split files can see each other. */
 FeIrType tag_type_of(const FeType *t);

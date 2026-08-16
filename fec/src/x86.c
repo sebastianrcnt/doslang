@@ -1,5 +1,6 @@
 #include "x86.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* ------------------------------------------------------------------------- *
  * i386 code generation
@@ -269,13 +270,17 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
 static void emit_func(const FeIrModule *m, const FeIrFunc *f, FILE *out)
 {
     Frame fr;
-    long storage[512];
+    long *storage;
     const FeIrBlock *b;
     const FeIrValue *v;
     unsigned i;
     long arg = 8;
     if (f->is_extern || !f->first) return;
-    if (f->local_count > 512) return;
+    /* One offset per local, however many there are. A fixed array here would
+       silently stop emitting a function that had too many. */
+    storage = (long *)malloc((size_t)(f->local_count ? f->local_count : 1) *
+                             sizeof(long));
+    if (!storage) return;
     frame_layout(&fr, f, storage);
 
     fprintf(out, "\npublic %s\n", f->name);
@@ -322,6 +327,7 @@ static void emit_func(const FeIrModule *m, const FeIrFunc *f, FILE *out)
         }
     }
     fprintf(out, "%s endp\n", f->name);
+    free(storage);
     (void)m;
 }
 

@@ -15,7 +15,7 @@
    what makes a unit path map to a FAT/DOS 8.3 source path unambiguously. */
 #define FE_UNIT_SEGMENT_MAX 8
 #define FE_UNIT_PATH_MAX 128
-#define FE_BUILD_UNIT_MAX 64
+#define FE_BUILD_UNIT_MAX 256
 
 typedef struct FeUnit {
     char name[FE_UNIT_PATH_MAX];   /* canonical dotted path */

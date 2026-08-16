@@ -118,18 +118,37 @@ int needs_release(const FeType *t)
     return t->has_drop != 0;
 }
 
+int lower_reserve(Lower *L, void **items, unsigned *capacity, unsigned needed,
+                  unsigned long item_size)
+{
+    unsigned want;
+    void *grown;
+    if (needed < *capacity) return 1;
+    want = *capacity ? *capacity * 2U : 16U;
+    while (want <= needed) want *= 2U;
+    grown = fe_arena_alloc(&L->m->arena, (size_t)(want * item_size));
+    if (!grown) { fail(L, "a function this large", 0); return 0; }
+    if (*items) memcpy(grown, *items, (size_t)(*capacity * item_size));
+    *items = grown;
+    *capacity = want;
+    return 1;
+}
+
 unsigned declare_var(Lower *L, const char *cname, const FeType *t,
                             const char *name)
 {
     unsigned local = fe_ir_local(L->m, L->fn, ir_type(t), ir_size(t),
                                  ir_align(t), name);
-    if (L->var_count < LOWER_MAX_LOCALS) {
+    if (lower_reserve(L, (void **)&L->vars, &L->var_capacity, L->var_count,
+                      (unsigned long)sizeof(LowerVar))) {
         L->vars[L->var_count].cname = cname;
         L->vars[L->var_count].local = local;
         L->vars[L->var_count].by_address = 0;
         ++L->var_count;
     }
-    if (needs_release(t) && L->owed_count < 64) {
+    if (needs_release(t) &&
+        lower_reserve(L, (void **)&L->owed, &L->owed_capacity, L->owed_count,
+                      (unsigned long)sizeof *L->owed)) {
         unsigned flag = fe_ir_local(L->m, L->fn, FE_IR_I8, 1, 1, "live");
         unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I8, 0);
         fe_ir_store(L->m, L->b, fe_ir_at_local(flag, 0), zero, FE_IR_I8);
@@ -230,7 +249,10 @@ void note_error_name(Lower *L, const char *name)
 {
     unsigned i;
     unsigned at;
-    if (!name || L->error_count >= 256) return;
+    if (!name) return;
+    if (!lower_reserve(L, (void **)&L->error_names, &L->error_capacity,
+                       L->error_count, (unsigned long)sizeof(const char *)))
+        return;
     for (i = 0; i < L->error_count; ++i)
         if (!strcmp(L->error_names[i], name)) return;
     /* Kept sorted as it is built, so the numbering is the spelling order. */

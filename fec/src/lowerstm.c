@@ -198,21 +198,30 @@ void lower_for(Lower *L, FeNode *n)
            with one it is the element. */
         counter = fe_ir_local(L->m, L->fn, FE_IR_I32, 4, 4, "index");
         if (n->aux_cname) {
+            (void)lower_reserve(L, (void **)&L->vars, &L->var_capacity,
+                                L->var_count,
+                                (unsigned long)sizeof(LowerVar));
             L->vars[L->var_count].cname = n->cname;
             L->vars[L->var_count].local = counter;
             L->vars[L->var_count].by_address = 0;
-            if (L->var_count < LOWER_MAX_LOCALS) ++L->var_count;
+            ++L->var_count;
             item = fe_ir_local(L->m, L->fn, FE_IR_PTR, 4, 4, n->aux_text);
+            (void)lower_reserve(L, (void **)&L->vars, &L->var_capacity,
+                                L->var_count,
+                                (unsigned long)sizeof(LowerVar));
             L->vars[L->var_count].cname = n->aux_cname;
             L->vars[L->var_count].local = item;
             L->vars[L->var_count].by_address = 0;
-            if (L->var_count < LOWER_MAX_LOCALS) ++L->var_count;
+            ++L->var_count;
         } else {
             item = fe_ir_local(L->m, L->fn, FE_IR_PTR, 4, 4, n->text);
+            (void)lower_reserve(L, (void **)&L->vars, &L->var_capacity,
+                                L->var_count,
+                                (unsigned long)sizeof(LowerVar));
             L->vars[L->var_count].cname = n->cname;
             L->vars[L->var_count].local = item;
             L->vars[L->var_count].by_address = 0;
-            if (L->var_count < LOWER_MAX_LOCALS) ++L->var_count;
+            ++L->var_count;
         }
         {
             unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I32, 0);
@@ -463,7 +472,8 @@ void lower_stmt(Lower *L, FeNode *n)
         lower_stmt(L, n->a);
         return;
     case FE_N_DEFER:
-        if (L->owed_count < 64) {
+        if (lower_reserve(L, (void **)&L->owed, &L->owed_capacity,
+                          L->owed_count, (unsigned long)sizeof *L->owed)) {
             L->owed[L->owed_count].block = n->a;
             L->owed[L->owed_count].local = 0;
             L->owed[L->owed_count].flag = 0;
@@ -543,7 +553,8 @@ void lower_fn_as(Lower *L, FeNode *fn, const char *name)
             ? fe_ir_local(L->m, f, FE_IR_PTR, 4, 4, p->text)
             : fe_ir_local(L->m, f, ir_type(pt), ir_size(pt), ir_align(pt),
                           p->text);
-        if (L->var_count < LOWER_MAX_LOCALS) {
+        if (lower_reserve(L, (void **)&L->vars, &L->var_capacity,
+                          L->var_count, (unsigned long)sizeof(LowerVar))) {
             L->vars[L->var_count].cname = p->cname;
             L->vars[L->var_count].local = local;
             L->vars[L->var_count].by_address = by_address;

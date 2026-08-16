@@ -11,7 +11,7 @@ typedef struct FeScope FeScope;
    spelling of its type arguments (SPEC 9). The table both deduplicates
    requests and bounds how long a chain of new ones can get. */
 #define FE_GENERIC_KEY_MAX 320
-#define FE_GENERIC_INSTANCE_MAX 512
+#define FE_GENERIC_INSTANCE_MAX 4096
 typedef struct FeInstance {
     char key[FE_GENERIC_KEY_MAX];
     /* What lowering needs to build this instance's code: the declaration, the
