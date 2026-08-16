@@ -235,11 +235,10 @@ class Host:
             reported = started
             interrupt_at: float | None = None
             interrupted = ""
-            answered = False
 
             def supervise() -> None:
                 """Called every EXEC_POLL_SECONDS while the agent stays silent."""
-                nonlocal reported, interrupt_at, interrupted, answered
+                nonlocal reported, interrupt_at, interrupted
                 now = time.monotonic()
                 idle = self.guest_idle_seconds()
                 if now - reported >= 15:
@@ -259,16 +258,18 @@ class Host:
                         self.monitor("sendkey ctrl-c")
                     return
                 waited = now - interrupt_at
-                if not answered and waited > 4:
-                    # COMMAND.COM asks "Terminate batch file (Y/N/A)?" for .BAT
-                    # targets and sits at that prompt until it is answered.
-                    answered = True
-                    self.monitor("sendkey y")
-                    self.monitor("sendkey ret")
-                # Ctrl+C only lands at a DOS break check. With BREAK=OFF (the
-                # FreeDOS default) a compute-bound child whose output we
-                # redirected to a file may never reach one, so the command runs
-                # to completion regardless. Keep collecting its result rather
+                # DOS answers Ctrl+C with "Terminate batch file (Y/N/A)?" and
+                # waits there. The prompt only appears once COMMAND.COM reaches
+                # the next batch line, which can be many seconds into a slow
+                # command, so answer on every poll rather than once: a single
+                # early 'y' is swallowed by whatever is still running. Send only
+                # 'y' -- the prompt takes one keystroke, and a trailing Enter
+                # gets read as "keep going".
+                self.monitor("sendkey y")
+                # Even answered, Ctrl+C is a request. It lands only at a DOS
+                # break check, and a DOS/4GW child (wcc386, wmake) runs in
+                # protected mode where it may never reach one, so the command
+                # can still run to completion. Keep collecting its result rather
                 # than abandoning a stream that still owes us one -- give up
                 # only once the guest has gone quiet too.
                 if waited > INTERRUPT_GRACE_SECONDS and (idle is None or idle > 5):
