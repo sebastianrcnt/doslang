@@ -31,6 +31,9 @@ typedef struct FeBuild {
     FeUnit units[FE_BUILD_UNIT_MAX];
     unsigned count;
     char root[260];                /* import root: where unit paths start */
+    /* Where `std.*` is looked for. The standard library is not under the
+       program's root -- it ships with the compiler. */
+    char std_root[260];
     FeDiags *diags;
 } FeBuild;
 
@@ -46,7 +49,8 @@ int fe_resolve_unit_identity(FeAst *ast, FeDiags *diags, const char *source_path
    `<root>/a/b.fe` fixes `<root>`, so a sibling `import c.d;` is looked for at
    `<root>/c/d.fe`. Reports missing imports, import cycles, and binding
    conflicts. Returns non-zero when the whole graph loaded cleanly. */
-int fe_build_load(FeBuild *build, const char *entry, FeDiags *diags);
+int fe_build_load(FeBuild *build, const char *entry, FeDiags *diags,
+                  const char *std_root);
 void fe_build_destroy(FeBuild *build);
 
 /* The unit a binding refers to inside `unit`, or null.

@@ -154,11 +154,15 @@ static FeType *node_type(FeCheck *c, FeNode *n)
     return t;
 }
 
+/* A link-visible name. A unit path has dots in it and a generic instance has
+   brackets and commas, none of which an assembler will accept, so everything
+   outside the portable identifier set becomes an underscore. */
 static char *unit_cname(FeCheck *c, const char *name)
 {
     char *u;
     char *p;
     unsigned long n;
+    unsigned long i;
     u = c->ast->root && c->ast->root->text ? c->ast->root->text : "unit";
     n = (unsigned long)strlen("fe_") + (unsigned long)strlen(u) +
         (unsigned long)strlen(name ? name : "name") + 2UL;
@@ -168,6 +172,12 @@ static char *unit_cname(FeCheck *c, const char *name)
     strcat(p, u);
     strcat(p, "_");
     strcat(p, name ? name : "name");
+    for (i = 0; p[i]; ++i) {
+        char ch = p[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+              (ch >= '0' && ch <= '9') || ch == '_'))
+            p[i] = '_';
+    }
     return p;
 }
 

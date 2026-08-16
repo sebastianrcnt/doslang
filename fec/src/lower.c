@@ -406,6 +406,42 @@ static Slot lower_logical(Lower *L, FeNode *n, int is_and)
     return slot_place(fe_ir_at_local(result, 0), FE_IR_I8, 1);
 }
 
+/* The builtins that are not calls at all: they are a constant, or they stop
+   the program. `@print` is expanded separately because it becomes several
+   calls rather than one thing. */
+static int lower_builtin(Lower *L, FeNode *n, Slot *out)
+{
+    const char *name = n->text;
+    if (!name || name[0] != '@') return 0;
+    if (!strcmp(name, "@trap")) {
+        fe_ir_trap(L->b, FE_TRAP_EXPLICIT, n->loc.line);
+        L->b = new_block(L);
+        *out = slot_void();
+        return 1;
+    }
+    if (!strcmp(name, "@unreachable")) {
+        fe_ir_trap(L->b, FE_TRAP_UNREACHABLE, n->loc.line);
+        L->b = new_block(L);
+        *out = slot_void();
+        return 1;
+    }
+    if (!strcmp(name, "@size_of") || !strcmp(name, "@align_of")) {
+        FeNode *arg = n->children;
+        FeType *t = arg && arg->kind == FE_N_IDENT
+            ? fe_type_intern(&L->c->types, arg->text) : 0;
+        long v = !strcmp(name, "@size_of") ? (long)ir_size(t)
+                                           : (long)ir_align(t);
+        *out = slot_value(fe_ir_const(L->m, L->b, FE_IR_I32, v), FE_IR_I32);
+        return 1;
+    }
+    if (!strcmp(name, "@line")) {
+        *out = slot_value(fe_ir_const(L->m, L->b, FE_IR_I32,
+                                      (long)n->loc.line), FE_IR_I32);
+        return 1;
+    }
+    return 0;
+}
+
 static Slot lower_call(Lower *L, FeNode *n)
 {
     unsigned args[16];
@@ -417,6 +453,10 @@ static Slot lower_call(Lower *L, FeNode *n)
     const char *callee = n->a && n->a->cname ? n->a->cname :
                          (n->sem_decl && n->sem_decl->cname ?
                           n->sem_decl->cname : 0);
+    {
+        Slot built;
+        if (lower_builtin(L, n, &built)) return built;
+    }
     if (!callee) { fail(L, "a call with no target", n); return slot_void(); }
     /* An aggregate result is written through a hidden first argument. */
     if (rt == FE_IR_MEM) {
@@ -1169,6 +1209,15 @@ int fe_lower_program(FeCheck *c, FeIrModule *out)
         for (n = unit->ast.root ? unit->ast.root->children : 0; n; n = n->next)
             if (n->kind == FE_N_GLOBAL || n->kind == FE_N_CONST)
                 lower_global(&L, n);
+            else if (n->kind == FE_N_FN && !n->c) {
+                /* A declaration with no body is something the linker will
+                   find: the runtime, or a C library. */
+                FeType *ret = n->b ? fe_type_from_ast(&c->types, n->b) : 0;
+                FeIrFunc *f;
+                if (!n->cname) continue;
+                f = fe_ir_func(out, n->cname, ir_type(ret), ir_size(ret));
+                if (f) f->is_extern = 1;
+            }
             else if (n->kind == FE_N_FN && n->c) {
                 lower_fn(&L, n);
                 /* The entry unit is the one the build was rooted at. */

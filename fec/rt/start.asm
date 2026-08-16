@@ -122,6 +122,85 @@ reason_write:
         call    _ExitProcess@4
 fe_trap endp
 
+; ---------------------------------------------------------------- primitives
+; The standard library is written in Ferro; these are the few things it cannot
+; say for itself. All cdecl.
+
+extern _GetProcessHeap@0 : near
+extern _HeapAlloc@12 : near
+extern _HeapFree@12 : near
+
+; fe_rt_write(handle, ptr, len) -> bytes written
+public fe_rt_write
+fe_rt_write proc near
+        push    ebp
+        mov     ebp, esp
+        push    ebx
+        mov     eax, [ebp+8]            ; 1 = stdout, 2 = stderr
+        cmp     eax, 2
+        je      pick_err
+        push    -11
+        jmp     pick_done
+pick_err:
+        push    -12
+pick_done:
+        call    _GetStdHandle@4
+        push    0
+        push    offset written
+        push    dword ptr [ebp+16]
+        push    dword ptr [ebp+12]
+        push    eax
+        call    _WriteFile@20
+        mov     eax, [written]
+        pop     ebx
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_write endp
+
+; fe_rt_alloc(n) -> pointer, or zero
+public fe_rt_alloc
+fe_rt_alloc proc near
+        push    ebp
+        mov     ebp, esp
+        call    _GetProcessHeap@0
+        push    dword ptr [ebp+8]
+        push    8                       ; HEAP_ZERO_MEMORY
+        push    eax
+        call    _HeapAlloc@12
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_alloc endp
+
+; fe_rt_free(p)
+public fe_rt_free
+fe_rt_free proc near
+        push    ebp
+        mov     ebp, esp
+        mov     eax, [ebp+8]
+        test    eax, eax
+        je      free_done
+        call    _GetProcessHeap@0
+        push    dword ptr [ebp+8]
+        push    0
+        push    eax
+        call    _HeapFree@12
+free_done:
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_free endp
+
+; fe_rt_exit(code) -- never returns
+public fe_rt_exit
+fe_rt_exit proc near
+        push    ebp
+        mov     ebp, esp
+        push    dword ptr [ebp+8]
+        call    _ExitProcess@4
+fe_rt_exit endp
+
 public fe_start_
 fe_start_ proc near
         call    fe_main_

@@ -38,7 +38,9 @@ def build(fec: Path, source: Path, out_dir: Path, no_checks: bool = False):
     asm = out_dir / f"{stem}.asm"
     log = []
 
-    cmd = [fec, "--emit-asm", source, "-o", asm]
+    # `std` ships with the compiler, so it is looked for beside it rather
+    # than beside the program.
+    cmd = [fec, "--emit-asm", source, "-o", asm, f"--std={ROOT / 'fec'}"]
     if no_checks:
         cmd.append("--no-checks")
     step = _run(cmd, out_dir)

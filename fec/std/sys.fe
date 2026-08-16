@@ -1,2 +1,24 @@
-unit sys;
-pub fn exit(code: u16);
+unit std.sys;
+
+// The few things the language cannot say for itself. The runtime provides
+// them; everything else in the standard library is written in Ferro.
+extern "c" fn fe_rt_write(handle: i32, bytes: *u8, len: usize) -> i32;
+extern "c" fn fe_rt_alloc(n: usize) -> *u8;
+extern "c" fn fe_rt_free(p: *u8);
+extern "c" fn fe_rt_exit(code: i32);
+
+pub fn exit(code: i32) -> void {
+    unsafe { fe_rt_exit(code); }
+}
+
+pub fn raw_write(handle: i32, bytes: *u8, len: usize) -> i32 {
+    unsafe { return fe_rt_write(handle, bytes, len); }
+}
+
+pub fn raw_alloc(n: usize) -> *u8 {
+    unsafe { return fe_rt_alloc(n); }
+}
+
+pub fn raw_free(p: *u8) -> void {
+    unsafe { fe_rt_free(p); }
+}

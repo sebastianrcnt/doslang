@@ -18,7 +18,7 @@ static char *read_file(const char *name, unsigned long *size)
 
 static void usage(void)
 {
-    puts("usage: fec [--dump-tokens|--dump-ast|--check|--dump-ir|--emit-asm] file.fe [-o out.asm] [--no-checks]");
+    puts("usage: fec [--dump-tokens|--dump-ast|--check|--dump-ir|--emit-asm] file.fe [-o out.asm] [--std=dir] [--no-checks]");
 }
 
 static void dump_tokens(const char *src, unsigned long n, const char *file,
@@ -42,6 +42,7 @@ int main(int argc, char **argv)
     int i,dump=0,dump_tok=0,check_only=0,no_checks=0,dump_ir=0,emit_asm=0;
     const char *file=0;
     const char *out_path=0;
+    const char *std_root=0;
     unsigned long n;
     char *src;
     FeDiags d;
@@ -57,6 +58,7 @@ int main(int argc, char **argv)
         else if(strcmp(argv[i],"--dump-ir")==0) dump_ir=1;
         else if(strcmp(argv[i],"--emit-asm")==0) emit_asm=1;
         else if(strcmp(argv[i],"-o")==0 && i+1<argc) out_path=argv[++i];
+        else if(strncmp(argv[i],"--std=",6)==0) std_root=argv[i]+6;
         else if(strcmp(argv[i],"--no-checks")==0) no_checks=1;
         else if(strncmp(argv[i],"--target=",9)==0 || strncmp(argv[i],"--model=",8)==0 || strcmp(argv[i],"--strip-error-names")==0) { }
         else if(argv[i][0]!='-') file=argv[i];
@@ -94,7 +96,7 @@ int main(int argc, char **argv)
        every unit's AST. */
     {
         FeBuild build;
-        int ok=fe_build_load(&build,file,&d);
+        int ok=fe_build_load(&build,file,&d,std_root);
         if(ok){
             fe_check_init(&check,&build,&d,pointer_bits,no_checks);
             if(!fe_check_program(&check)) ok=0;

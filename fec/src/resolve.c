@@ -190,7 +190,13 @@ static int load_unit(FeBuild *b, const char *name, FeLoc from, int have_from,
     unit = &b->units[b->count];
     memset(unit, 0, sizeof *unit);
     strcpy(unit->name, name);
-    unit_source_path(unit->path, sizeof unit->path, b->root, name);
+    /* `std` is reserved (SPEC 10) and lives with the compiler, not with the
+       program, so it is looked up under its own root. */
+    unit_source_path(unit->path, sizeof unit->path,
+                     (name[0]=='s' && name[1]=='t' && name[2]=='d' &&
+                      (name[3]=='.' || name[3]==0) && b->std_root[0])
+                         ? b->std_root : b->root,
+                     name);
     unit->source = read_source(unit->path, &size);
     if (!unit->source) {
         if (have_from)
@@ -245,7 +251,8 @@ static int check_bindings(FeBuild *b, FeUnit *unit)
     return ok;
 }
 
-int fe_build_load(FeBuild *build, const char *entry, FeDiags *diags)
+int fe_build_load(FeBuild *build, const char *entry, FeDiags *diags,
+                  const char *std_root)
 {
     const char *stack[FE_BUILD_UNIT_MAX];
     FeAst probe;
@@ -259,6 +266,14 @@ int fe_build_load(FeBuild *build, const char *entry, FeDiags *diags)
 
     memset(build, 0, sizeof *build);
     build->diags = diags;
+    if (std_root) {
+        unsigned long k = 0;
+        while (std_root[k] && k + 1 < sizeof build->std_root) {
+            build->std_root[k] = std_root[k];
+            ++k;
+        }
+        build->std_root[k] = 0;
+    }
 
     /* The entry file fixes the import root, so it has to be parsed far enough
        to know its own name before anything else can be found. */
