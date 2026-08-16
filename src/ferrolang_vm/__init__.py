@@ -1,1 +1,1 @@
-"""Windows-only QEMU and FreeDOS TCP-agent automation."""
+"""Reproducible DOS development tools for the Ferro compiler."""

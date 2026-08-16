@@ -12,7 +12,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .daemon import ROOT
+from .paths import ROOT
 from .suite import Case
 
 
@@ -96,28 +96,25 @@ def setup(*, accept_watcom_license: bool = False) -> tuple[Path, Path]:
         raise DosboxError("the DOSBox-X development backend currently supports Windows only")
     lock = _lock()
     dosbox, watcom, watcom_required = _required_paths(lock)
-    marker = CACHE / "SETUP.OK"
-    lock_hash = _sha256(LOCK_PATH)
-    if (marker.is_file() and marker.read_text(encoding="ascii").strip() == lock_hash
-            and dosbox.is_file() and all(path.is_file() for path in watcom_required)):
-        return dosbox, watcom
-    if not accept_watcom_license:
+    tools_ready = dosbox.is_file() and all(path.is_file() for path in watcom_required)
+    if not tools_ready and not accept_watcom_license:
         raise DosboxError(
             "Open Watcom is distributed under the Sybase Open Watcom Public License. "
             "Review tools/toolchains/dosboxx.lock.json and rerun "
-            "`uv run ferro-test setup --accept-watcom-license`."
+            "`uv run ferro-dos setup --accept-watcom-license`."
         )
-    dosbox_spec = lock["dosboxx"]
-    watcom_spec = lock["open_watcom"]
-    assert isinstance(dosbox_spec, dict) and isinstance(watcom_spec, dict)
-    _safe_extract(_download("DOSBox-X", dosbox_spec), CACHE / "dosbox-x")
-    _safe_extract(_download("Open Watcom", watcom_spec), watcom)
+    if not tools_ready:
+        dosbox_spec = lock["dosboxx"]
+        watcom_spec = lock["open_watcom"]
+        assert isinstance(dosbox_spec, dict) and isinstance(watcom_spec, dict)
+        _safe_extract(_download("DOSBox-X", dosbox_spec), CACHE / "dosbox-x")
+        _safe_extract(_download("Open Watcom", watcom_spec), watcom)
     dosbox, watcom, watcom_required = _required_paths(lock)
     missing = [str(path.relative_to(CACHE)) for path in [dosbox, *watcom_required]
                if not path.is_file()]
     if missing:
         raise DosboxError("toolchain archive is missing: " + ", ".join(missing))
-    marker.write_text(lock_hash + "\n", encoding="ascii")
+    (CACHE / "SETUP.OK").write_text(_sha256(LOCK_PATH) + "\n", encoding="ascii")
     return dosbox, watcom
 
 
@@ -125,7 +122,7 @@ def resolve_tools() -> tuple[Path, Path]:
     lock = _lock()
     dosbox, watcom, required = _required_paths(lock)
     if not dosbox.is_file() or not all(path.is_file() for path in required):
-        raise DosboxError("toolchain is not installed; run `uv run ferro-test setup`")
+        raise DosboxError("toolchain is not installed; run `uv run ferro-dos setup`")
     return dosbox, watcom
 
 
@@ -165,7 +162,8 @@ def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool) -> str:
         ])
     lines.extend([
         "goto FINISH", ":BUILDFAIL", "echo FAIL>RESULTS\\BUILD.RES", ":FINISH",
-        "echo DONE>RUN.OK", *(["pause"] if show_dos else []), "exit", "",
+        "echo DONE>RUN.OK",
+        *(["pause"] if show_dos else []), "exit", "",
     ])
     return "\r\n".join(lines)
 
@@ -236,7 +234,8 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
             command.append("-silent")
         command.extend([
             "-fastlaunch", "-conf", str(config),
-            "-c", f'mount C "{run_root}"', "-c", f'mount W "{watcom}" -ro',
+            "-c", f'mount C "{run_root}"', "-c", f'mount R "{ROOT}" -ro',
+            "-c", f'mount W "{watcom}" -ro',
             "-c", "C:", "-c", "cd \\FEC", "-c", "RUN.BAT",
         ])
         completed = subprocess.run(command, check=False, timeout=300)

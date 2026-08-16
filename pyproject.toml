@@ -1,16 +1,14 @@
 [project]
 name = "ferrolang"
 version = "0.1.0"
-description = "Ferro language compiler and QEMU development automation"
+description = "Ferro language compiler and reproducible DOS development tools"
 requires-python = ">=3.12"
 dependencies = [
-    "onnxruntime>=1.28.0",
     "pytest>=9.0.0",
-    "rapidocr>=3.9.2",
 ]
 
 [project.scripts]
-ferro-vm = "ferrolang_vm.cli:main"
+ferro-dos = "ferrolang_vm.dos_cli:main"
 ferro-test = "ferrolang_vm.test_cli:main"
 
 [build-system]
