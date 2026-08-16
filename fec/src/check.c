@@ -15,6 +15,14 @@ struct FeSym {
     int initialized;
     int moved;
     FeNode *decl;
+    /* M6 ownership is tracked at the root local/parameter.  A reference
+       binding remembers that root so releasing the binding's last use can
+       release the root borrow without a separate alias engine. */
+    FeOwnState own;
+    FeSym *borrow_root;
+    int borrow_mut;
+    int borrow_defer;
+    FeScope *owner;
 };
 
 struct FeScope {
@@ -33,6 +41,8 @@ typedef struct FeCheckerState {
     FeType *ret;
     unsigned loop_depth;
     unsigned defer_depth;
+    FeOwnLiveness liveness;
+    FeNode *fn_node;
 } FeCheckerState;
 
 static FeType *unknown(FeCheck *c)
@@ -55,6 +65,30 @@ static void mark_moved(FeCheckerState *s, FeNode *n, FeType *t)
     FeSym *sym=0;
     if (n && n->kind==FE_N_IDENT)
         sym=find_symbol(s->scope,n->text ? n->text : "");
+    if (s->defer_depth != 0) {
+        /* A defer capture keeps the owner live until scope cleanup; its body
+           is not an immediate consuming use. */
+        fe_own_mark_consumed(s->c->diags,
+                             sym ? &sym->moved : 0,
+                             sym ? sym->decl : 0,
+                             n,t,1);
+        return;
+    }
+    if (sym && t && !fe_own_is_copy_type(t)) {
+        if (n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX) {
+            fe_diag_error(s->c->diags,n->loc,
+                "cannot move a non-Copy value out of a projection; use mem.replace");
+            return;
+        }
+        if (fe_own_access(s->c->diags,&sym->own,FE_OWN_MOVE,n->loc)) {
+            sym->moved=sym->own.move;
+            /* Keep the existing emitter contract: ownership-consuming AST
+               uses carry this flag, while FeOwnState is the diagnostic
+               authority. */
+            fe_own_mark_consumed(s->c->diags,&sym->moved,sym->decl,n,t,0);
+        }
+        return;
+    }
     fe_own_mark_consumed(s->c->diags,
                          sym ? &sym->moved : 0,
                          sym ? sym->decl : 0,
@@ -212,6 +246,11 @@ static FeSym *add_symbol(FeCheckerState *s, FeScope *scope,
     sym->initialized = initialized;
     sym->moved = FE_OWN_AVAILABLE;
     sym->decl = decl;
+    fe_own_state_init(&sym->own, initialized);
+    sym->borrow_root = 0;
+    sym->borrow_mut = 0;
+    sym->borrow_defer = 0;
+    sym->owner = scope;
     if (decl) {
         decl->cname = cname;
         decl->sem_type = type;
@@ -264,6 +303,8 @@ typedef struct FeFlowSlot {
     FeSym *sym;
     int moved;
     int initialized;
+    int own_move;
+    int own_initialized;
 } FeFlowSlot;
 
 static unsigned flow_capture(FeScope *scope, FeFlowSlot *slots, unsigned cap)
@@ -276,6 +317,8 @@ static unsigned flow_capture(FeScope *scope, FeFlowSlot *slots, unsigned cap)
             slots[count].sym=&p->items[i];
             slots[count].moved=p->items[i].moved;
             slots[count].initialized=p->items[i].initialized;
+            slots[count].own_move=p->items[i].own.move;
+            slots[count].own_initialized=p->items[i].own.initialized;
             ++count;
         }
     return count;
@@ -287,6 +330,8 @@ static void flow_restore(FeFlowSlot *slots, unsigned count)
     for (i=0; i<count; ++i) {
         slots[i].sym->moved=slots[i].moved;
         slots[i].sym->initialized=slots[i].initialized;
+        slots[i].sym->own.move=slots[i].own_move;
+        slots[i].sym->own.initialized=slots[i].own_initialized;
     }
 }
 
@@ -297,6 +342,237 @@ static void flow_merge(FeFlowSlot *base, FeFlowSlot *left, FeFlowSlot *right,
     for (i=0; i<count; ++i) {
         base[i].sym->moved=fe_own_merge_move(left[i].moved,right[i].moved);
         base[i].sym->initialized=left[i].initialized && right[i].initialized;
+        base[i].sym->own.move=fe_own_merge_move(left[i].own_move,right[i].own_move);
+        base[i].sym->own.initialized=left[i].own_initialized && right[i].own_initialized;
+    }
+}
+
+static FeSym *own_root_symbol(FeCheckerState *s, FeNode *expr)
+{
+    FeOwnPlace place;
+    if (!fe_own_place_from_expr(expr,&place)) return 0;
+    return find_symbol(s->scope,place.root->text ? place.root->text : "");
+}
+
+static int own_is_global(FeCheckerState *s, FeSym *sym)
+{
+    FeScope *p;
+    if (!s || !sym) return 0;
+    for (p=s->globals; p; p=p->parent) {
+        unsigned i;
+        for (i=0;i<p->count;++i) if (&p->items[i]==sym) return 1;
+    }
+    return 0;
+}
+
+static void own_borrow_expr(FeCheckerState *s, FeNode *expr, int mutable)
+{
+    FeSym *root=own_root_symbol(s,expr);
+    if (!root) return;
+    if (mutable && root->type && root->type->kind==FE_TYPE_REF &&
+        !root->type->ref_mut) {
+        err(s->c,expr->loc,"cannot create mutable borrow from a shared reference");
+        return;
+    }
+    if (own_is_global(s,root) &&
+        !(root->decl && root->decl->kind==FE_N_GLOBAL &&
+          (root->decl->flags & 2U) && !mutable)) {
+        err(s->c,expr->loc,"cannot borrow a mutable global");
+        return;
+    }
+    fe_own_access(s->c->diags,&root->own,
+                  mutable ? FE_OWN_BORROW_MUT : FE_OWN_BORROW_SHARED,
+                  expr->loc);
+}
+
+static void own_release_temporary_borrow(FeCheckerState *s, FeNode *expr)
+{
+    FeSym *root;
+    if (!expr || expr->kind!=FE_N_UNARY || !expr->text) return;
+    if (strcmp(expr->text,"&")!=0 && strcmp(expr->text,"&mut")!=0) return;
+    root=own_root_symbol(s,expr->a);
+    if (!root) return;
+    if (strcmp(expr->text,"&mut")==0) fe_own_release_exclusive(&root->own);
+    else fe_own_release_shared(&root->own);
+}
+
+/* Return-reference provenance is represented at call sites by retaining a
+   borrow of the unique reference-derived argument (or method receiver). */
+static FeSym *own_derived_call_root(FeCheckerState *s, FeNode *call)
+{
+    FeNode *param;
+    FeNode *arg;
+    FeNode *source=0;
+    unsigned refs=0;
+    if (!call || call->kind!=FE_N_CALL || !call->sem_type ||
+        !fe_own_is_reference_like(call->sem_type)) return 0;
+    if (call->a && call->a->kind==FE_N_MEMBER && call->sem_decl) {
+        param=call->sem_decl->a ? call->sem_decl->a->children : 0;
+        if (param && param->text && strcmp(param->text,"self")==0)
+            return own_root_symbol(s,call->a->a);
+    }
+    if (!call->sem_decl) return 0;
+    param=call->sem_decl->a ? call->sem_decl->a->children : 0;
+    arg=call->children;
+    while (param && arg) {
+        FeType *t=node_type(s->c,param->a);
+        if (fe_own_is_reference_like(t)) { ++refs; source=arg; }
+        param=param->next;
+        arg=arg->next;
+    }
+    return refs==1 ? own_root_symbol(s,source) : 0;
+}
+
+static void own_bind_derived_call(FeCheckerState *s, FeSym *binding,
+                                  FeNode *value)
+{
+    FeSym *root;
+    if (!binding || !value || value->kind!=FE_N_CALL) return;
+    root=own_derived_call_root(s,value);
+    if (!root) return; /* Static provenance. */
+    if (root->borrow_root) root=root->borrow_root;
+    if (value->sem_type->kind==FE_TYPE_REF && value->sem_type->ref_mut)
+        fe_own_access(s->c->diags,&root->own,FE_OWN_BORROW_MUT,value->loc);
+    else
+        fe_own_access(s->c->diags,&root->own,FE_OWN_BORROW_SHARED,value->loc);
+    binding->borrow_root=root;
+    binding->borrow_mut=value->sem_type->kind==FE_TYPE_REF && value->sem_type->ref_mut;
+}
+
+static int own_stmt_uses(FeNode *node, const char *name)
+{
+    FeNode *x;
+    if (!node || !name) return 0;
+    if (node->kind==FE_N_IDENT && node->text && strcmp(node->text,name)==0)
+        return 1;
+    if (own_stmt_uses(node->a,name) || own_stmt_uses(node->b,name) ||
+        own_stmt_uses(node->c,name)) return 1;
+    for (x=node->children;x;x=x->next)
+        if (own_stmt_uses(x,name)) return 1;
+    return 0;
+}
+
+static int own_defer_uses(FeNode *node, const char *name)
+{
+    FeNode *x;
+    if (!node) return 0;
+    if (node->kind==FE_N_DEFER && own_stmt_uses(node->a,name)) return 1;
+    if (own_defer_uses(node->a,name) || own_defer_uses(node->b,name) ||
+        own_defer_uses(node->c,name)) return 1;
+    for (x=node->children;x;x=x->next)
+        if (own_defer_uses(x,name)) return 1;
+    return 0;
+}
+
+static int own_contains_node(FeNode *node, FeNode *needle)
+{
+    FeNode *x;
+    if (!node || !needle) return 0;
+    if (node==needle) return 1;
+    if (own_contains_node(node->a,needle) ||
+        own_contains_node(node->b,needle) ||
+        own_contains_node(node->c,needle)) return 1;
+    for (x=node->children;x;x=x->next)
+        if (own_contains_node(x,needle)) return 1;
+    return 0;
+}
+
+static void own_release_after_stmt(FeCheckerState *s, FeScope *scope,
+                                   FeNode *stmt, int scope_end)
+{
+    unsigned i;
+    FeScope *p;
+    const FeOwnLastUse *last;
+    for (p=scope;p;p=scope_end ? 0 : p->parent) for (i=0;i<p->count;++i) {
+        FeSym *ref=&p->items[i];
+        if (!ref->borrow_root) continue;
+        last=fe_own_last_use(&s->liveness,
+            ref->decl && ref->decl->text ? ref->decl->text : ref->name);
+        if (!scope_end && (ref->borrow_defer || !last || last->defer_extended ||
+            !own_contains_node(stmt,last->last_node))) continue;
+        if (ref->borrow_mut) fe_own_release_exclusive(&ref->borrow_root->own);
+        else fe_own_release_shared(&ref->borrow_root->own);
+        ref->borrow_root=0;
+    }
+}
+
+/* Full borrow snapshots live in the AST arena, rather than on the 16-bit
+   compiler stack.  The compact FeFlowSlot arrays retain the pre-M6 move and
+   initialization flow handling. */
+static FeOwnState *flow_own_new(FeCheckerState *s, unsigned count)
+{
+    if (!s || !count) return 0;
+    return (FeOwnState *)fe_arena_alloc(&s->c->ast->arena,
+                                        count*sizeof(FeOwnState));
+}
+
+static void flow_own_capture(FeFlowSlot *slots, FeOwnState *states,
+                             unsigned count)
+{
+    unsigned i;
+    if (!states) return;
+    for (i=0;i<count;++i) states[i]=slots[i].sym->own;
+}
+
+static void flow_own_restore(FeFlowSlot *slots, FeOwnState *states,
+                             unsigned count)
+{
+    unsigned i;
+    if (!states) return;
+    for (i=0;i<count;++i) slots[i].sym->own=states[i];
+}
+
+static void flow_own_merge(FeFlowSlot *slots, FeOwnState *left,
+                           FeOwnState *right, unsigned count)
+{
+    unsigned i;
+    if (!left || !right) return;
+    for (i=0;i<count;++i)
+        slots[i].sym->own=fe_own_merge_state(left[i],right[i]);
+}
+
+typedef struct FeFlowBorrow {
+    FeSym *root;
+    int mutable;
+} FeFlowBorrow;
+
+static FeFlowBorrow *flow_borrow_new(FeCheckerState *s, unsigned count)
+{
+    if (!s || !count) return 0;
+    return (FeFlowBorrow *)fe_arena_alloc(&s->c->ast->arena,
+                                          count*sizeof(FeFlowBorrow));
+}
+
+static void flow_borrow_capture(FeFlowSlot *slots, FeFlowBorrow *states,
+                                unsigned count)
+{
+    unsigned i;
+    if (!states) return;
+    for (i=0;i<count;++i) {
+        states[i].root=slots[i].sym->borrow_root;
+        states[i].mutable=slots[i].sym->borrow_mut;
+    }
+}
+
+static void flow_borrow_restore(FeFlowSlot *slots, FeFlowBorrow *states,
+                                unsigned count)
+{
+    unsigned i;
+    if (!states) return;
+    for (i=0;i<count;++i) {
+        slots[i].sym->borrow_root=states[i].root;
+        slots[i].sym->borrow_mut=states[i].mutable;
+    }
+}
+
+static void flow_borrow_merge(FeFlowSlot *slots, FeFlowBorrow *left,
+                              FeFlowBorrow *right, unsigned count)
+{
+    unsigned i;
+    if (!left || !right) return;
+    for (i=0;i<count;++i) {
+        slots[i].sym->borrow_root=left[i].root ? left[i].root : right[i].root;
+        slots[i].sym->borrow_mut=left[i].mutable || right[i].mutable;
     }
 }
 
@@ -544,9 +820,10 @@ static FeType *check_identifier(FeCheckerState *s, FeNode *n, int read)
     }
     n->cname = sym->cname;
     n->sem_type = sym->type;
-    fe_own_check_use(s->c->diags,sym->moved,n->loc);
-    if (read && !sym->initialized && !sym->fn)
-        err(s->c, n->loc, "use of uninitialized variable");
+    if (!sym->fn) {
+        fe_own_access(s->c->diags,&sym->own,FE_OWN_READ,n->loc);
+        sym->moved=sym->own.move;
+    }
     return sym->type;
 }
 
@@ -601,6 +878,9 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
                 a=unknown(c);
             }
         } else if (strcmp(op,"&")==0 || strcmp(op,"&mut")==0) {
+            if (strcmp(op,"&mut")==0 && a && a->kind==FE_TYPE_REF && !a->ref_mut)
+                err(c,n->loc,"cannot create mutable borrow from a shared reference");
+            own_borrow_expr(s,n->a,strcmp(op,"&mut")==0);
             a=fe_type_ref(&c->types,a,strcmp(op,"&mut")==0);
         }
         n->sem_type = a;
@@ -761,6 +1041,13 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
                     fe_type_intern(&c->types,"void");
                 return n->sem_type;
             }
+            if (et && (et->kind==FE_TYPE_SLICE || et->kind==FE_TYPE_STR) &&
+                n->a->b && n->a->b->text &&
+                strcmp(n->a->b->text,"trim")==0) {
+                if (n->children) err(c,n->loc,"trim takes no arguments");
+                n->sem_type=fe_type_slice(&c->types,et->elem);
+                return n->sem_type;
+            }
             variant=et && et->kind==FE_TYPE_ENUM ?
                 fe_type_variant(et,n->a->b ? n->a->b->text : "") : 0;
             arg=n->children;
@@ -787,13 +1074,24 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
             arg = n->children;
             while (param && arg) {
                 a = check_expr(s, arg);
-                mark_moved(s,arg,a);
                 b = node_type(c, param->a);
+                if (b && a && b->kind==FE_TYPE_REF && !b->ref_mut &&
+                    a->kind==FE_TYPE_REF && a->ref_mut) {
+                    FeSym *root=own_root_symbol(s,arg);
+                    if (root && root->borrow_root) root=root->borrow_root;
+                    if (root) fe_own_call_shared_view(c->diags,&root->own,arg->loc);
+                } else if (b && a && b->kind==FE_TYPE_SLICE && !b->ref_mut &&
+                           a->kind==FE_TYPE_SLICE && a->ref_mut) {
+                    /* Call-only []mut -> [] weakening is a temporary view. */
+                } else mark_moved(s,arg,a);
                 if (!compatible(b, a, arg) &&
                     !(b && a && b->kind==FE_TYPE_SLICE && a->kind==FE_TYPE_SLICE &&
                       !b->ref_mut && a->ref_mut && fe_type_equal(b->elem,a->elem)) &&
+                    !(b && a && b->kind==FE_TYPE_REF && a->kind==FE_TYPE_REF &&
+                      !b->ref_mut && a->ref_mut && fe_type_equal(b->elem,a->elem)) &&
                     a->kind != FE_TYPE_UNKNOWN)
                     err(c, arg->loc, "argument type mismatch");
+                own_release_temporary_borrow(s,arg);
                 param = param->next;
                 arg = arg->next;
             }
@@ -869,8 +1167,10 @@ static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
             err(s->c, n->loc, "cannot assign to immutable let");
         n->cname = sym->cname;
         n->sem_type = sym->type;
-        if (read && !sym->initialized)
-            err(s->c, n->loc, "use of uninitialized variable");
+        if (read) {
+            fe_own_access(s->c->diags,&sym->own,FE_OWN_READ,n->loc);
+            sym->moved=sym->own.move;
+        }
         return sym->type;
     }
     if (n && n->kind == FE_N_MEMBER) {
@@ -1090,6 +1390,64 @@ static void check_type_cycles(FeCheck *c)
     for (t=c->types.types;t;t=t->next) check_type_cycle(c,t);
 }
 
+static int own_ast_reference_type(FeNode *type)
+{
+    if (!type || !type->text) return 0;
+    return strcmp(type->text,"&")==0 || strcmp(type->text,"&mut")==0 ||
+        (strcmp(type->text,"[")==0 && !type->a) || strcmp(type->text,"str")==0;
+}
+
+static int own_ast_pointer_to_reference(FeNode *type)
+{
+    return type && type->text && strcmp(type->text,"*")==0 &&
+        own_ast_reference_type(type->a);
+}
+
+static void check_reference_storage(FeCheck *c, FeNode *decl)
+{
+    FeNode *m;
+    if (!decl) return;
+    if (decl->kind==FE_N_STRUCT || decl->kind==FE_N_ENUM) {
+        for (m=decl->children;m;m=m->next)
+            if (m->kind==FE_N_FIELD &&
+                (own_ast_reference_type(m->a) || own_ast_pointer_to_reference(m->a)))
+                err(c,m->loc,"reference type is not allowed in aggregate storage");
+    }
+    if ((decl->kind==FE_N_GLOBAL || decl->kind==FE_N_CONST) && decl->a &&
+        own_ast_reference_type(decl->a) &&
+        !(decl->kind==FE_N_CONST && decl->a->text && strcmp(decl->a->text,"str")==0))
+        err(c,decl->loc,"reference type is not allowed in global storage");
+    if (decl->kind==FE_N_FN && decl->b && own_ast_pointer_to_reference(decl->b))
+        err(c,decl->b->loc,"reference type is not allowed as a pointer target");
+    if (decl->kind==FE_N_FN)
+        for (m=decl->a ? decl->a->children : 0;m;m=m->next)
+            if (own_ast_pointer_to_reference(m->a))
+                err(c,m->loc,"reference type is not allowed as a pointer target");
+}
+
+static int own_return_from_allowed_root(FeCheckerState *s, FeNode *expr)
+{
+    FeSym *root;
+    FeNode *p;
+    unsigned refs=0;
+    if (!expr) return 0;
+    root=own_root_symbol(s,expr);
+    if (!root) return 1; /* Static-producing builtins/methods are checked by
+                            their declared R8 interface. */
+    if (own_is_global(s,root))
+        return root->decl && root->decl->kind==FE_N_GLOBAL &&
+            (root->decl->flags & 2U);
+    if (!root->decl || root->decl->kind!=FE_N_PARAM) return 0;
+    for (p=s->fn_node && s->fn_node->a ? s->fn_node->a->children : 0;
+         p;p=p->next) {
+        FeType *t=p->sem_type ? p->sem_type : node_type(s->c,p->a);
+        if (fe_own_is_reference_like(t)) ++refs;
+    }
+    if (s->fn_node && s->fn_node->text && refs &&
+        root->name && strcmp(root->name,"self")==0) return 1;
+    return refs==1;
+}
+
 static void check_stmt(FeCheckerState *s, FeNode *n)
 {
     FeCheck *c = s->c;
@@ -1104,7 +1462,11 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
     case FE_N_BLOCK:
         old = s->scope;
         s->scope = scope_new(s, old);
-        for (x = n->children; x; x = x->next) check_stmt(s, x);
+        for (x = n->children; x; x = x->next) {
+            check_stmt(s,x);
+            own_release_after_stmt(s,s->scope,x,0);
+        }
+        own_release_after_stmt(s,s->scope,n,1);
         s->scope = old;
         break;
     case FE_N_LET:
@@ -1121,8 +1483,16 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         if (n->kind==FE_N_LET && a->kind==FE_TYPE_SLICE && a->ref_mut)
             err(c,n->loc,"let cannot bind a mutable slice");
         mark_moved(s,n->b,b);
-        add_symbol(s, s->scope, n->text, a, 0, 0, 1,
+        sym=add_symbol(s, s->scope, n->text, a, 0, 0, 1,
                    local_cname(c, n->text ? n->text : "local"), n);
+        if (sym && n->b && n->b->kind==FE_N_UNARY && n->b->text &&
+            (strcmp(n->b->text,"&")==0 || strcmp(n->b->text,"&mut")==0)) {
+            sym->borrow_root=own_root_symbol(s,n->b->a);
+            sym->borrow_mut=strcmp(n->b->text,"&mut")==0;
+            sym->borrow_defer=s->defer_depth != 0 ||
+                own_defer_uses(s->fn_node ? s->fn_node->c : 0,n->text);
+        }
+        own_bind_derived_call(s,sym,n->b);
         break;
     case FE_N_VAR:
         a = n->a ? node_type(c, n->a) : unknown(c);
@@ -1138,8 +1508,16 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             err(c, n->loc, "void expression cannot initialize a variable");
         mark_moved(s,n->b,b);
         initialized = n->b != 0;
-        add_symbol(s, s->scope, n->text, a, 0, 1, initialized,
+        sym=add_symbol(s, s->scope, n->text, a, 0, 1, initialized,
                    local_cname(c, n->text ? n->text : "local"), n);
+        if (sym && n->b && n->b->kind==FE_N_UNARY && n->b->text &&
+            (strcmp(n->b->text,"&")==0 || strcmp(n->b->text,"&mut")==0)) {
+            sym->borrow_root=own_root_symbol(s,n->b->a);
+            sym->borrow_mut=strcmp(n->b->text,"&mut")==0;
+            sym->borrow_defer=s->defer_depth != 0 ||
+                own_defer_uses(s->fn_node ? s->fn_node->c : 0,n->text);
+        }
+        own_bind_derived_call(s,sym,n->b);
         break;
     case FE_N_ASSIGN:
         b = check_expr(s, n->b);
@@ -1149,7 +1527,26 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         mark_moved(s,n->b,b);
         sym = n->a && n->a->kind == FE_N_IDENT ?
             find_symbol(s->scope, n->a->text) : 0;
-        if (sym && sym->mutable) sym->initialized = 1;
+        if (sym && sym->mutable) {
+            sym->initialized = 1;
+            fe_own_access(s->c->diags,&sym->own,FE_OWN_WRITE,n->a->loc);
+            sym->moved=sym->own.move;
+            if (n->b && n->b->kind==FE_N_UNARY && n->b->text &&
+                (strcmp(n->b->text,"&")==0 || strcmp(n->b->text,"&mut")==0) &&
+                fe_own_is_reference_like(sym->type)) {
+                FeSym *root=own_root_symbol(s,n->b->a);
+                if (root && root->owner!=sym->owner)
+                    err(c,n->b->loc,"reference would outlive its source scope");
+                else if (root) {
+                    if (sym->borrow_root) {
+                        if (sym->borrow_mut) fe_own_release_exclusive(&sym->borrow_root->own);
+                        else fe_own_release_shared(&sym->borrow_root->own);
+                    }
+                    sym->borrow_root=root;
+                    sym->borrow_mut=strcmp(n->b->text,"&mut")==0;
+                }
+            }
+        }
         break;
     case FE_N_EXPR_STMT:
         check_expr(s, n->a);
@@ -1165,50 +1562,104 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         break;
     case FE_N_IF: {
         FeFlowSlot base[64], left[64], right[64];
+        FeOwnState *own_base, *own_left, *own_right;
+        FeFlowBorrow *borrow_base, *borrow_left, *borrow_right;
         unsigned flow_count;
         a = check_expr(s, n->a);
         if (known(a) && a->kind != FE_TYPE_BOOL)
             err(c, n->loc, "if condition must be bool");
         flow_count=flow_capture(s->scope,base,64);
+        own_base=flow_own_new(s,flow_count);
+        own_left=flow_own_new(s,flow_count);
+        own_right=flow_own_new(s,flow_count);
+        borrow_base=flow_borrow_new(s,flow_count);
+        borrow_left=flow_borrow_new(s,flow_count);
+        borrow_right=flow_borrow_new(s,flow_count);
+        flow_own_capture(base,own_base,flow_count);
+        flow_borrow_capture(base,borrow_base,flow_count);
         check_stmt(s, n->b);
         flow_capture(s->scope,left,flow_count);
+        flow_own_capture(left,own_left,flow_count);
+        flow_borrow_capture(left,borrow_left,flow_count);
         flow_restore(base,flow_count);
+        flow_own_restore(base,own_base,flow_count);
+        flow_borrow_restore(base,borrow_base,flow_count);
         if (n->c) check_stmt(s, n->c);
-        if (n->c) flow_capture(s->scope,right,flow_count);
+        if (n->c) {
+            flow_capture(s->scope,right,flow_count);
+            flow_own_capture(right,own_right,flow_count);
+            flow_borrow_capture(right,borrow_right,flow_count);
+        }
         else {
             unsigned i;
-            for (i=0;i<flow_count;++i) right[i]=base[i];
+            for (i=0;i<flow_count;++i) {
+                right[i]=base[i];
+                if (own_right && own_base) own_right[i]=own_base[i];
+                if (borrow_right && borrow_base) borrow_right[i]=borrow_base[i];
+            }
         }
         flow_merge(base,left,right,flow_count);
+        flow_own_merge(base,own_left,own_right,flow_count);
+        flow_borrow_merge(base,borrow_left,borrow_right,flow_count);
         break;
     }
     case FE_N_WHILE: {
         FeFlowSlot base[64], body[64], entry2[64];
+        FeOwnState *own_base, *own_body, *own_entry2;
+        FeFlowBorrow *borrow_base, *borrow_body, *borrow_entry2;
         unsigned flow_count;
         unsigned i;
         a = check_expr(s, n->a);
         if (known(a) && a->kind != FE_TYPE_BOOL)
             err(c, n->loc, "while condition must be bool");
         flow_count=flow_capture(s->scope,base,64);
+        own_base=flow_own_new(s,flow_count);
+        own_body=flow_own_new(s,flow_count);
+        own_entry2=flow_own_new(s,flow_count);
+        borrow_base=flow_borrow_new(s,flow_count);
+        borrow_body=flow_borrow_new(s,flow_count);
+        borrow_entry2=flow_borrow_new(s,flow_count);
+        flow_own_capture(base,own_base,flow_count);
+        flow_borrow_capture(base,borrow_base,flow_count);
         if (s->loop_depth < 255U) ++s->loop_depth;
         check_stmt(s, n->b);
         if (s->loop_depth) --s->loop_depth;
         flow_capture(s->scope,body,flow_count);
+        flow_own_capture(body,own_body,flow_count);
+        flow_borrow_capture(body,borrow_body,flow_count);
         for (i=0;i<flow_count;++i) {
             entry2[i]=base[i];
             entry2[i].moved=fe_own_loop_entry(base[i].moved,body[i].moved);
             if(!body[i].initialized) entry2[i].initialized=0;
+            entry2[i].own_move=fe_own_loop_entry(base[i].own_move,body[i].own_move);
+            if(!body[i].own_initialized) entry2[i].own_initialized=0;
+            if (own_entry2 && own_base && own_body)
+                fe_own_loop_merge_state(own_base[i],own_body[i],&own_entry2[i]);
+            if (borrow_entry2 && borrow_base && borrow_body)
+                borrow_entry2[i]=borrow_base[i].root ? borrow_base[i] : borrow_body[i];
         }
         flow_restore(entry2,flow_count);
+        flow_own_restore(entry2,own_entry2,flow_count);
+        flow_borrow_restore(entry2,borrow_entry2,flow_count);
         if (s->loop_depth < 255U) ++s->loop_depth;
         check_stmt(s,n->b);
         if (s->loop_depth) --s->loop_depth;
         flow_capture(s->scope,body,flow_count);
+        flow_own_capture(body,own_body,flow_count);
+        flow_borrow_capture(body,borrow_body,flow_count);
         for(i=0;i<flow_count;++i) {
             entry2[i].moved=fe_own_loop_exit(entry2[i].moved,body[i].moved);
             if(!body[i].initialized) entry2[i].initialized=0;
+            entry2[i].own_move=fe_own_loop_exit(entry2[i].own_move,body[i].own_move);
+            if(!body[i].own_initialized) entry2[i].own_initialized=0;
+            if (own_entry2 && own_body)
+                fe_own_loop_merge_state(own_entry2[i],own_body[i],&own_entry2[i]);
+            if (borrow_entry2 && borrow_body && !borrow_entry2[i].root)
+                borrow_entry2[i]=borrow_body[i];
         }
         flow_restore(entry2,flow_count);
+        flow_own_restore(entry2,own_entry2,flow_count);
+        flow_borrow_restore(entry2,borrow_entry2,flow_count);
         break;
     }
     case FE_N_FOR:
@@ -1225,6 +1676,9 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         break;
     case FE_N_RETURN:
         b = n->a ? check_expr(s, n->a) : fe_type_intern(&c->types, "void");
+        if (s->ret && fe_own_is_reference_like(s->ret) &&
+            !own_return_from_allowed_root(s,n->a))
+            err(c,n->loc,"reference return must be derived from a parameter or static");
         mark_moved(s,n->a,b);
         if (known(b) && b->kind == FE_TYPE_VOID && s->ret->kind != FE_TYPE_VOID)
             err(c, n->loc, "void expression returned from value function");
@@ -1253,6 +1707,9 @@ static void check_fn(FeCheck *c, FeNode *fn, FeScope *globals)
     s.ret = fn->b ? node_type(c, fn->b) : fe_type_intern(&c->types, "void");
     s.loop_depth=0;
     s.defer_depth=0;
+    s.fn_node=fn;
+    fe_own_liveness_init(&s.liveness,&c->ast->arena);
+    fe_own_collect_last_uses(&s.liveness,fn);
     fn->sem_type = s.ret;
     for (x = fn->a ? fn->a->children : 0; x; x = x->next) {
         t = node_type(c, x->a);
@@ -1278,6 +1735,9 @@ static void check_method(FeCheck *c, FeNode *fn, FeScope *globals,
     s.ret=fn->b ? method_type(c,fn->b,owner) : fe_type_intern(&c->types,"void");
     s.loop_depth=0;
     s.defer_depth=0;
+    s.fn_node=fn;
+    fe_own_liveness_init(&s.liveness,&c->ast->arena);
+    fe_own_collect_last_uses(&s.liveness,fn);
     fn->sem_type=s.ret;
     for(x=fn->a ? fn->a->children : 0; x; x=x->next) {
         t=method_type(c,x->a,owner);
@@ -1302,6 +1762,8 @@ int fe_check_program(FeCheck *c)
     for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
         if (n->kind == FE_N_STRUCT)
             fe_type_declare_struct(&c->types, n, (n->flags & 1U) != 0);
+    for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
+        check_reference_storage(c,n);
     for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
         if (n->kind == FE_N_ENUM) fe_type_declare_enum(&c->types, n);
     for (n = c->ast->root ? c->ast->root->children : 0; n; n = n->next)
@@ -1370,5 +1832,7 @@ FeType *fe_check_expr_type(FeCheck *c, FeNode *n)
     s.ret = fe_type_intern(&c->types, "void");
     s.loop_depth=0;
     s.defer_depth=0;
+    s.fn_node=0;
+    fe_own_liveness_init(&s.liveness,&c->ast->arena);
     return check_expr(&s, n);
 }
