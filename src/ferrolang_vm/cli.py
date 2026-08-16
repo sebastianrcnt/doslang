@@ -64,23 +64,74 @@ def follow_logs() -> int:
     ]).returncode
 
 
+EPILOG = r"""examples:
+  uv run ferro-vm start                  boot the VM and start the daemon
+  uv run ferro-vm wait-ready             block until TCPAGENT answers PING
+  uv run ferro-vm exec 'dir C:\FEC'      run a DOS command, print exit code and output
+  uv run ferro-vm put fec/src/check.c 'C:\FEC\SRC\CHECK.C'
+  uv run ferro-vm get 'C:\FEC\TEST.OK' .qemu/TEST.OK
+  uv run ferro-vm logs                   follow the structured daemon log
+
+The authoritative workspace is C:\FEC inside the VM. Never build on D: (the vvfat
+view is for exchange only). See AGENTS.md for verification rules and build traps.
+"""
+
+SIMPLE_COMMANDS = {
+    "start": "Start the daemon and boot QEMU. Safe to run when already up.",
+    "stop": "Quit QEMU cleanly and stop the daemon.",
+    "status": "Print daemon, QEMU, and TCPAGENT connection state as JSON.",
+    "ping": "Send PING to TCPAGENT. Expects 'OK 504F4E47' (PONG).",
+    "screenshot": "Capture the VGA console to a PPM/PNG under .qemu/.",
+    "ocr": "Capture the console and print recognized text (RapidOCR).",
+    "logs": "Follow the append-only daemon log. Uses lnav when available.",
+}
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Windows-only QEMU/FreeDOS automation")
-    commands = parser.add_subparsers(dest="op", required=True)
-    for name in ("start", "stop", "status", "ping", "screenshot", "ocr", "logs"):
-        commands.add_parser(name)
-    wait = commands.add_parser("wait-ready")
-    wait.add_argument("--timeout", type=int, default=45)
-    reset = commands.add_parser("reset")
-    reset.add_argument("--timeout", type=int, default=45)
-    execute = commands.add_parser("exec")
-    execute.add_argument("command")
-    put = commands.add_parser("put")
-    put.add_argument("source", type=Path)
-    put.add_argument("destination")
-    get = commands.add_parser("get")
-    get.add_argument("source")
-    get.add_argument("destination", type=Path)
+    parser = argparse.ArgumentParser(
+        prog="ferro-vm",
+        description="Windows-only QEMU/FreeDOS automation for the Ferro compiler.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    commands = parser.add_subparsers(dest="op", required=True, metavar="COMMAND")
+    for name, blurb in SIMPLE_COMMANDS.items():
+        commands.add_parser(name, help=blurb, description=blurb)
+
+    wait_help = "Block until TCPAGENT is connected and answers PING."
+    wait = commands.add_parser("wait-ready", help=wait_help, description=wait_help)
+    wait.add_argument("--timeout", type=int, default=45, metavar="SECONDS",
+                      help="give up after this many seconds (default: %(default)s)")
+
+    reset_help = "Quit QEMU cleanly, reboot it, and wait for TCPAGENT."
+    reset = commands.add_parser("reset", help=reset_help, description=reset_help)
+    reset.add_argument("--timeout", type=int, default=45, metavar="SECONDS",
+                       help="give up after this many seconds (default: %(default)s)")
+
+    exec_help = "Run a DOS command inside the VM and print its exit code and output."
+    execute = commands.add_parser(
+        "exec", help=exec_help,
+        description=exec_help + " Quote the command so the host shell does not eat"
+                                r" backslashes: exec 'wcl386 -q HELLO.C'.")
+    execute.add_argument("command", metavar="DOS_COMMAND",
+                         help=r"command line to hand to COMMAND.COM, e.g. 'dir C:\FEC'")
+
+    put_help = "Copy a host file into the VM."
+    put = commands.add_parser("put", help=put_help, description=put_help)
+    put.add_argument("source", type=Path, metavar="HOST_PATH",
+                     help="file on this machine")
+    put.add_argument("destination", metavar="DOS_PATH",
+                     help=r"target inside the VM, e.g. 'C:\FEC\SRC\CHECK.C'."
+                          " DOS uses 8.3 names, so long fixtures must be shortened"
+                          " explicitly (BAD-ARI.FE, TRY-FPR.FE)")
+
+    get_help = "Copy a file out of the VM onto the host."
+    get = commands.add_parser("get", help=get_help, description=get_help)
+    get.add_argument("source", metavar="DOS_PATH",
+                     help=r"file inside the VM, e.g. 'C:\FEC\TEST.OK'")
+    get.add_argument("destination", type=Path, metavar="HOST_PATH",
+                     help="target on this machine")
+
     args = parser.parse_args()
 
     try:

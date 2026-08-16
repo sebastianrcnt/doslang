@@ -9,8 +9,16 @@ DOS용 시스템 프로그래밍 언어 Ferro와 그 컴파일러 `fec`. 규범 
 |---|---|
 | `SPEC.md` | 언어 명세 + 구현 지시서. 유일한 규범 문서 |
 | `SPEC.AUDIT.md` | 명세 변경의 문제·결정·근거·구현 영향 누적 로그 |
-| `tools/README.md` | QEMU/FreeDOS 자동화 도구 사용법 |
+| `tools/README.md` | 호스트 요구사항, 최초 셋업, 자동화 구조 |
 | `tools/tcpagent/README.md` | DOS 내부 TCP 에이전트 프로토콜과 빌드 |
+
+VM 자동화 **명령 목록과 플래그는 문서가 아니라 CLI가 규범**이다. 문서에 복제하면
+반드시 드리프트하므로 아래로 확인한다.
+
+```powershell
+uv run ferro-vm --help
+uv run ferro-vm <command> --help
+```
 
 ## 검증 규칙
 
