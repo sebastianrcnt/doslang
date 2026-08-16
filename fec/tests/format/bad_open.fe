@@ -1,3 +1,4 @@
+// ERROR:5:unterminated format placeholder
 unit bad_open;
 
 fn main() -> i32 {

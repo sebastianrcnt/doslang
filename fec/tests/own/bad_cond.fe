@@ -1,3 +1,4 @@
+// ERROR:8:use of possibly moved value
 unit bad_cond;
 
 fn take(p: ^i32) -> void { mem.destroy(p); }

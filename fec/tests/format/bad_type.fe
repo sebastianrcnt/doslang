@@ -1,3 +1,4 @@
+// ERROR:8:no fmt writer for argument type
 unit bad_type;
 
 struct Point { x: i32, }

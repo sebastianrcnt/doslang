@@ -1,3 +1,4 @@
+// ERROR:5:missing struct field
 unit badfld;
 struct Point { x: i32, y: i32, }
 fn main() -> i32 {

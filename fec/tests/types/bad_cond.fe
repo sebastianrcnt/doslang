@@ -1,3 +1,4 @@
+// ERROR:5:if condition must be bool
 unit bad_cond;
 
 fn main() -> i32 {

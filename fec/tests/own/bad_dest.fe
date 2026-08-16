@@ -1,3 +1,4 @@
+// ERROR:5:mem.destroy requires exactly one owned pointer
 unit bad_dest;
 
 fn bad(x: i32) -> void {

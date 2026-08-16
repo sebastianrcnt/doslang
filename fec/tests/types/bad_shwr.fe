@@ -1,3 +1,4 @@
+// ERROR:5:cannot write through shared slice
 unit bad_shwr;
 
 fn bad(s: []u8) -> void {

@@ -1,3 +1,4 @@
+// ERROR:5:unmatched '}' in format
 unit bad_cls;
 
 fn main() -> i32 {

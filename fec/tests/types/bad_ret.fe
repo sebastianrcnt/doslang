@@ -1,3 +1,4 @@
+// ERROR:5:return type mismatch
 unit bad_ret;
 
 fn main() -> i32 {

@@ -1,3 +1,4 @@
+// ERROR:5:cannot write through shared slice
 unit badstr;
 fn main() -> i32 {
     var text: str = "abc";

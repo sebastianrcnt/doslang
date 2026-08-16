@@ -1,3 +1,4 @@
+// ERROR:6:let cannot bind a mutable slice
 unit bad_mlet;
 
 fn bad() -> void {

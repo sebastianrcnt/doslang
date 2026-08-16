@@ -1,3 +1,4 @@
+// ERROR:5:unsupported format verb
 unit bad_verb;
 
 fn main() -> i32 {

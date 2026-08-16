@@ -1,3 +1,4 @@
+// ERROR:9:argument type mismatch
 unit bad_type;
 
 fn add(a: i32, b: i32) -> i32 {

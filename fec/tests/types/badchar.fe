@@ -1,3 +1,4 @@
+// ERROR:5:initializer type mismatch
 unit badchar;
 
 fn main() -> i32 {

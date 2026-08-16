@@ -1,3 +1,4 @@
+// ERROR:6:use of moved value
 unit bad_dbl;
 
 fn bad(p: ^i32) -> void {

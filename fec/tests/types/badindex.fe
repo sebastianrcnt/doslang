@@ -1,3 +1,4 @@
+// ERROR:6:cannot assign through immutable value
 unit badindex;
 
 fn main() -> i32 {

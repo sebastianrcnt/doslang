@@ -1,3 +1,4 @@
+// ERROR:6:format must be a comptime string
 unit bad_run;
 
 fn main() -> i32 {

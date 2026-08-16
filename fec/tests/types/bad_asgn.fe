@@ -1,3 +1,4 @@
+// ERROR:6:cannot assign to immutable let
 unit bad_asgn;
 
 fn main() -> i32 {

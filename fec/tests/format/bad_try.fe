@@ -1,3 +1,4 @@
+// ERROR:5:try requires an error result
 unit bad_try;
 
 fn main() -> i32 {

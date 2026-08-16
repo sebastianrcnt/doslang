@@ -1,3 +1,4 @@
+// ERROR:6:@fprint requires io.Writer
 unit bad_writ;
 
 fn main() -> i32 {

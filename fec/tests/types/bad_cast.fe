@@ -1,3 +1,4 @@
+// ERROR:5:'as' requires integer or char types
 unit bad_cast;
 
 fn main() -> i32 {

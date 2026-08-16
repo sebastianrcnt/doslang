@@ -1,3 +1,4 @@
+// ERROR:11:drop may only be invoked by scope cleanup
 unit bad_drop;
 
 struct Box {

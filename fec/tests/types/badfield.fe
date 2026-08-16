@@ -1,3 +1,4 @@
+// ERROR:7:cannot assign through immutable value
 unit badfield;
 
 struct Point { x: i32, y: i32, }

@@ -1,3 +1,4 @@
+// ERROR:5:unknown name
 unit bad_unk;
 
 fn main() -> i32 {

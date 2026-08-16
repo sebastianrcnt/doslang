@@ -1,3 +1,4 @@
+// ERROR:8:cannot move a non-Copy value out of a projection; use mem.replace
 unit bad_proj;
 
 struct Holder { p: ^i32 }

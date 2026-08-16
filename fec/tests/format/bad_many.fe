@@ -1,3 +1,4 @@
+// ERROR:5:format argument count mismatch
 unit bad_many;
 
 fn main() -> i32 {

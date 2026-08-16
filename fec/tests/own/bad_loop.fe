@@ -1,3 +1,4 @@
+// ERROR:7:use of possibly moved value
 unit bad_loop;
 
 fn take(p: ^i32) -> void { mem.destroy(p); }
