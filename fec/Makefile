@@ -4,7 +4,7 @@ CPPFLAGS ?= -Isrc
 SRC = src/arena.c src/diag.c src/lexer.c src/ast.c src/parser.c src/types.c src/check.c src/emit_c.c src/driver.c
 OBJ = $(SRC:.c=.o)
 
-.PHONY: all clean test dos-build
+.PHONY: all clean test test-cli dos-build
 all: fec
 
 fec: $(OBJ)
@@ -15,6 +15,10 @@ src/%.o: src/%.c
 
 test: fec
 	@./tests/run-tests.sh
+	@sh ./tests/run-cli-tests.sh
+
+test-cli: fec
+	@sh ./tests/run-cli-tests.sh
 
 dos-build:
 	@echo "Run build-dos.bat inside FreeDOS/Open Watcom."

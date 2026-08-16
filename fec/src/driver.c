@@ -13,19 +13,96 @@ static char *read_file(const char *name, unsigned long *size)
     p=(char *)malloc((unsigned long)n+1); if(!p){fclose(f);return 0;}
     if(n && fread(p,1,(size_t)n,f)!=(size_t)n){free(p);fclose(f);return 0;} fclose(f);p[n]='\0';*size=(unsigned long)n;return p;
 }
+
 static void usage(void)
-{ puts("usage: fec [--dump-ast|--emit-c] file.fe [--target=bits16|bits32] [-o output.c]"); }
+{
+    puts("usage: fec [--dump-tokens|--dump-ast|--check|--emit-c] file.fe [--target=bits16|bits32] [-o output.c]");
+}
+
+static void dump_tokens(const char *src, unsigned long n, const char *file,
+                        FeDiags *d)
+{
+    FeLexer lexer;
+    FeToken tok;
+    fe_lexer_init(&lexer,src,n,file,d);
+    do {
+        tok=fe_lexer_next(&lexer);
+        fprintf(stdout,"%lu:%lu\t%s\t",tok.loc.line,tok.loc.col,
+                fe_token_name(tok.kind));
+        if(tok.length) fwrite(tok.begin,1,(size_t)tok.length,stdout);
+        else fputc('-',stdout);
+        fputc('\n',stdout);
+    } while(tok.kind!=FE_TOK_EOF);
+}
+
 int main(int argc, char **argv)
 {
-    int i,dump=0,emit=0,no_checks=0; const char *file=0,*outname=0; unsigned long n; char *src; FeDiags d; FeAst ast; FeParser p; FeCheck check; FeEmitter emitter; FILE *out; unsigned pointer_bits=32;
-    (void)emit;
+    int i,dump=0,dump_tok=0,check_only=0,emit=0,no_checks=0;
+    const char *file=0,*outname=0;
+    unsigned long n;
+    char *src;
+    FeDiags d;
+    FeAst ast;
+    FeParser p;
+    FeCheck check;
+    FeEmitter emitter;
+    FILE *out;
+    unsigned pointer_bits=32;
     if(argc<2){usage();return 2;}
-    for(i=1;i<argc;i++) { if(strcmp(argv[i],"--dump-ast")==0) dump=1; else if(strcmp(argv[i],"--emit-c")==0) emit=1; else if(strcmp(argv[i],"-o")==0){if(i+1>=argc){fprintf(stderr,"fec: -o needs a path\n");return 2;}outname=argv[++i];} else if(strncmp(argv[i],"-o",2)==0 && argv[i][2]) outname=argv[i]+2; else if(strncmp(argv[i],"--target=bits16",15)==0) pointer_bits=16; else if(strncmp(argv[i],"--target=bits32",15)==0) pointer_bits=32; else if(strcmp(argv[i],"--no-checks")==0) no_checks=1; else if(strncmp(argv[i],"--target=",9)==0 || strncmp(argv[i],"--model=",8)==0 || strcmp(argv[i],"--strip-error-names")==0) { } else if(argv[i][0]!='-') file=argv[i]; else if(strcmp(argv[i],"--help")==0){usage();return 0;} else {fprintf(stderr,"fec: unknown option %s\n",argv[i]);return 2;} }
+    for(i=1;i<argc;i++) {
+        if(strcmp(argv[i],"--dump-ast")==0) dump=1;
+        else if(strcmp(argv[i],"--dump-tokens")==0) dump_tok=1;
+        else if(strcmp(argv[i],"--check")==0) check_only=1;
+        else if(strcmp(argv[i],"--emit-c")==0) emit=1;
+        else if(strcmp(argv[i],"-o")==0){if(i+1>=argc){fprintf(stderr,"fec: -o needs a path\n");return 2;}outname=argv[++i];}
+        else if(strncmp(argv[i],"-o",2)==0 && argv[i][2]) outname=argv[i]+2;
+        else if(strncmp(argv[i],"--target=bits16",15)==0) pointer_bits=16;
+        else if(strncmp(argv[i],"--target=bits32",15)==0) pointer_bits=32;
+        else if(strcmp(argv[i],"--no-checks")==0) no_checks=1;
+        else if(strncmp(argv[i],"--target=",9)==0 || strncmp(argv[i],"--model=",8)==0 || strcmp(argv[i],"--strip-error-names")==0) { }
+        else if(argv[i][0]!='-') file=argv[i];
+        else if(strcmp(argv[i],"--help")==0){usage();return 0;}
+        else {fprintf(stderr,"fec: unknown option %s\n",argv[i]);return 2;}
+    }
+    if((dump?1:0)+(dump_tok?1:0)+(check_only?1:0)+(emit?1:0)>1){
+        fprintf(stderr,"fec: choose only one output mode\n");
+        return 2;
+    }
     if(!file){fprintf(stderr,"fec: no input file\n");return 2;}
-    src=read_file(file,&n);if(!src)return 2;d.errors=0;d.warnings=0;fe_ast_init(&ast);fe_parser_init(&p,&ast,src,n,file,&d);ast.root=fe_parse_unit(&p);
-    if(dump) { fe_ast_dump(ast.root,0,stdout); fe_ast_destroy(&ast); free(src); return d.errors?1:0; }
-    fe_check_init(&check,&ast,&d,pointer_bits,no_checks); if(!fe_check_program(&check)){fe_ast_destroy(&ast);free(src);return 1;}
-    out=outname?fopen(outname,"w"):stdout; if(!out){fprintf(stderr,"fec: cannot create %s\n",outname);fe_ast_destroy(&ast);free(src);return 2;}
-    fe_emit_c_init(&emitter,out,&check,pointer_bits,no_checks);fe_emit_c_program(&emitter);if(outname)fclose(out);
-    fe_ast_destroy(&ast); free(src); return d.errors?1:0;
+    src=read_file(file,&n);
+    if(!src)return 2;
+    fe_diags_init(&d,src,n);
+    if(dump_tok){
+        dump_tokens(src,n,file,&d);
+        free(src);
+        return d.errors?1:0;
+    }
+    fe_ast_init(&ast);
+    fe_parser_init(&p,&ast,src,n,file,&d);
+    ast.root=fe_parse_unit(&p);
+    if(dump){
+        fe_ast_dump(ast.root,0,stdout);
+        fe_ast_destroy(&ast);
+        free(src);
+        return d.errors?1:0;
+    }
+    fe_check_init(&check,&ast,&d,pointer_bits,no_checks);
+    if(!fe_check_program(&check)){
+        fe_ast_destroy(&ast);
+        free(src);
+        return 1;
+    }
+    if(check_only){
+        fe_ast_destroy(&ast);
+        free(src);
+        return 0;
+    }
+    out=outname?fopen(outname,"w"):stdout;
+    if(!out){fprintf(stderr,"fec: cannot create %s\n",outname);fe_ast_destroy(&ast);free(src);return 2;}
+    fe_emit_c_init(&emitter,out,&check,pointer_bits,no_checks);
+    fe_emit_c_program(&emitter);
+    if(outname)fclose(out);
+    fe_ast_destroy(&ast);
+    free(src);
+    return d.errors?1:0;
 }
