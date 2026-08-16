@@ -314,7 +314,10 @@ static int fe_own_live_add(FeOwnLiveness *live, FeNode *decl)
     FeOwnLastUse *slot;
     unsigned capacity;
     const char *cname;
-    if (!live || !decl || !live->arena || !fe_own_is_reference_like(decl->sem_type))
+    /* This prepass runs before local inference.  Recording every local is
+       harmless (only reference bindings consume the result) and lets an
+       inferred `let r = &x` participate in last-use analysis. */
+    if (!live || !decl || !live->arena)
         return 1;
     cname = decl->cname ? decl->cname : decl->text;
     if (!cname || fe_own_live_find(live, cname)) return 1;
