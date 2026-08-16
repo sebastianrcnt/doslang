@@ -27,5 +27,6 @@ FeM7ContextKind fe_m7_error_context(FeTypeCtx *ctx, const FeType *expected,
 
 FeM7LazyKind fe_m7_lazy_kind(const FeNode *node);
 int fe_m7_is_try(const FeNode *node);
+int fe_m7_is_null(const FeNode *node);
 
 #endif
