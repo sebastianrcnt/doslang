@@ -2247,6 +2247,12 @@ static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
         if (owner && owner->kind==FE_TYPE_STRUCT && n->b && n->b->text) {
             if (base->kind==FE_TYPE_REF && !base->ref_mut)
                 err(s->c,n->loc,"cannot write through shared reference");
+            /* Writing a field still needs a writable place. This branch used to
+               be reached only by units mentioning M7 syntax, so it never had to
+               repeat the check the M6 path does. */
+            if (base->kind!=FE_TYPE_REF && base->kind!=FE_TYPE_OWNED &&
+                !lvalue_writable(s,n->a))
+                err(s->c,n->loc,"cannot assign through immutable value");
             field=fe_type_field(owner,n->b->text);
             if (!field) {
                 err(s->c,n->loc,"assignment requires a valid struct field");
@@ -2485,6 +2491,15 @@ static void m7_check_decl_stmt(FeCheckerState *s, FeNode *n, int mutable)
     if (n->b && !fe_type_equal(expected,stored) &&
         !m7_actual_compatible(expected,stored,n->b))
         err(s->c,n->loc,"initializer type mismatch");
+    /* Rules the M6 declaration case carried that this one has to repeat now
+       that it is the only declaration case. */
+    if (n->b && stored && stored->kind==FE_TYPE_VOID)
+        err(s->c,n->loc,"void expression cannot initialize a variable");
+    if (!mutable && expected && expected->kind==FE_TYPE_SLICE &&
+        expected->ref_mut)
+        err(s->c,n->loc,"let cannot bind a mutable slice");
+    if (!n->b && !n->a)
+        err(s->c,n->loc,"uninitialized var requires an explicit type");
     if (n->b) mark_moved(s,n->b,actual);
     initialized=n->b!=0;
     sym=add_symbol(s,s->scope,n->text,expected,0,mutable,initialized,
@@ -2542,6 +2557,25 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             sym->initialized=1;
             fe_own_access(s->c->diags,&sym->own,FE_OWN_WRITE,n->a->loc);
             sym->moved=sym->own.move;
+            /* Rebinding a reference, from the M6 assignment case: the new
+               source has to live at least as long as the reference does, and
+               the previous borrow has to be released. */
+            if (n->b && n->b->kind==FE_N_UNARY && n->b->text &&
+                (strcmp(n->b->text,"&")==0 || strcmp(n->b->text,"&mut")==0) &&
+                fe_own_is_reference_like(sym->type)) {
+                FeSym *root=own_root_symbol(s,n->b->a);
+                if (root && root->owner!=sym->owner)
+                    err(s->c,n->b->loc,"reference would outlive its source scope");
+                else if (root) {
+                    if (sym->borrow_root) {
+                        if (sym->borrow_mut)
+                            fe_own_release_exclusive(&sym->borrow_root->own);
+                        else fe_own_release_shared(&sym->borrow_root->own);
+                    }
+                    sym->borrow_root=root;
+                    sym->borrow_mut=strcmp(n->b->text,"&mut")==0;
+                }
+            }
         }
         break;
     case FE_N_EXPR_STMT:
@@ -2614,6 +2648,15 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         else
             stored=fe_type_intern(&s->c->types,"void");
         actual=n->a && n->a->sem_type ? n->a->sem_type : stored;
+        /* R8, from the M6 return case: a returned reference has to come from a
+           parameter or a static, never from a local. */
+        if (expected && fe_own_is_reference_like(expected) &&
+            !own_return_from_allowed_root(s,n->a))
+            err(s->c,n->loc,
+                "reference return must be derived from a parameter or static");
+        if (n->a && stored && stored->kind==FE_TYPE_VOID &&
+            expected && expected->kind!=FE_TYPE_VOID)
+            err(s->c,n->loc,"void expression returned from value function");
         if (expected && expected->kind==FE_TYPE_ERROR_UNION && n->a &&
             actual && actual->kind==FE_TYPE_ERROR_UNION &&
             !fe_type_equal(expected,actual))
@@ -2625,17 +2668,11 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         break;
     case FE_N_WHILE:
     case FE_N_FOR:
-        /* One loop rule now that there is one checker: the body recurses
-           through this function, so any expression in it is checked the same
-           way whether or not the unit mentions optionals or error unions. */
-        if (n->kind==FE_N_WHILE) {
-            actual=check_expr(s,n->a);
-            if (known(actual) && actual->kind!=FE_TYPE_BOOL)
-                err(s->c,n->loc,"while condition must be bool");
-            ++s->loop_depth;
-            check_stmt(s,n->b);
-            --s->loop_depth;
-        } else check_for(s,n);
+        /* The core loop case carries the flow capture and merge that detects a
+           value moved on every iteration, and it already recurses into the body
+           through this function, so there is nothing to special-case here. The
+           M7 half used to skip all of it. */
+        check_stmt_core(s,n);
         break;
     case FE_N_BREAK:
     case FE_N_CONTINUE:

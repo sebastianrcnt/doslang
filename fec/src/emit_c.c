@@ -1580,6 +1580,14 @@ static void m7_emit_type_helpers(FeEmitter *e)
                         m7_c_type(e,t),t->full_slicer,m7_c_type(e,t),t->slicer);
                 fprintf(e->out,"static %s %s(%s x, unsigned long a) { return %s(x,a,x.n); }\n",
                         m7_c_type(e,t),t->tail_slicer,m7_c_type(e,t),t->slicer);
+                if (node_uses_trim(e->check->ast->root) && !t->ref_mut) {
+                    fprintf(e->out,
+                            "static %s fe_trim_%s(%s s) { unsigned long a=0; unsigned long b=s.n;"
+                            " while (a<b && (s.p[a]==' '||s.p[a]=='\\t'||s.p[a]=='\\r'||s.p[a]=='\\n')) ++a;"
+                            " while (b>a && (s.p[b-1]==' '||s.p[b-1]=='\\t'||s.p[b-1]=='\\r'||s.p[b-1]=='\\n')) --b;"
+                            " return %s(s.p+a,b-a); }\n",
+                            t->cname,t->cname,t->cname,t->maker);
+                }
             }
         }
     }
@@ -1776,6 +1784,20 @@ static void m7_emit_call(FeEmitter *e, FeNode *n)
     if (n->text && (strcmp(n->text,"@print")==0 ||
         strcmp(n->text,"@fprint")==0 || strcmp(n->text,"@sprint")==0)) {
         emit_m4_builtin(e,n);
+        return;
+    }
+    /* Every other builtin -- @size_of, @align_of and friends -- is lowered by
+       the core emitter. Without this the generic path below emits the call
+       verbatim, which is not C.  */
+    if (!n->a && n->text && n->text[0]=='@') {
+        emit_expr_core(e,n);
+        return;
+    }
+    /* Same for the built-in alias methods on str: the core emitter knows how to
+       lower `line.trim()`, the generic member path would emit `.trim()`. */
+    if (n->a && n->a->kind==FE_N_MEMBER && n->a->b && n->a->b->text &&
+        strcmp(n->a->b->text,"trim")==0 && !n->children) {
+        emit_expr_core(e,n);
         return;
     }
     if (n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
