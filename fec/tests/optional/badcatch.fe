@@ -1,4 +1,4 @@
-// ERROR:14:catch
+// ERROR:13:catch
 unit badcatch;
 
 error E {

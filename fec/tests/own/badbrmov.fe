@@ -1,4 +1,4 @@
-// ERROR:9:move
+// ERROR:8:move
 unit badbrmov;
 
 fn bad(p: ^i32, consume: bool) -> void {

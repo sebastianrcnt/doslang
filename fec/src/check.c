@@ -2489,8 +2489,22 @@ static void m7_check_decl_stmt(FeCheckerState *s, FeNode *n, int mutable)
     if (expected && expected->kind==FE_TYPE_VOID)
         err(s->c,n->loc,"variable cannot have void type");
     if (n->b && !fe_type_equal(expected,stored) &&
-        !m7_actual_compatible(expected,stored,n->b))
-        err(s->c,n->loc,"initializer type mismatch");
+        !m7_actual_compatible(expected,stored,n->b)) {
+        /* Say which rule was hit. Weakening &mut to & is a distinct thing from
+           two unrelated types not matching, and "type mismatch" told the reader
+           nothing about why the exclusive borrow could not be shared. */
+        if (expected && stored && expected->kind==FE_TYPE_REF &&
+            stored->kind==FE_TYPE_REF && !expected->ref_mut && stored->ref_mut)
+            err(s->c,n->loc,
+                "cannot rebind a mut borrow as a shared reference");
+        else if (expected && stored && expected->kind==FE_TYPE_SLICE &&
+                 stored->kind==FE_TYPE_SLICE && !expected->ref_mut &&
+                 stored->ref_mut)
+            err(s->c,n->loc,
+                "cannot rebind a mut slice as a shared slice");
+        else
+            err(s->c,n->loc,"initializer type mismatch");
+    }
     /* Rules the M6 declaration case carried that this one has to repeat now
        that it is the only declaration case. */
     if (n->b && stored && stored->kind==FE_TYPE_VOID)

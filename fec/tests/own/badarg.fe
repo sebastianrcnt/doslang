@@ -1,4 +1,4 @@
-// ERROR:8:self
+// ERROR:8:derived from a parameter
 unit badarg;
 
 struct Box {

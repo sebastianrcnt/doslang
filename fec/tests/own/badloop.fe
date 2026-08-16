@@ -1,4 +1,4 @@
-// ERROR:8:move
+// ERROR:6:move
 unit badloop;
 
 fn bad(p: ^i32, again: bool) -> void {
