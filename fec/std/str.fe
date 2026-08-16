@@ -1,3 +1,66 @@
-unit str;
-pub fn eq(a: str, b: str) -> bool;
-pub fn trim(s: str) -> str;
+unit std.str;
+
+// `str` is `[]u8` (SPEC 4.2), so these take and give plain byte slices.
+
+pub fn eq(a: []u8, b: []u8) -> bool {
+    if a.n != b.n { return false; }
+    var i: usize = 0;
+    while i < a.n {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+pub fn starts_with(s: []u8, prefix: []u8) -> bool {
+    if prefix.n > s.n { return false; }
+    return eq(s[0..prefix.n], prefix);
+}
+
+/// Where `needle` first appears in `s`, or the length of `s` when it does not.
+/// An index past the end is how "not found" is said without an optional.
+pub fn find(s: []u8, needle: []u8) -> usize {
+    if needle.n == 0 { return 0; }
+    if needle.n > s.n { return s.n; }
+    var at: usize = 0;
+    let last: usize = s.n - needle.n;
+    while at <= last {
+        if eq(s[at..at + needle.n], needle) { return at; }
+        at = at + 1;
+    }
+    return s.n;
+}
+
+pub fn trim(s: []u8) -> []u8 {
+    var from: usize = 0;
+    var to: usize = s.n;
+    while from < to {
+        if s[from] != 32 and s[from] != 9 and s[from] != 10 and s[from] != 13 {
+            break;
+        }
+        from = from + 1;
+    }
+    while to > from {
+        let c: u8 = s[to - 1];
+        if c != 32 and c != 9 and c != 10 and c != 13 { break; }
+        to = to - 1;
+    }
+    return s[from..to];
+}
+
+pub fn parse_int(s: []u8) -> ?i32 {
+    if s.n == 0 { return null; }
+    var value: i32 = 0;
+    var i: usize = 0;
+    var negative: bool = false;
+    if s[0] == 45 { negative = true; i = 1; }
+    if i >= s.n { return null; }
+    while i < s.n {
+        let c: u8 = s[i];
+        if c < 48 or c > 57 { return null; }
+        value = value * 10 + ((c - 48) as i32);
+        i = i + 1;
+    }
+    if negative { return 0 - value; }
+    return value;
+}

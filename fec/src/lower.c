@@ -687,9 +687,17 @@ static Slot lower_call(Lower *L, FeNode *n)
     if (n->a && n->a->kind == FE_N_MEMBER && n->sem_decl) {
         FeNode *first = n->sem_decl->a ? n->sem_decl->a->children : 0;
         if (first && first->text && !strcmp(first->text, "self")) {
+            FeType *rt = n->a->a ? n->a->a->sem_type : 0;
             Slot recv = lower_expr(L, n->a->a);
-            args[count++] = recv.is_place ? as_address(L, recv, n->a->a)
-                                          : recv.temp;
+            /* A receiver that is already a reference or an owner is a pointer
+               already; taking its address would pass a pointer to the
+               pointer. */
+            if (rt && (rt->kind == FE_TYPE_REF ||
+                       (rt->kind == FE_TYPE_OWNED && ir_type(rt) == FE_IR_PTR)))
+                args[count++] = as_value(L, recv, n->a->a);
+            else
+                args[count++] = recv.is_place ? as_address(L, recv, n->a->a)
+                                              : recv.temp;
         }
     }
     /* A generic call passes its type arguments first. They were consumed when
@@ -990,6 +998,24 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
     }
 }
 
+/* The link name of the `drop` method for this type, found through the instance
+   the checker recorded. */
+static const char *drop_name(Lower *L, const FeType *t)
+{
+    unsigned i;
+    FeNode *method = 0;
+    if (!t || !t->decl_node) return 0;
+    for (method = t->decl_node->children; method; method = method->next)
+        if (method->kind == FE_N_FN && method->text &&
+            !strcmp(method->text, "drop")) break;
+    if (!method) return 0;
+    for (i = 0; i < L->c->instance_count; ++i)
+        if (L->c->instances[i].decl == method &&
+            L->c->instances[i].owner == t)
+            return L->c->instances[i].cname;
+    return method->cname;
+}
+
 /* Settle what a scope owes, most recent first. A `return` in the middle of a
    function still owes everything, so every exit path calls this. */
 static void run_deferred(Lower *L, unsigned from)
@@ -1019,7 +1045,16 @@ static void run_deferred(Lower *L, unsigned from)
                 args[0] = fe_ir_load(L->m, L->b, FE_IR_PTR,
                                      fe_ir_at_local(L->owed[i - 1].local, 0));
             }
-            fe_ir_call(L->m, L->b, FE_IR_VOID, "fe_rt_free", args, 1);
+            if (t && t->has_drop) {
+                /* A type that says how to let go of itself is asked to; the
+                   name is the one its instance was given. */
+                const char *how = drop_name(L, t);
+                args[0] = fe_ir_addr(L->m, L->b,
+                                     fe_ir_at_local(L->owed[i - 1].local, 0));
+                if (how) fe_ir_call(L->m, L->b, FE_IR_VOID, how, args, 1);
+            } else {
+                fe_ir_call(L->m, L->b, FE_IR_VOID, "fe_rt_free", args, 1);
+            }
             fe_ir_jmp(L->b, skip->id);
             L->b = skip;
         }

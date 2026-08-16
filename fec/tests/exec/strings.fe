@@ -1,0 +1,29 @@
+// EXIT:0
+// OUTPUT:ok 42 -7
+unit strings;
+import std.io;
+import std.str;
+import std.fmt;
+
+fn show(v: i32) -> void {
+    var buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let n: usize = fmt.fmt_i32(buf[..], v);
+    io.print(" ");
+    io.print(buf[0..n]);
+}
+
+fn main() -> i32 {
+    if not str.eq(str.trim("  hello  "), "hello") { return 1; }
+    if not str.starts_with("ferro", "fer") { return 2; }
+    if str.find("abcdef", "cd") != 2 { return 3; }
+    if str.find("abcdef", "zz") != 6 { return 4; }
+    let a: i32 = str.parse_int("42") orelse 0;
+    let b: i32 = str.parse_int("-7") orelse 0;
+    let bad: i32 = str.parse_int("12x") orelse 0;
+    if bad != 0 { return 5; }
+    io.print("ok");
+    show(a);
+    show(b);
+    io.print("\n");
+    return 0;
+}

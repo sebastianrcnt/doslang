@@ -1,0 +1,42 @@
+// EXIT:0
+// OUTPUT:count 20 sum 190 balanced
+unit listuse;
+import std.io;
+import std.fmt;
+import std.list;
+import std.sys;
+
+fn show(label: []u8, v: i32) -> void {
+    var buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let n: usize = fmt.fmt_i32(buf[..], v);
+    io.print(label);
+    io.print(" ");
+    io.print(buf[0..n]);
+    io.print(" ");
+}
+
+fn build() -> !i32 {
+    var xs: list.List(i32) = try list.List(i32).with_capacity(2);
+    var i: i32 = 0;
+    while i < 20 {
+        try xs.push(i);
+        i = i + 1;
+    }
+    var sum: i32 = 0;
+    var k: usize = 0;
+    while k < xs.count() {
+        sum = sum + xs.at(k);
+        k = k + 1;
+    }
+    show("count", xs.count() as i32);
+    show("sum", sum);
+    return sum;
+}
+
+fn main() -> i32 {
+    let sum: i32 = build() catch |e| { return 1; };
+    if sum != 190 { return 2; }
+    if sys.allocs() != sys.frees() { io.print("leaked\n"); return 3; }
+    io.print("balanced\n");
+    return 0;
+}

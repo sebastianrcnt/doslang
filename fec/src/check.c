@@ -70,9 +70,27 @@ static int known(FeType *t)
     return t && t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_ERROR;
 }
 
+/* Is this a projection of `self` inside that type's own `drop`? */
+static int in_own_drop(FeCheckerState *s, FeNode *n)
+{
+    FeNode *base;
+    if (!s->fn_node || !s->fn_node->text || strcmp(s->fn_node->text,"drop")!=0)
+        return 0;
+    base = n ? n->a : 0;
+    while (base && (base->kind==FE_N_MEMBER || base->kind==FE_N_INDEX))
+        base = base->a;
+    return base && base->kind==FE_N_IDENT && base->text &&
+           strcmp(base->text,"self")==0;
+}
+
 static void mark_moved(FeCheckerState *s, FeNode *n, FeType *t)
 {
     FeSym *sym=0;
+    /* Inside a type's own `drop` the object is going away, so taking a field
+       out of it leaves nothing behind that anyone could read. That is the one
+       place R7 has nothing to protect. */
+    if (n && (n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX) && in_own_drop(s,n))
+        return;
     if (n && n->kind==FE_N_IDENT)
         sym=find_symbol(s->scope,n->text ? n->text : "");
     if (s->defer_depth != 0) {
@@ -1283,6 +1301,12 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                 }
             }
             et=check_expr(s,n->a->a);
+            /* A method can be reached through a reference or an owner as well
+               as through the value itself. */
+            if (et && (et->kind==FE_TYPE_REF || et->kind==FE_TYPE_OWNED) &&
+                et->elem && et->elem->kind==FE_TYPE_STRUCT &&
+                find_method(c,et->elem,n->a->b ? n->a->b->text : ""))
+                et=et->elem;
             method=et && et->kind==FE_TYPE_STRUCT ?
                 find_method(c,et,n->a->b ? n->a->b->text : "") : 0;
             if(method) {
@@ -2361,6 +2385,23 @@ static FeType *build_struct_instance(FeCheck *c, FeUnit *home, FeNode *decl,
         pop_bindings(c,&save);
     }
     fe_type_layout_all(&c->types);
+    /* A type that says how to let go of itself needs that method to exist for
+       every instance, whether or not anyone calls it by name: scope cleanup
+       will. */
+    {
+        FeNode *release;
+        for (release=decl->children;release;release=release->next)
+            if (release->kind==FE_N_FN && release->text &&
+                !strcmp(release->text,"drop") && release->c) {
+                FeCheckerState s;
+                memset(&s,0,sizeof s);
+                s.c=c;
+                s.scope=c->unit_scope[unit_index(c,home)];
+                s.globals=s.scope;
+                check_instance_method(&s,t,release,decl->loc,0);
+                break;
+            }
+    }
     return t;
 }
 
@@ -2391,18 +2432,30 @@ static FeType *instantiate_type_node(void *owner, const FeNode *node)
 {
     FeCheck *c=(FeCheck *)owner;
     FeUnit *home=current_unit(c);
+    const char *name=node->text;
     FeNode *arg;
     FeType *args[FE_TYPE_PARAM_MAX];
     unsigned count=0;
     FeType *result;
+    /* `binding.Name` names a type in another unit. The binding is not itself a
+       type, so it has to be peeled off before anything is looked up. */
+    if (node->a && node->a->kind==FE_N_IDENT && node->a->text && c->build &&
+        c->unit) {
+        FeUnit *bound=fe_build_binding(c->build,c->unit,node->text);
+        if (bound) { home=bound; name=node->a->text; }
+    }
     if (!node->children) {
-        /* A generic declaration is not a type until it has its arguments. */
-        FeNode *decl=unit_type_decl(c,home,node->text ? node->text : "");
+        FeNode *decl=unit_type_decl(c,home,name ? name : "");
         if (decl && decl_is_generic(decl)) {
+            /* A generic declaration is not a type until it has arguments. */
             err(c,node->loc,"generic type requires type arguments");
             return unknown(c);
         }
-        return fe_type_intern(&c->types,node->text);
+        if (name!=node->text) {
+            FeType *there=unit_type(c,home,name);
+            if (there) return there;
+        }
+        return fe_type_intern(&c->types,name);
     }
     if (!instance_descend(c,node->loc)) return unknown(c);
     for (arg=node->children;arg;arg=arg->next) {
@@ -2415,7 +2468,7 @@ static FeType *instantiate_type_node(void *owner, const FeNode *node)
         --c->instance_depth;
         return unknown(c);
     }
-    result=instantiate_struct(c,home,node->text ? node->text : "",args,count,
+    result=instantiate_struct(c,home,name ? name : "",args,count,
                               node->loc);
     --c->instance_depth;
     return result;
@@ -2448,13 +2501,27 @@ static FeType *type_from_expr(FeCheckerState *s, FeNode *n, int *ok)
         if (t && t->kind!=FE_TYPE_UNKNOWN) { *ok=1; return t; }
         return unknown(c);
     }
-    if (n->kind==FE_N_CALL && n->a && n->a->kind==FE_N_IDENT && n->a->text) {
+    if (n->kind==FE_N_CALL && n->a &&
+        (n->a->kind==FE_N_IDENT ||
+         (n->a->kind==FE_N_MEMBER && n->a->a &&
+          n->a->a->kind==FE_N_IDENT && n->a->b && n->a->b->text))) {
         FeType *args[FE_TYPE_PARAM_MAX];
         unsigned count=0;
         FeNode *arg;
         FeType *result;
         FeUnit *home=current_unit(c);
-        if (!unit_type_decl(c,home,n->a->text)) return unknown(c);
+        const char *want;
+        /* `Name(args)` here, `binding.Name(args)` when the declaration is in
+           another unit. */
+        if (n->a->kind==FE_N_MEMBER) {
+            FeUnit *bound=binding_unit(s,n->a->a);
+            if (!bound) return unknown(c);
+            home=bound;
+            want=n->a->b->text;
+        } else {
+            want=n->a->text;
+        }
+        if (!want || !unit_type_decl(c,home,want)) return unknown(c);
         if (!instance_descend(c,n->loc)) { *ok=1; return unknown(c); }
         for (arg=n->children;arg;arg=arg->next) {
             int inner=0;
@@ -2464,7 +2531,7 @@ static FeType *type_from_expr(FeCheckerState *s, FeNode *n, int *ok)
             ++count;
         }
         if (count>FE_TYPE_PARAM_MAX) { --c->instance_depth; return unknown(c); }
-        result=instantiate_struct(c,home,n->a->text,args,count,n->loc);
+        result=instantiate_struct(c,home,want,args,count,n->loc);
         --c->instance_depth;
         *ok=1;
         return result;
@@ -2578,17 +2645,30 @@ static FeType *check_generic_call(FeCheckerState *s, FeNode *n, FeSym *sym,
 
 /* `Type.method(...)` where Type is a generic instance and the method takes no
    self parameter. */
+/* The unit a name belongs to, by name. */
+static FeUnit *unit_named(FeCheck *c, const char *name)
+{
+    unsigned u;
+    if (!name) return 0;
+    for (u=0;u<c->build->count;++u)
+        if (!strcmp(c->build->units[u].name,name)) return &c->build->units[u];
+    return 0;
+}
+
 static FeType *check_static_method_call(FeCheckerState *s, FeNode *n,
                                         FeType *owner, FeNode *method)
 {
     FeCheck *c=s->c;
-    FeUnit *home=current_unit(c);
+    /* A method belongs to the unit that declared its type, not to whichever
+       unit happens to be calling it. */
+    FeUnit *home=unit_named(c,owner ? owner->unit : 0);
     FeBindSave save;
     FeType *result;
     char key[FE_GENERIC_KEY_MAX];
     FeType *self_args[1];
     int fresh;
     FeSym fake;
+    if (!home) home=current_unit(c);
     self_args[0]=owner;
     instance_key(key,home->name,method->text,self_args,1);
     memset(&fake,0,sizeof fake);
@@ -2618,11 +2698,14 @@ static void check_instance_method(FeCheckerState *s, FeType *owner,
                                   FeNode *method, FeLoc site, FeNode *call)
 {
     FeCheck *c=s->c;
-    FeUnit *home=current_unit(c);
+    /* A method belongs to the unit that declared its type, not to whichever
+       unit happens to be calling it. */
+    FeUnit *home=unit_named(c,owner ? owner->unit : 0);
     FeBindSave save;
     char key[FE_GENERIC_KEY_MAX];
     FeType *self_args[1];
     self_args[0]=owner;
+    if (!home) home=current_unit(c);
     instance_key(key,home->name,method->text,self_args,1);
     {
         FeBindSave probe;

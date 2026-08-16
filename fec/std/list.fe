@@ -1,6 +1,53 @@
-unit list;
+unit std.list;
+
+// A growable sequence. The buffer is owned, so a List owns its elements and
+// releasing it releases them (SPEC 5 R1). Growth doubles, which keeps the
+// total copying proportional to the number of pushes.
+
 pub struct List(T) {
-    items: ^[]T,
+    items: ^[]mut T,
     len: usize,
-    pub fn at(self: &Self, i: usize) -> &T;
+
+    pub fn with_capacity(n: usize) -> !Self {
+        let room: ^[]mut T = try mem.alloc_slice(T, n);
+        return Self{ items: room, len: 0 };
+    }
+
+    pub fn count(self: &Self) -> usize { return self.len; }
+
+    pub fn at(self: &Self, i: usize) -> T {
+        return self.items.^[i];
+    }
+
+    pub fn set(self: &mut Self, i: usize, v: T) -> void {
+        self.items.^[i] = v;
+    }
+
+    pub fn push(self: &mut Self, v: T) -> !void {
+        if self.len == self.items.^.n { try self.grow(); }
+        self.items.^[self.len] = v;
+        self.len = self.len + 1;
+        return;
+    }
+
+    /// Move to a buffer twice the size. Kept apart from `push` because the
+    /// borrow that hands over the old buffer must not be live while the old
+    /// buffer is still being read (SPEC 5 R6).
+    fn grow(self: &mut Self) -> !void {
+        var room: usize = self.items.^.n * 2;
+        if room == 0 { room = 4; }
+        let bigger: ^[]mut T = try mem.alloc_slice(T, room);
+        var i: usize = 0;
+        while i < self.len {
+            bigger.^[i] = self.items.^[i];
+            i = i + 1;
+        }
+        let old: ^[]mut T = mem.replace(&mut self.items, bigger);
+        mem.destroy(old);
+        return;
+    }
+
+    pub fn drop(self: &mut Self) -> void {
+        mem.destroy(self.items);
+    }
 }
