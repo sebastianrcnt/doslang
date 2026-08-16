@@ -6,6 +6,8 @@ extern "c" fn fe_rt_write(handle: i32, bytes: *u8, len: usize) -> i32;
 extern "c" fn fe_rt_alloc(n: usize) -> *u8;
 extern "c" fn fe_rt_free(p: *u8);
 extern "c" fn fe_rt_exit(code: i32);
+extern "c" fn fe_rt_allocs() -> i32;
+extern "c" fn fe_rt_frees() -> i32;
 
 pub fn exit(code: i32) -> void {
     unsafe { fe_rt_exit(code); }
@@ -22,3 +24,8 @@ pub fn raw_alloc(n: usize) -> *u8 {
 pub fn raw_free(p: *u8) -> void {
     unsafe { fe_rt_free(p); }
 }
+
+// How many times the allocator was asked to hand out memory, and to take it
+// back. A test can insist the two agree; nothing else should care.
+pub fn allocs() -> i32 { unsafe { return fe_rt_allocs(); } }
+pub fn frees() -> i32 { unsafe { return fe_rt_frees(); } }

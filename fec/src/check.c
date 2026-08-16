@@ -3615,6 +3615,11 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             actual && actual->kind==FE_TYPE_ERROR_UNION &&
             !fe_type_equal(expected,actual))
             err(s->c,n->loc,"error result type mismatch");
+        /* A bare `return` in a function returning `!void` is the success case:
+           there is no value to give, and no error either. */
+        else if (!n->a && expected && expected->kind==FE_TYPE_ERROR_UNION &&
+                 expected->error_value &&
+                 expected->error_value->kind==FE_TYPE_VOID) { }
         else if (!fe_type_equal(expected,stored) &&
                  !m7_actual_compatible(expected,stored,n->a))
             err(s->c,n->loc,"return type mismatch");

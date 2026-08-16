@@ -28,6 +28,8 @@ colon       db  ':',0
 newline     db  13,10,0
 numbuf      db  16 dup(0)
 written     dd  0
+allocs      dd  0
+frees       dd  0
 
 _DATA ends
 
@@ -168,6 +170,7 @@ fe_rt_alloc proc near
         push    8                       ; HEAP_ZERO_MEMORY
         push    eax
         call    _HeapAlloc@12
+        inc     dword ptr [allocs]
         mov     esp, ebp
         pop     ebp
         ret
@@ -186,11 +189,26 @@ fe_rt_free proc near
         push    0
         push    eax
         call    _HeapFree@12
+        inc     dword ptr [frees]
 free_done:
         mov     esp, ebp
         pop     ebp
         ret
 fe_rt_free endp
+
+; fe_rt_allocs() / fe_rt_frees() -- what the allocator has been asked to do,
+; so that a test can insist every allocation was released.
+public fe_rt_allocs
+fe_rt_allocs proc near
+        mov     eax, [allocs]
+        ret
+fe_rt_allocs endp
+
+public fe_rt_frees
+fe_rt_frees proc near
+        mov     eax, [frees]
+        ret
+fe_rt_frees endp
 
 ; fe_rt_exit(code) -- never returns
 public fe_rt_exit

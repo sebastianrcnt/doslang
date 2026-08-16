@@ -1,6 +1,7 @@
 #include "lower.h"
 #include <string.h>
 #include "m7.h"
+#include "own.h"
 #include <stdio.h>
 
 /* ------------------------------------------------------------------------- *
@@ -36,10 +37,21 @@ typedef struct Lower {
     unsigned break_target[32];
     unsigned continue_target[32];
     unsigned loop_depth;
-    /* `defer` blocks in the order they were written. Every exit path runs the
-       ones that are live, last written first. */
-    FeNode *deferred[32];
-    unsigned defer_count;
+    /* What a scope still owes when it ends: `defer` blocks to run and owned
+       values to release, in the order they were written. Every exit path runs
+       what is live, last first.
+
+       A drop carries a flag beside the value. The flag is set when the value
+       is stored and cleared wherever it is moved away, so the release happens
+       exactly on the paths where the value is still there -- which is not
+       something the shape of the code can tell you on its own. */
+    struct {
+        FeNode *block;         /* a `defer`, when set */
+        unsigned local;        /* the owned value, otherwise */
+        unsigned flag;
+        FeType *type;
+    } owed[64];
+    unsigned owed_count;
     /* Every `error.Name` used anywhere in the build, sorted, numbered from one.
        SPEC 4.6: the names are collected rather than declared, and the order is
        fixed by the spelling so that the same program always gets the same
@@ -194,6 +206,14 @@ static unsigned as_address(Lower *L, Slot s, FeNode *n)
 
 /* --------------------------------------------------------------- locals --- */
 
+/* Does letting go of this type have to do something? */
+static int needs_release(const FeType *t)
+{
+    if (!t) return 0;
+    if (t->kind == FE_TYPE_OWNED) return 1;
+    return t->has_drop != 0;
+}
+
 static unsigned declare_var(Lower *L, const char *cname, const FeType *t,
                             const char *name)
 {
@@ -205,7 +225,29 @@ static unsigned declare_var(Lower *L, const char *cname, const FeType *t,
         L->vars[L->var_count].by_address = 0;
         ++L->var_count;
     }
+    if (needs_release(t) && L->owed_count < 64) {
+        unsigned flag = fe_ir_local(L->m, L->fn, FE_IR_I8, 1, 1, "live");
+        unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I8, 0);
+        fe_ir_store(L->m, L->b, fe_ir_at_local(flag, 0), zero, FE_IR_I8);
+        L->owed[L->owed_count].block = 0;
+        L->owed[L->owed_count].local = local;
+        L->owed[L->owed_count].flag = flag;
+        L->owed[L->owed_count].type = (FeType *)t;
+        ++L->owed_count;
+    }
     return local;
+}
+
+/* The liveness flag beside a local, or none. */
+static int release_flag(Lower *L, unsigned local, unsigned *flag)
+{
+    unsigned i;
+    for (i = L->owed_count; i > 0; --i)
+        if (!L->owed[i - 1].block && L->owed[i - 1].local == local) {
+            *flag = L->owed[i - 1].flag;
+            return 1;
+        }
+    return 0;
 }
 
 static LowerVar *find_var(Lower *L, const char *cname)
@@ -687,6 +729,16 @@ static Slot lower_expr(Lower *L, FeNode *n)
     Slot v;
     if (!n || L->failed) return slot_void();
     v = lower_expr_core(L, n);
+    /* The checker marked the uses that hand ownership away. Where one names a
+       local we track, the value is no longer ours to release. */
+    if ((n->flags & FE_OWN_NODE_CONSUMED) && n->kind == FE_N_IDENT) {
+        LowerVar *var = find_var(L, n->cname);
+        unsigned flag;
+        if (var && release_flag(L, var->local, &flag)) {
+            unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I8, 0);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(flag, 0), zero, FE_IR_I8);
+        }
+    }
     return n->sem_context ? wrap_context(L, v, n) : v;
 }
 
@@ -938,12 +990,40 @@ static Slot lower_expr_core(Lower *L, FeNode *n)
     }
 }
 
-/* Run the `defer` blocks that are live, most recent first. A `return` in the
-   middle of a function still owes them, so every exit path calls this. */
+/* Settle what a scope owes, most recent first. A `return` in the middle of a
+   function still owes everything, so every exit path calls this. */
 static void run_deferred(Lower *L, unsigned from)
 {
     unsigned i;
-    for (i = L->defer_count; i > from; --i) lower_stmt(L, L->deferred[i - 1]);
+    for (i = L->owed_count; i > from; --i) {
+        if (L->owed[i - 1].block) {
+            lower_stmt(L, L->owed[i - 1].block);
+            continue;
+        }
+        {
+            /* Release only where the value is still here. */
+            unsigned live = fe_ir_load(L->m, L->b, FE_IR_I8,
+                                       fe_ir_at_local(L->owed[i - 1].flag, 0));
+            FeIrBlock *doit = new_block(L);
+            FeIrBlock *skip = new_block(L);
+            unsigned args[1];
+            FeType *t = L->owed[i - 1].type;
+            fe_ir_br(L->b, live, doit->id, skip->id);
+            L->b = doit;
+            if (t && t->kind == FE_TYPE_OWNED && t->elem &&
+                t->elem->kind == FE_TYPE_SLICE) {
+                FeIrPlace at = fe_ir_at_local(L->owed[i - 1].local,
+                                              SLICE_PTR_OFFSET);
+                args[0] = fe_ir_load(L->m, L->b, FE_IR_PTR, at);
+            } else {
+                args[0] = fe_ir_load(L->m, L->b, FE_IR_PTR,
+                                     fe_ir_at_local(L->owed[i - 1].local, 0));
+            }
+            fe_ir_call(L->m, L->b, FE_IR_VOID, "fe_rt_free", args, 1);
+            fe_ir_jmp(L->b, skip->id);
+            L->b = skip;
+        }
+    }
 }
 
 /* ------------------------------------------------------- wrappers -------- *
@@ -1116,7 +1196,30 @@ static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
 static void lower_return(Lower *L, FeNode *n)
 {
     Slot v;
-    if (!n->a) { run_deferred(L, 0); fe_ir_ret(L->b, 0, 0); return; }
+    if (!n->a) {
+        /* A bare return from a `!void` function still has to say that nothing
+           went wrong. */
+        if (L->ret_type && L->ret_type->kind == FE_TYPE_ERROR_UNION) {
+            unsigned local = scratch(L, L->ret_type, "success");
+            unsigned none = fe_ir_const(L->m, L->b, FE_IR_I16, 0);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), none, FE_IR_I16);
+            run_deferred(L, 0);
+            if (L->fn->returns_by_address) {
+                unsigned dst = fe_ir_load(L->m, L->b, FE_IR_PTR,
+                                          fe_ir_at_local(L->ret_local, 0));
+                fe_ir_copy(L->m, L->b, fe_ir_at_temp(dst, 0),
+                           fe_ir_at_local(local, 0), ir_size(L->ret_type));
+                fe_ir_ret(L->b, 0, 0);
+                return;
+            }
+            fe_ir_ret(L->b, fe_ir_load(L->m, L->b, ir_type(L->ret_type),
+                                       fe_ir_at_local(local, 0)), 1);
+            return;
+        }
+        run_deferred(L, 0);
+        fe_ir_ret(L->b, 0, 0);
+        return;
+    }
     /* The value is computed before the deferred blocks run, because they may
        destroy what it was read from. */
     v = lower_expr(L, n->a);
@@ -1400,12 +1503,12 @@ static void lower_stmt(Lower *L, FeNode *n)
     if (!n || L->failed) return;
     switch (n->kind) {
     case FE_N_BLOCK: {
-        unsigned outer = L->defer_count;
+        unsigned outer = L->owed_count;
         for (x = n->children; x; x = x->next) lower_stmt(L, x);
-        /* Leaving a block normally runs what it deferred. An exit that jumped
-           away already ran them on its way out. */
+        /* Leaving a block normally settles what it owes. An exit that jumped
+           away already settled on its way out. */
         if (!L->b->terminated) run_deferred(L, outer);
-        L->defer_count = outer;
+        L->owed_count = outer;
         return;
     }
     case FE_N_LET:
@@ -1414,7 +1517,12 @@ static void lower_stmt(Lower *L, FeNode *n)
         unsigned local = declare_var(L, n->cname, n->sem_type, n->text);
         if (n->b) {
             Slot v = lower_expr(L, n->b);
+            unsigned flag;
             store_into(L, fe_ir_at_local(local, 0), v, n, ir_size(n->sem_type));
+            if (release_flag(L, local, &flag)) {
+                unsigned one = fe_ir_const(L->m, L->b, FE_IR_I8, 1);
+                fe_ir_store(L->m, L->b, fe_ir_at_local(flag, 0), one, FE_IR_I8);
+            }
         }
         return;
     }
@@ -1448,7 +1556,13 @@ static void lower_stmt(Lower *L, FeNode *n)
         lower_stmt(L, n->a);
         return;
     case FE_N_DEFER:
-        if (L->defer_count < 32) L->deferred[L->defer_count++] = n->a;
+        if (L->owed_count < 64) {
+            L->owed[L->owed_count].block = n->a;
+            L->owed[L->owed_count].local = 0;
+            L->owed[L->owed_count].flag = 0;
+            L->owed[L->owed_count].type = 0;
+            ++L->owed_count;
+        }
         return;
     case FE_N_FOR:
         lower_for(L, n);

@@ -1,0 +1,28 @@
+// EXIT:0
+// OUTPUT:balanced
+unit owndrop;
+import std.io;
+import std.sys;
+
+fn take(p: ^i32) -> void { mem.destroy(p); }
+
+fn scoped() -> !void {
+    let a: ^i32 = try mem.create(1);
+    let b: ^i32 = try mem.create(2);
+    take(b);
+}
+
+fn early(flag: bool) -> !void {
+    let p: ^i32 = try mem.create(3);
+    if flag { return; }
+    take(p);
+}
+
+fn main() -> i32 {
+    scoped() catch |e| { return 1; };
+    early(true) catch |e| { return 2; };
+    early(false) catch |e| { return 3; };
+    if sys.allocs() == sys.frees() { io.print("balanced\n"); return 0; }
+    io.print("leaked\n");
+    return 4;
+}
