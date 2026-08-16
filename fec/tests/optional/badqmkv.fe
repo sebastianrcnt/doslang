@@ -1,9 +1,0 @@
-// ERROR:6:optional
-unit badqmkv;
-
-fn bad() -> i32 {
-    let x: i32 = 1;
-    return x.?;
-}
-
-

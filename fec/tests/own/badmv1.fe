@@ -1,9 +1,0 @@
-unit badmv1;
-
-fn take(p: ^i32) -> void { mem.destroy(p); }
-
-fn twice(p: ^i32) -> void {
-    take(p);
-    take(p);
-}
-

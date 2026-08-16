@@ -1,0 +1,10 @@
+// ERROR:9:initialized
+unit badbinit;
+
+fn bad(assign: bool) -> i32 {
+    var value: i32;
+    if assign {
+        value = 1;
+    }
+    return value;
+}

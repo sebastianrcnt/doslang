@@ -1,0 +1,7 @@
+// ERROR:6:duplicate
+unit badercod;
+
+error E {
+    One = 1,
+    Two = 1,
+}

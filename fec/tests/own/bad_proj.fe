@@ -1,0 +1,8 @@
+unit bad_proj;
+
+struct Holder { p: ^i32 }
+fn take(p: ^i32) -> void { mem.destroy(p); }
+
+fn bad(h: Holder) -> void {
+    take(h.p);
+}

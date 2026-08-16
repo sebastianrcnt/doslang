@@ -1,0 +1,7 @@
+unit ok_str;
+
+fn main() -> i32 {
+    let text: str = "abc";
+    if text[1] == ('b' as u8) and text.n == 3 { return 0; }
+    return 1;
+}

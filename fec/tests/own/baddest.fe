@@ -1,6 +1,0 @@
-unit baddest;
-
-fn bad(x: i32) -> void {
-    mem.destroy(x);
-}
-

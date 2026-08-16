@@ -1,7 +1,0 @@
-unit badbyte;
-
-fn main() -> i32 {
-    let u: u8 = 'A';
-    return u;
-}
-

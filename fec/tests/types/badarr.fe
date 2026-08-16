@@ -1,0 +1,5 @@
+unit badarr;
+fn main() -> i32 {
+    let a: [2]i32 = [1, true, 3];
+    return a[0];
+}

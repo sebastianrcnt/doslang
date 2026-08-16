@@ -1,6 +1,0 @@
-unit badretu;
-
-fn main() -> i32 {
-    return true;
-}
-

@@ -1,0 +1,14 @@
+unit ok_struc;
+
+struct Point { x: i32, y: i32, }
+packed struct PackedPoint { x: u8, y: i32, }
+struct Natural { a: u8, b: i32, }
+
+fn main() -> i32 {
+    let p: Point = Point{ x: 3, y: 4 };
+    let q: PackedPoint = PackedPoint{ x: 1, y: 6 };
+    let n: Natural = Natural{ a: 1, b: 2 };
+    if p.x + p.y == 7 and q.y == 6 and n.b == 2 and
+       (Point{ x: 1, y: 2 }.x == 1) and @size_of(Natural) == 8 { return 0; }
+    return 1;
+}

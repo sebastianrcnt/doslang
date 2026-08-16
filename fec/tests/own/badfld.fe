@@ -1,0 +1,6 @@
+// ERROR:5:reference
+unit badfld;
+
+struct Bad {
+    value: &i32,
+}

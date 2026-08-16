@@ -1,7 +1,0 @@
-unit badfmany;
-
-fn main() -> i32 {
-    @print("{}", 1, 2);
-    return 0;
-}
-

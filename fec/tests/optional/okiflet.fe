@@ -1,0 +1,8 @@
+unit okiflet;
+
+fn value(p: ?i32) -> i32 {
+    if let Some(v) = p {
+        return v;
+    }
+    return 0;
+}

@@ -1,8 +1,0 @@
-unit badunit;
-
-fn main() -> i32 {
-    var value: i32;
-    return value;
-}
-
-

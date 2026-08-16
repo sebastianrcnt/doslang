@@ -1,7 +1,0 @@
-// ERROR:5:reference
-unit badfmem;
-
-struct Bad {
-    value: &i32,
-}
-

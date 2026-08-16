@@ -1,0 +1,12 @@
+// ERROR:10:borrow
+unit baddefer;
+
+fn read(r: &i32) -> i32 { return r.^; }
+
+fn bad() -> i32 {
+    var x: i32 = 0;
+    let r = &x;
+    defer { let y = read(r); }
+    x = 1;
+    return x;
+}

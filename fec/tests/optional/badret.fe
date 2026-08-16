@@ -1,0 +1,14 @@
+// ERROR:13:error
+unit badret;
+
+error A {
+    Bad = 1,
+}
+
+error B {
+    Bad = 1,
+}
+
+fn bad() -> B!i32 {
+    return A.Bad;
+}

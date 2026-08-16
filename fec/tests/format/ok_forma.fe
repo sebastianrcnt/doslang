@@ -1,0 +1,30 @@
+unit ok_forma;
+
+const FMT: str = "n={} hex={x} c={c} s={s} b={b} {{ok}}\n";
+
+fn main() -> i32 {
+    var raw: [8]u8 = [0, 0, 0, 0, 0, 0, 0, 0];
+    var raw2: [8]u8 = [0, 0, 0, 0, 0, 0, 0, 0];
+    var raw3: [8]u8 = [0, 0, 0, 0, 0, 0, 0, 0];
+    var raw4: [8]u8 = [0, 0, 0, 0, 0, 0, 0, 0];
+    var raw5: [8]u8 = [0, 0, 0, 0, 0, 0, 0, 0];
+    var buf: []mut u8 = raw[..];
+    var buf2: []mut u8 = raw2[..];
+    var buf3: []mut u8 = raw3[..];
+    var buf4: []mut u8 = raw4[..];
+    var buf5: []mut u8 = raw5[..];
+    let w: io.Writer = io.null_writer();
+    const LOCAL_FMT: str = "value={}\n";
+    @print(FMT, 7, 15, 'A', "yes", true);
+    @fprint(w, LOCAL_FMT, 12);
+    let n: usize = @sprint(buf2, "A\x42\u0043defghi");
+    let n2: usize = @sprint(buf3, "xy");
+    let inner_n: usize = @sprint(buf4, "xy");
+    let outer_n: usize = @sprint(buf5, "n={}", @sprint(buf4, "xy"));
+    if n == 8 and buf2[0] == ('A' as u8) and
+       buf2[1] == ('B' as u8) and buf2[2] == ('C' as u8) and
+       n2 == 2 and buf3[0] == ('x' as u8) and
+       inner_n == 2 and outer_n == 3 and
+       buf5[0] == ('n' as u8) and buf5[2] == ('2' as u8) { return 0; }
+    return 1;
+}

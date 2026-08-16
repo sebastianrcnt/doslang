@@ -1,0 +1,9 @@
+// ERROR:8:move
+unit badbrmov;
+
+fn bad(p: ^i32, consume: bool) -> void {
+    if consume {
+        mem.destroy(p);
+    }
+    mem.destroy(p);
+}

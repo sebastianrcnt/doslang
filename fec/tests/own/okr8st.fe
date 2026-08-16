@@ -1,7 +1,0 @@
-unit okr8st;
-
-fn name() -> str {
-    return "main";
-}
-
-

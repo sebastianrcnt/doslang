@@ -1,0 +1,5 @@
+unit bad_ret;
+
+fn main() -> i32 {
+    return true;
+}

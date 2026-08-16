@@ -1,0 +1,10 @@
+unit oknull;
+
+struct Node { value: i32, }
+
+fn accepts(p: ?^Node) -> bool { return p == null; }
+
+fn test() -> bool {
+    let p: ?^Node = null;
+    return accepts(p);
+}

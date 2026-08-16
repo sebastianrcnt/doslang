@@ -1,8 +1,0 @@
-// ERROR:6:duplicate
-unit badecod;
-
-error E {
-    One = 1,
-    Two = 1,
-}
-
