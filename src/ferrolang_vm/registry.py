@@ -146,10 +146,18 @@ CASES: list[Case] = [
     # These two must trap at runtime: the bounds check is the feature under test.
     *_triple(3, "bounds", M3, run_suffix="trap", run_ok=False),
     *_triple(3, "slcbound", M3, run_suffix="trap", run_ok=False),
-    _case(3, "bounds-no-checks-emit",
-          _emit(_fe(M3, "bounds"), f"{M3}\\BOUNDS-N.C", flags=("--no-checks",))),
-    _case(3, "bounds-no-checks-build",
-          _wcl(f"{M3}\\BOUNDS-N.EXE", f"{M3}\\BOUNDS-N.C")),
+    # --no-checks is proved by a differential on one source. NOCHK.FE reads one
+    # element past a [2]i32 and returns x - x, which is 0 whatever garbage the
+    # unchecked read produced: compiled with checks it must trap, compiled with
+    # --no-checks it must run to completion. BOUNDS.FE cannot serve as the
+    # unchecked half because it returns the out-of-bounds value directly, so its
+    # exit code would be whatever happens to sit past the array on the stack.
+    *_triple(3, "nochk", M3, run_suffix="trap", run_ok=False),
+    _case(3, "nochk-off-emit",
+          _emit(_fe(M3, "nochk"), f"{M3}\\NOCHK-N.C", flags=("--no-checks",))),
+    _case(3, "nochk-off-build",
+          _wcl(f"{M3}\\NOCHK-N.EXE", f"{M3}\\NOCHK-N.C")),
+    _case(3, "nochk-off-run", f"{M3}\\NOCHK-N.EXE"),
     *_rejects(3, M3, ("badfld", "badmat", "badarr", "badcycle", "badstr", "badchar",
                       "badfield", "badindex"), suffix="reject"),
 
