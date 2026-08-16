@@ -32,6 +32,10 @@ struct FeVariantType {
 struct FeType {
     FeTypeKind kind;
     char name[64];
+    /* The unit that declared this type, for the nominal kinds. NULL for
+       builtins and for structural types like `[]u8`, which every unit
+       shares. Two units declaring the same name declare two types. */
+    const char *unit;
     char *cname;
     char *maker;
     char *none_cname;
@@ -76,6 +80,10 @@ typedef struct FeTypeCtx {
 
 void fe_types_init(FeTypeCtx *ctx, FeArena *arena, unsigned pointer_bits);
 FeType *fe_type_intern(FeTypeCtx *ctx, const char *name);
+/* Intern a nominal type belonging to `unit` rather than to whichever unit
+   is being checked. Used to name a type across a unit boundary. */
+FeType *fe_type_intern_unit(FeTypeCtx *ctx, const char *unit,
+                            const char *name);
 FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node);
 FeType *fe_type_array(FeTypeCtx *ctx, unsigned long length, FeType *elem);
 FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem);

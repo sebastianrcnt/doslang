@@ -14,6 +14,7 @@ static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
         t->name[i] = name[i];
     t->name[i] = '\0';
     t->kind = kind;
+    t->unit = 0;
     t->cname = 0;
     t->maker = 0;
     t->none_cname = 0;
@@ -56,6 +57,28 @@ void fe_types_init(FeTypeCtx *ctx, FeArena *arena, unsigned pointer_bits)
     ctx->generated_serial = 0;
 }
 
+/* Does this type answer to `name` for someone checking `unit`? A type with no
+   unit is shared by everyone; one with a unit answers only inside it. */
+static int type_visible_as(const FeType *t, const char *unit, const char *name)
+{
+    if (strcmp(t->name, name) != 0) return 0;
+    if (!t->unit) return 1;
+    return unit && strcmp(t->unit, unit) == 0;
+}
+
+FeType *fe_type_intern_unit(FeTypeCtx *ctx, const char *unit, const char *name)
+{
+    FeType *t;
+    if (!name) name = "<unknown>";
+    if (!unit) return fe_type_intern(ctx, name);
+    for (t = ctx->types; t; t = t->next)
+        if (t->unit && strcmp(t->name, name) == 0 &&
+            strcmp(t->unit, unit) == 0) return t;
+    t = new_type(ctx, name, FE_TYPE_UNKNOWN);
+    if (t) t->unit = unit;
+    return t;
+}
+
 FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
 {
     FeType *t;
@@ -64,7 +87,7 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
     FeTypeKind kind = FE_TYPE_UNKNOWN;
     if (!name) name = "<unknown>";
     for (t = ctx->types; t; t = t->next)
-        if (strcmp(t->name, name) == 0) return t;
+        if (type_visible_as(t, ctx->unit_name, name)) return t;
     if (strcmp(name, "void") == 0) kind = FE_TYPE_VOID;
     else if (strcmp(name, "bool") == 0) kind = FE_TYPE_BOOL;
     else if (strcmp(name, "char") == 0) kind = FE_TYPE_CHAR;
@@ -246,7 +269,7 @@ FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed)
     unsigned i = 0;
     char *cname;
     if (!node || !node->text) return 0;
-    t = fe_type_intern(ctx, node->text);
+    t = fe_type_intern_unit(ctx, ctx->unit_name, node->text);
     if (t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_STRUCT) return t;
     if (t->kind == FE_TYPE_STRUCT) return t;
     t->kind = FE_TYPE_STRUCT;
@@ -291,7 +314,7 @@ FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node)
     unsigned i = 0;
     char *cname;
     if (!node || !node->text) return 0;
-    t = fe_type_intern(ctx, node->text);
+    t = fe_type_intern_unit(ctx, ctx->unit_name, node->text);
     if (t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_ENUM) return t;
     if (t->kind == FE_TYPE_ENUM) return t;
     t->kind = FE_TYPE_ENUM;
@@ -568,7 +591,12 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
 
 int fe_type_equal(const FeType *a, const FeType *b)
 {
-    return a == b || (a && b && strcmp(a->name, b->name) == 0);
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    if (strcmp(a->name, b->name) != 0) return 0;
+    /* The same spelling is not the same type across a unit boundary. */
+    if (!a->unit || !b->unit) return a->unit == b->unit;
+    return strcmp(a->unit, b->unit) == 0;
 }
 
 int fe_type_is_integer(const FeType *t)

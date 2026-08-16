@@ -8,7 +8,7 @@
 #include <stdio.h>
 
 typedef struct FeSym FeSym;
-typedef struct FeScope FeScope;
+/* FeScope is forward declared in check.h. */
 
 struct FeSym {
     const char *name;
@@ -156,7 +156,7 @@ static char *unit_cname(FeCheck *c, const char *name)
     u = c->ast->root && c->ast->root->text ? c->ast->root->text : "unit";
     n = (unsigned long)strlen("fe_") + (unsigned long)strlen(u) +
         (unsigned long)strlen(name ? name : "name") + 2UL;
-    p = (char *)fe_arena_alloc(&c->ast->arena, n);
+    p = (char *)fe_arena_alloc(&c->arena, n);
     if (!p) return 0;
     strcpy(p, "fe_");
     strcat(p, u);
@@ -173,7 +173,7 @@ static char *local_cname(FeCheck *c, const char *name)
     sprintf(number, "%u", c->local_serial++);
     n = (unsigned long)strlen("fe_l_") + (unsigned long)strlen(name) +
         (unsigned long)strlen(number) + 2UL;
-    p = (char *)fe_arena_alloc(&c->ast->arena, n);
+    p = (char *)fe_arena_alloc(&c->arena, n);
     if (!p) return 0;
     strcpy(p, "fe_l_");
     strcat(p, name ? name : "local");
@@ -185,7 +185,7 @@ static char *local_cname(FeCheck *c, const char *name)
 static FeScope *scope_new(FeCheckerState *s, FeScope *parent)
 {
     FeScope *scope;
-    scope = (FeScope *)fe_arena_alloc(&s->c->ast->arena, sizeof(FeScope));
+    scope = (FeScope *)fe_arena_alloc(&s->c->arena, sizeof(FeScope));
     if (!scope) {
         err(s->c, s->c->ast->root->loc, "out of memory creating scope");
         return parent;
@@ -234,7 +234,7 @@ static FeSym *add_symbol(FeCheckerState *s, FeScope *scope,
     }
     if (scope->count == scope->capacity) {
         capacity = scope->capacity ? scope->capacity * 2U : 8U;
-        items = (FeSym *)fe_arena_alloc(&s->c->ast->arena,
+        items = (FeSym *)fe_arena_alloc(&s->c->arena,
                                         capacity * sizeof(FeSym));
         if (!items) {
             err(s->c, decl ? decl->loc : s->c->ast->root->loc,
@@ -267,16 +267,38 @@ static FeSym *add_symbol(FeCheckerState *s, FeScope *scope,
     return sym;
 }
 
-void fe_check_init(FeCheck *c, FeAst *ast, FeDiags *diags,
+/* Make `unit` the one being checked. Types intern against its name, cnames
+   are built from it, and diagnostics quote its source rather than whichever
+   file happened to be parsed last. */
+static void enter_unit(FeCheck *c, unsigned index)
+{
+    FeUnit *u = &c->build->units[index];
+    c->unit = u;
+    c->ast = &u->ast;
+    c->types.unit_name = u->name[0] ? u->name : "unit";
+    fe_diags_source(c->diags, u->source, u->size);
+}
+
+void fe_check_init(FeCheck *c, FeBuild *build, FeDiags *diags,
                    unsigned pointer_bits, int no_checks)
 {
-    c->ast = ast;
+    unsigned i;
+    fe_arena_init(&c->arena, 16384);
+    c->build = build;
+    c->unit = 0;
+    c->ast = build->count ? &build->units[0].ast : 0;
+    for (i = 0; i < FE_BUILD_UNIT_MAX; ++i) c->unit_scope[i] = 0;
     c->diags = diags;
     c->pointer_bits = pointer_bits;
     c->local_serial = 0;
     c->no_checks = no_checks;
-    fe_types_init(&c->types, &ast->arena, pointer_bits);
-    c->types.unit_name = ast->root && ast->root->text ? ast->root->text : "unit";
+    fe_types_init(&c->types, &c->arena, pointer_bits);
+    c->types.unit_name = "unit";
+}
+
+void fe_check_destroy(FeCheck *c)
+{
+    fe_arena_destroy(&c->arena);
 }
 
 static FeType *check_expr(FeCheckerState *s, FeNode *n);
@@ -517,7 +539,7 @@ static void own_release_after_stmt(FeCheckerState *s, FeScope *scope,
 static FeOwnState *flow_own_new(FeCheckerState *s, unsigned count)
 {
     if (!s || !count) return 0;
-    return (FeOwnState *)fe_arena_alloc(&s->c->ast->arena,
+    return (FeOwnState *)fe_arena_alloc(&s->c->arena,
                                         count*sizeof(FeOwnState));
 }
 
@@ -554,7 +576,7 @@ typedef struct FeFlowBorrow {
 static FeFlowBorrow *flow_borrow_new(FeCheckerState *s, unsigned count)
 {
     if (!s || !count) return 0;
-    return (FeFlowBorrow *)fe_arena_alloc(&s->c->ast->arena,
+    return (FeFlowBorrow *)fe_arena_alloc(&s->c->arena,
                                           count*sizeof(FeFlowBorrow));
 }
 
@@ -1737,7 +1759,7 @@ static void check_fn(FeCheck *c, FeNode *fn, FeScope *globals)
     s.loop_depth=0;
     s.defer_depth=0;
     s.fn_node=fn;
-    fe_own_liveness_init(&s.liveness,&c->ast->arena);
+    fe_own_liveness_init(&s.liveness,&c->arena);
     fe_own_collect_last_uses(&s.liveness,fn);
     fn->sem_type = s.ret;
     for (x = fn->a ? fn->a->children : 0; x; x = x->next) {
@@ -1765,7 +1787,7 @@ static void check_method(FeCheck *c, FeNode *fn, FeScope *globals,
     s.loop_depth=0;
     s.defer_depth=0;
     s.fn_node=fn;
-    fe_own_liveness_init(&s.liveness,&c->ast->arena);
+    fe_own_liveness_init(&s.liveness,&c->arena);
     fe_own_collect_last_uses(&s.liveness,fn);
     fn->sem_type=s.ret;
     for(x=fn->a ? fn->a->children : 0; x; x=x->next) {
@@ -2776,26 +2798,13 @@ static void m7_validate_error_decl(FeCheck *c, FeNode *decl)
     }
 }
 
-int fe_check_program(FeCheck *c)
+/* Everything a unit declares, before any body anywhere is looked at. */
+static void declare_unit(FeCheck *c)
 {
-    FeCheckerState s;
     FeNode *n;
-    FeNode *m;
-    FeSym *sym;
-    FeType *t;
-    FeType *iv;
-    char method_name[128];
-    s.c=c;
-    s.scope=scope_new(&s,0);
-    s.globals=s.scope;
-    s.ret=fe_type_intern(&c->types,"void");
-    s.loop_depth=0;
-    s.defer_depth=0;
-    s.fn_node=0;
-    fe_own_liveness_init(&s.liveness,&c->ast->arena);
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_STRUCT)
-            fe_type_declare_struct(&c->types,n,(n->flags & 1U)!=0);
+            fe_type_declare_struct(&c->types,n,(n->flags & FE_NODE_PACKED)!=0);
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next) {
         m7_check_storage(c,n);
         if (n->kind==FE_N_ERROR_DECL) m7_validate_error_decl(c,n);
@@ -2805,7 +2814,20 @@ int fe_check_program(FeCheck *c)
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_ERROR_DECL) fe_type_declare_error(&c->types,n);
     check_type_cycles(c);
-    fe_type_layout_all(&c->types);
+}
+
+/* The unit's top-level names, in a scope of their own so that another unit
+   can look into it later without inheriting anything else. */
+static FeScope *declare_unit_scope(FeCheck *c, FeCheckerState *s)
+{
+    FeNode *n;
+    FeNode *m;
+    FeType *t;
+    FeScope *globals;
+    char method_name[128];
+    globals=scope_new(s,0);
+    s->scope=globals;
+    s->globals=globals;
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next) {
         if (n->kind==FE_N_STRUCT) {
             for (m=n->children;m;m=m->next) if (m->kind==FE_N_FN) {
@@ -2816,21 +2838,31 @@ int fe_check_program(FeCheck *c)
         }
         if (n->kind==FE_N_GLOBAL || n->kind==FE_N_CONST) {
             t=n->a ? node_type(c,n->a) : unknown(c);
-            add_symbol(&s,s.globals,n->text,t,0,n->kind==FE_N_GLOBAL,
+            add_symbol(s,globals,n->text,t,0,n->kind==FE_N_GLOBAL,
                        n->b!=0,unit_cname(c,n->text ? n->text : "global"),n);
         }
     }
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_FN) {
             t=fe_type_intern(&c->types,"<fn>");
-            add_symbol(&s,s.globals,n->text,t,n,0,1,
+            add_symbol(s,globals,n->text,t,n,0,1,
                        unit_cname(c,n->text ? n->text : "fn"),n);
         }
+    return globals;
+}
+
+static void check_unit_bodies(FeCheck *c, FeCheckerState *s)
+{
+    FeNode *n;
+    FeNode *m;
+    FeSym *sym;
+    FeType *t;
+    FeType *iv;
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_GLOBAL || n->kind==FE_N_CONST) {
-            sym=find_current(s.globals,n->text ? n->text : "");
+            sym=find_current(s->globals,n->text ? n->text : "");
             if (n->b) {
-                iv=m7_check_expected(&s,n->b,sym ? sym->type : 0);
+                iv=m7_check_expected(s,n->b,sym ? sym->type : 0);
                 if (sym && sym->type->kind==FE_TYPE_UNKNOWN) {
                     sym->type=iv;
                     n->sem_type=iv;
@@ -2840,27 +2872,40 @@ int fe_check_program(FeCheck *c)
             }
         }
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
-        if (n->kind==FE_N_FN) check_fn(c,n,s.globals);
+        if (n->kind==FE_N_FN) check_fn(c,n,s->globals);
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_STRUCT) {
             t=fe_type_intern(&c->types,n->text);
             for (m=n->children;m;m=m->next)
-                if (m->kind==FE_N_FN) check_method(c,m,s.globals,t);
+                if (m->kind==FE_N_FN) check_method(c,m,s->globals,t);
         }
-    fe_type_layout_all(&c->types);
-    return c->diags->errors==0;
 }
 
-FeType *fe_check_expr_type(FeCheck *c, FeNode *n)
+int fe_check_program(FeCheck *c)
 {
     FeCheckerState s;
+    unsigned u;
     s.c=c;
-    s.scope=scope_new(&s,0);
-    s.globals=s.scope;
+    s.scope=0;
+    s.globals=0;
     s.ret=fe_type_intern(&c->types,"void");
     s.loop_depth=0;
     s.defer_depth=0;
     s.fn_node=0;
-    fe_own_liveness_init(&s.liveness,&c->ast->arena);
-    return check_expr(&s,n);
+    fe_own_liveness_init(&s.liveness,&c->arena);
+    for (u=0;u<c->build->count;++u) { enter_unit(c,u); declare_unit(c); }
+    fe_type_layout_all(&c->types);
+    for (u=0;u<c->build->count;++u) {
+        enter_unit(c,u);
+        c->unit_scope[u]=declare_unit_scope(c,&s);
+    }
+    for (u=0;u<c->build->count;++u) {
+        enter_unit(c,u);
+        s.scope=c->unit_scope[u];
+        s.globals=c->unit_scope[u];
+        check_unit_bodies(c,&s);
+    }
+    fe_type_layout_all(&c->types);
+    return c->diags->errors==0;
 }
+

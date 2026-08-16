@@ -90,13 +90,11 @@ int main(int argc, char **argv)
        every unit's AST. */
     {
         FeBuild build;
-        unsigned u;
         int ok=fe_build_load(&build,file,&d);
-        for(u=0;ok && u<build.count;u++){
-            FeUnit *unit=&build.units[u];
-            fe_diags_source(&d,unit->source,unit->size);
-            fe_check_init(&check,&unit->ast,&d,pointer_bits,no_checks);
+        if(ok){
+            fe_check_init(&check,&build,&d,pointer_bits,no_checks);
             if(!fe_check_program(&check)) ok=0;
+            fe_check_destroy(&check);
         }
         fe_build_destroy(&build);
         /* Semantic analysis is the last pass there is. A code generator

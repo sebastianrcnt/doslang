@@ -37,6 +37,12 @@ struct FeNode {
     unsigned flags;
 };
 
+/* Bits in FeNode.flags. 0x100 and above belong to own.h. */
+#define FE_NODE_PACKED 0x1U
+#define FE_NODE_STATIC 0x2U
+#define FE_NODE_SHARED 0x4U
+#define FE_NODE_PUB    0x8U
+
 typedef struct FeAst {
     FeArena arena;
     FeNode *root;
