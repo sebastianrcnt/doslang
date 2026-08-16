@@ -1,21 +1,20 @@
-# M9 fixtures
+# 제네릭
 
-M9 adds comptime type parameters and monomorphization.
+이 디렉터리는 제네릭 타입/함수/인스턴스화 관련 고정 fixture입니다.
 
-`ok*.fe` must compile; `bad*.fe` must fail according to the first-line marker.
-`defscope/` and `okscope/` are multi-unit definition-scope tests and require M8 imports. `okscope/` verifies that an exported generic may use its definition unit's private helper through `.fei` support metadata.
+실행 방법:
 
-Coverage:
-- generic functions and structs,
-- multiple and duplicate instantiations,
-- type aliases as comptime type values,
-- `T == U` and `@is_int(T)` in comptime,
-- instantiation-time operation errors,
-- arity/type-argument errors,
-- runtime `type` values forbidden,
-- definition-unit name lookup,
-- recursive instantiation depth limit.
-- rejection of user value generics and generic type inference,
-- same-instance recursive request reuse and selected-out `comptime if` semantic skipping.
+`uv run python tests/run.py -k generic`
 
-M9's DOS gate should additionally inspect generated `fe_generics.c`: `okdedup.fe` must emit one body for the repeated `(id, i32)` instantiation.
+현재 수록 케이스:
+
+- `okalias.fe`, `okbox.fe`, `okdedup.fe`, `okid.fe`, `okisint.fe`
+- `okmulti.fe`, `oknested.fe`, `okpair.fe`, `okscope/main.fe`, `okscope/lib.fe`
+- `oksamrec.fe`, `okskip.fe`, `oktypeeq.fe`
+- `badarity.fe`, `badarg.fe`, `badbody.fe`, `baddepth.fe`, `baddist.fe`
+- `badfew.fe`, `badinfer.fe`, `badop.fe`, `badtype.fe`, `badvalue.fe`
+- `defscope/main.fe`, `defscope/lib.fe`
+
+미구현/미완료 구간:
+
+현재 다수의 제네릭 케이스가 통과하지 않습니다.

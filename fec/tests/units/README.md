@@ -1,26 +1,30 @@
-# M8 fixtures
+# 단위 모듈
 
-M8 is the first multi-unit milestone, so cases live in subdirectories. Each case is compiled separately with that directory on the import path.
+이 디렉터리는 `unit` 선언, `import` 경로/별칭, 다중 파일 단위 경계를 다룹니다.
 
-Pass cases:
-- `basic`: public function across units.
-- `pubfld`: public type and public field across units.
-- `dotted` and `alias`: canonical dotted unit paths, last-segment binding, and explicit import aliases.
-- `dotpriv`: a dotted unit prefix does not grant access to another unit's private declarations.
-- `errsame`: two units use the same anonymous `error.Name`; the driver must assign one deterministic `core.Error` code.
-- `errdet`: the same anonymous error-name set appears in a different source/import order; generated `fe_errors.h` must be byte-identical to `errsame` modulo the intentionally different unit graph.
+실행 방법:
 
-Fail cases:
-- `privfn`: private declaration access.
-- `privfld`: private field access.
-- `missing`: unresolved import.
-- `cycle`: cyclic imports.
-- `unitbad`: filename/unit-name mismatch.
-- `badupper` and `badlong`: DOS-safe lowercase, eight-character unit-segment limit.
-- `bindconf`: two imports with the same last-segment binding require an alias.
-- `pubpriv`: a public signature cannot expose a private nominal type.
-- `errnom`: nominal error cannot flow into `core.Error` via `try`.
+`uv run python tests/run.py -k units`
 
-They are not registered in `src/ferrolang_vm/registry.py` yet. M8 should add procedural checks for `.fei` creation/hash invalidation and deterministic `fe_errors.h` using these fixtures.
+현재 수록 케이스:
 
-The M8 DOS gate must additionally construct two separate `-I` roots containing the same canonical unit and require an ambiguity error; repeat the case with two paths to the same canonical file and require deduplication. It must also verify that `std.*` resolves only from the built-in std root, ordinary user units never do, and that changing a private non-generic implementation preserves the dependent interface-cache hit. Those checks need temporary roots/cache inspection and deliberately remain procedural rather than encoding host paths in fixtures.
+- `alias/`
+- `basic/`
+- `badlong/`
+- `badupper/`
+- `bindconf/`
+- `cycle/`
+- `dotpriv/`
+- `dotted/`
+- `errdet/`
+- `errnom/`
+- `errsame/`
+- `missing/`
+- `privfld/`
+- `privfn/`
+- `pubfld/`
+- `pubpriv/`
+- `unitbad/`
+
+미구현/미완료 구간:
+현재 다수 케이스가 완전 통과하지 않고, `badlong`, `badupper`, `unitbad`는 규칙 고의 위반 케이스입니다.

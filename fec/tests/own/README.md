@@ -1,11 +1,12 @@
-# M6 fixtures
+# 소유권과 대여
 
-These fixtures pin the M6 ownership/borrow rules before implementation.
+이 디렉터리는 `fec/tests`에서 소유권(Ownership)과 대여(Borrow) 동작을 검증하는 고정 fixture 입니다.
 
-- `ok*.fe` must compile with `--target=bits32 --emit-c`.
-- `bad*.fe` must fail compilation; the first line follows the `// ERROR:<line>:<substring>` convention from SPEC §12.
-- They are registered in `src/ferrolang_vm/registry.py`, which is what decides whether a milestone runs.
-- When M6 starts, wire this directory into the DOS/QEMU gate without changing the expected result of any fixture.
-- M6 also owns the general-global borrow restriction from R10 because AGENTS.md explicitly groups that change with the `own.c` state-machine work.
+실행 방법:
 
-Coverage: R4 storage restrictions, R5 scope, R6 shared/exclusive liveness, root-local field/index conflicts, call-only `&mut -> &` reborrows, branch/loop `MaybeMoved` and initialization-state merging, R7 invalidation, R8 derived-return provenance joins, defer lifetime extension, and global borrow restrictions.
+`uv run python tests/run.py -k own`
+
+- `ok*.fe`는 통과해야 합니다.
+- `bad*.fe`는 실패해야 하며, 첫 줄 `// ERROR:...` 마커가 있으면 그 패턴을 따른다.
+
+현재 구현 범위는 타입 검사/의미 검사를 통과한 소스 기반만 포함하고, 별도 코드 생성/런타임 동작은 포함하지 않습니다.
