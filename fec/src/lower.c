@@ -62,6 +62,8 @@ static void lower_stmt(Lower *L, FeNode *n);
 static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
                        unsigned long size);
 static void lower_for(Lower *L, FeNode *n);
+static int fn_is_generic(const FeNode *fn);
+static void lower_fn_as(Lower *L, FeNode *fn, const char *name);
 static Slot lower_slice(Lower *L, FeNode *n);
 static void guard(Lower *L, unsigned ok, FeIrTrap reason, unsigned long line);
 static void lower_match(Lower *L, FeNode *n);
@@ -450,7 +452,7 @@ static Slot lower_call(Lower *L, FeNode *n)
 {
     unsigned args[16];
     unsigned count = 0;
-    FeNode *arg;
+    FeNode *arg = n->children;
     FeType *ret = n->sem_type;
     FeIrType rt = ir_type(ret);
     unsigned result_local = 0;
@@ -468,7 +470,28 @@ static Slot lower_call(Lower *L, FeNode *n)
                                    ir_align(ret), "result");
         args[count++] = fe_ir_addr(L->m, L->b, fe_ir_at_local(result_local, 0));
     }
-    for (arg = n->children; arg; arg = arg->next) {
+    /* A method call passes what it was reached through as its first argument.
+       `self: Self` and `self: &Self` are the same thing here: the address of
+       the receiver, because an aggregate never travels in a register. */
+    if (n->a && n->a->kind == FE_N_MEMBER && n->sem_decl) {
+        FeNode *first = n->sem_decl->a ? n->sem_decl->a->children : 0;
+        if (first && first->text && !strcmp(first->text, "self")) {
+            Slot recv = lower_expr(L, n->a->a);
+            args[count++] = recv.is_place ? as_address(L, recv, n->a->a)
+                                          : recv.temp;
+        }
+    }
+    /* A generic call passes its type arguments first. They were consumed when
+       the instance was chosen and carry no value, so they are not passed. */
+    {
+        FeNode *p;
+        for (p = n->sem_decl && n->sem_decl->a ? n->sem_decl->a->children : 0;
+             p && arg; p = p->next) {
+            if (!(p->flags & FE_NODE_COMPTIME)) break;
+            arg = arg->next;
+        }
+    }
+    for (; arg; arg = arg->next) {
         Slot a = lower_expr(L, arg);
         if (count >= 16) { fail(L, "too many arguments", n); break; }
         args[count++] = a.type == FE_IR_MEM ? as_address(L, a, arg)
@@ -1286,13 +1309,22 @@ static void lower_global(Lower *L, FeNode *n)
     fe_ir_global(L->m, n->cname, ir_type(t), size, ir_align(t), init);
 }
 
-static void lower_fn(Lower *L, FeNode *fn)
+static int fn_is_generic(const FeNode *fn)
+{
+    FeNode *p;
+    if (!fn) return 0;
+    for (p = fn->a ? fn->a->children : 0; p; p = p->next)
+        if (p->flags & FE_NODE_COMPTIME) return 1;
+    return 0;
+}
+
+static void lower_fn_as(Lower *L, FeNode *fn, const char *name)
 {
     FeNode *p;
     FeType *ret = fn->b ? fe_type_from_ast(&L->c->types, fn->b) : 0;
     FeIrFunc *f;
-    if (!fn->cname) return;
-    f = fe_ir_func(L->m, fn->cname, ir_type(ret), ir_size(ret));
+    if (!name) return;
+    f = fe_ir_func(L->m, name, ir_type(ret), ir_size(ret));
     if (!f) return;
     L->fn = f;
     L->ret_type = ret;
@@ -1302,10 +1334,16 @@ static void lower_fn(Lower *L, FeNode *fn)
     if (f->returns_by_address)
         L->ret_local = fe_ir_local(L->m, f, FE_IR_PTR, 4, 4, "result");
     for (p = fn->a ? fn->a->children : 0; p; p = p->next) {
-        FeType *pt = fe_type_from_ast(&L->c->types, p->a);
+        FeType *pt;
+        int by_address;
+        unsigned local;
+        /* A comptime parameter was consumed at compile time; it has no
+           storage and takes no argument slot. */
+        if (p->flags & FE_NODE_COMPTIME) continue;
+        pt = fe_type_from_ast(&L->c->types, p->a);
         /* An aggregate parameter arrives as an address. */
-        int by_address = ir_type(pt) == FE_IR_MEM;
-        unsigned local = by_address
+        by_address = ir_type(pt) == FE_IR_MEM;
+        local = by_address
             ? fe_ir_local(L->m, f, FE_IR_PTR, 4, 4, p->text)
             : fe_ir_local(L->m, f, ir_type(pt), ir_size(pt), ir_align(pt),
                           p->text);
@@ -1321,6 +1359,11 @@ static void lower_fn(Lower *L, FeNode *fn)
     lower_stmt(L, fn->c);
     /* A void function may just run off the end. */
     fe_ir_ret(L->b, 0, 0);
+}
+
+static void lower_fn(Lower *L, FeNode *fn)
+{
+    lower_fn_as(L, fn, fn->cname);
 }
 
 int fe_lower_program(FeCheck *c, FeIrModule *out)
@@ -1353,12 +1396,41 @@ int fe_lower_program(FeCheck *c, FeIrModule *out)
                 f = fe_ir_func(out, n->cname, ir_type(ret), ir_size(ret));
                 if (f) f->is_extern = 1;
             }
-            else if (n->kind == FE_N_FN && n->c) {
+            else if (n->kind == FE_N_FN && n->c && !fn_is_generic(n)) {
                 lower_fn(&L, n);
                 /* The entry unit is the one the build was rooted at. */
                 if (u == 0 && n->text && !strcmp(n->text, "main"))
                     out->entry_main = n->cname;
             }
+    }
+    /* Each instance the checker reached is a function of its own: the same
+       body, read with different types bound, under its own link name. This is
+       where monomorphisation actually produces code -- the front end only
+       decided which instances exist. */
+    for (u = 0; u < c->instance_count && !L.failed; ++u) {
+        FeInstance *inst = &c->instances[u];
+        FeUnit *home;
+        FeTypeBind save[FE_TYPE_PARAM_MAX];
+        unsigned save_count;
+        unsigned k;
+        if (!inst->decl || !inst->decl->c || !inst->cname || !inst->home)
+            continue;
+        home = 0;
+        for (k = 0; k < c->build->count; ++k)
+            if (!strcmp(c->build->units[k].name, inst->home))
+                home = &c->build->units[k];
+        if (!home) continue;
+        c->ast = &home->ast;
+        c->unit = home;
+        c->types.unit_name = home->name;
+        save_count = c->types.param_count;
+        for (k = 0; k < FE_TYPE_PARAM_MAX; ++k) save[k] = c->types.params[k];
+        c->types.param_count = inst->bind_count;
+        for (k = 0; k < inst->bind_count && k < FE_TYPE_PARAM_MAX; ++k)
+            c->types.params[k] = inst->binds[k];
+        lower_fn_as(&L, inst->decl, inst->cname);
+        c->types.param_count = save_count;
+        for (k = 0; k < FE_TYPE_PARAM_MAX; ++k) c->types.params[k] = save[k];
     }
     return !L.failed;
 }

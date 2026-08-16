@@ -1,0 +1,21 @@
+// EXIT:39
+unit generic;
+
+struct Box(T) {
+    value: T,
+
+    pub fn new(v: T) -> Self { return Self{ value: v }; }
+    pub fn get(self: &Self) -> T { return self.value; }
+}
+
+fn id(comptime T: type, v: T) -> T { return v; }
+
+fn twice(comptime T: type, v: T) -> T { return v + v; }
+
+fn main() -> i32 {
+    let a: i32 = id(i32, 7);
+    let b: u8 = id(u8, 9 as u8);
+    let c: i32 = twice(i32, 10);
+    let box: Box(i32) = Box(i32).new(3);
+    return a + (b as i32) + c + box.get();
+}

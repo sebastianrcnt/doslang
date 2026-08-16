@@ -464,12 +464,14 @@ static void pop_bindings(FeCheck *c, const FeBindSave *save);
 static void bind_self(FeCheck *c, FeType *owner);
 static void instance_key(char *out, const char *unit, const char *name,
                          FeType **args, unsigned count);
-static int instance_record(FeCheck *c, const char *key, FeLoc loc);
+static int instance_record(FeCheck *c, const char *key, FeLoc loc,
+                           FeNode *decl, FeUnit *home, FeType *owner);
+static const char *instance_cname(FeCheck *c, const char *key);
 static int instance_descend(FeCheck *c, FeLoc loc);
 static void instantiate_body(FeCheck *c, FeUnit *home, FeNode *decl,
                              FeType *owner, FeBindSave *bindings, FeLoc site);
 static void check_instance_method(FeCheckerState *s, FeType *owner,
-                                  FeNode *method, FeLoc site);
+                                  FeNode *method, FeLoc site, FeNode *call);
 
 typedef struct FeFlowSlot {
     FeSym *sym;
@@ -1318,7 +1320,7 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                     fe_type_intern(&c->types,"void");
                 if (bound) {
                     pop_bindings(c,&msave);
-                    check_instance_method(s,et,method,n->loc);
+                    check_instance_method(s,et,method,n->loc,n);
                 }
                 return n->sem_type;
             }
@@ -2249,6 +2251,14 @@ static void instance_key(char *out, const char *unit, const char *name,
 
 /* Already built, or being built right now. Re-asking for a pending instance is
    how a recursive generic terminates, so it must not look like a new one. */
+static const char *instance_cname(FeCheck *c, const char *key)
+{
+    unsigned i;
+    for (i=0;i<c->instance_count;++i)
+        if (!strcmp(c->instances[i].key,key)) return c->instances[i].cname;
+    return 0;
+}
+
 static int instance_known(FeCheck *c, const char *key)
 {
     unsigned i;
@@ -2257,14 +2267,27 @@ static int instance_known(FeCheck *c, const char *key)
     return 0;
 }
 
-static int instance_record(FeCheck *c, const char *key, FeLoc loc)
+static int instance_record(FeCheck *c, const char *key, FeLoc loc,
+                           FeNode *decl, FeUnit *home, FeType *owner)
 {
+    FeInstance *inst;
+    unsigned i;
     if (instance_known(c,key)) return 0;
     if (c->instance_count>=FE_GENERIC_INSTANCE_MAX) {
         err(c,loc,"too many generic instances");
         return -1;
     }
-    strcpy(c->instances[c->instance_count].key,key);
+    inst=&c->instances[c->instance_count];
+    strcpy(inst->key,key);
+    inst->decl=decl;
+    inst->home=home ? home->name : 0;
+    inst->owner=owner;
+    inst->cname=unit_cname(c,key);
+    /* The bindings in force right now are the ones this instance was built
+       with, and lowering has to see exactly those again. */
+    inst->bind_count=c->types.param_count;
+    for (i=0;i<c->types.param_count && i<FE_TYPE_PARAM_MAX;++i)
+        inst->binds[i]=c->types.params[i];
     ++c->instance_count;
     return 1;
 }
@@ -2357,7 +2380,7 @@ static FeType *instantiate_struct(FeCheck *c, FeUnit *home, const char *name,
         return unknown(c);
     }
     instance_key(key,home->name,name,args,count);
-    if (instance_record(c,key,loc)<0) return unknown(c);
+    if (instance_record(c,key,loc,decl,home,0)<0) return unknown(c);
     return build_struct_instance(c,home,decl,key,args,count);
 }
 
@@ -2537,8 +2560,10 @@ static FeType *check_generic_call(FeCheckerState *s, FeNode *n, FeSym *sym,
     instance_key(key,home->name,decl->text,args,want);
     push_bindings(c,&save,decl,args,want);
     result=check_call_args(s,n,sym,home->name,want);
+    fresh=instance_record(c,key,n->loc,decl,home,0);
     pop_bindings(c,&save);
-    fresh=instance_record(c,key,n->loc);
+    /* The call goes to this instance, not to the declaration it came from. */
+    if (n->a) n->a->cname=(char *)instance_cname(c,key);
     if (fresh>0) {
         if (!instance_descend(c,n->loc)) return result;
         push_bindings(c,&save,decl,args,want);
@@ -2572,8 +2597,9 @@ static FeType *check_static_method_call(FeCheckerState *s, FeNode *n,
     push_instance_bindings(c,&save,owner);
     bind_self(c,owner);
     result=check_call_args(s,n,&fake,home->name,0);
+    fresh=instance_record(c,key,n->loc,method,home,owner);
     pop_bindings(c,&save);
-    fresh=instance_record(c,key,n->loc);
+    if (n->a) n->a->cname=(char *)instance_cname(c,key);
     if (fresh>0) {
         if (!instance_descend(c,n->loc)) return result;
         push_instance_bindings(c,&save,owner);
@@ -2587,7 +2613,7 @@ static FeType *check_static_method_call(FeCheckerState *s, FeNode *n,
 
 /* The body of a method on a generic instance, checked once per instance. */
 static void check_instance_method(FeCheckerState *s, FeType *owner,
-                                  FeNode *method, FeLoc site)
+                                  FeNode *method, FeLoc site, FeNode *call)
 {
     FeCheck *c=s->c;
     FeUnit *home=current_unit(c);
@@ -2596,7 +2622,17 @@ static void check_instance_method(FeCheckerState *s, FeType *owner,
     FeType *self_args[1];
     self_args[0]=owner;
     instance_key(key,home->name,method->text,self_args,1);
-    if (instance_record(c,key,site)<=0) return;
+    {
+        FeBindSave probe;
+        int fresh;
+        push_instance_bindings(c,&probe,owner);
+        bind_self(c,owner);
+        fresh=instance_record(c,key,site,method,home,owner);
+        pop_bindings(c,&probe);
+        /* The call names this instance's copy of the method. */
+        if (call && call->a) call->a->cname=(char *)instance_cname(c,key);
+        if (fresh<=0) return;
+    }
     if (!instance_descend(c,site)) return;
     push_instance_bindings(c,&save,owner);
     bind_self(c,owner);

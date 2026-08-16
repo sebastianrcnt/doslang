@@ -14,6 +14,15 @@ typedef struct FeScope FeScope;
 #define FE_GENERIC_INSTANCE_MAX 512
 typedef struct FeInstance {
     char key[FE_GENERIC_KEY_MAX];
+    /* What lowering needs to build this instance's code: the declaration, the
+       arguments bound while it was checked, the unit those names belong to,
+       and the name the linker will see. */
+    FeNode *decl;
+    FeTypeBind binds[FE_TYPE_PARAM_MAX];
+    unsigned bind_count;
+    const char *home;
+    const char *cname;
+    FeType *owner;               /* set when the instance is a method */
 } FeInstance;
 
 /* The checker spans a whole build, not one file. Names cross unit boundaries,
