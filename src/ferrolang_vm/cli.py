@@ -44,6 +44,8 @@ def main() -> int:
         commands.add_parser(name)
     reset = commands.add_parser("reset")
     reset.add_argument("--timeout", type=int, default=45)
+    soft_reset = commands.add_parser("soft-reset")
+    soft_reset.add_argument("--timeout", type=int, default=45)
     execute = commands.add_parser("exec")
     execute.add_argument("command")
     put = commands.add_parser("put")
@@ -63,10 +65,13 @@ def main() -> int:
             recognized = RapidOCR()(result["path"])
             print("\n".join(recognized.txts or ()))
             return 0
-        if args.op == "reset":
-            rpc({"op": "stop"}, start_daemon=True)
-            time.sleep(.5)
-            rpc({"op": "start"}, start_daemon=True)
+        if args.op in ("reset", "soft-reset"):
+            if args.op == "reset":
+                rpc({"op": "stop"}, start_daemon=True)
+                time.sleep(.5)
+                rpc({"op": "start"}, start_daemon=True)
+            else:
+                rpc({"op": "soft-reset"})
             # FreeDOS displays its default boot menu before FDAUTO.BAT starts
             # TCPAGENT. This is input, not a readiness delay.
             time.sleep(2)
@@ -75,7 +80,7 @@ def main() -> int:
             while time.monotonic() < deadline:
                 try:
                     if str(rpc({"op": "ping"})["response"]).startswith("OK 504F4E47"):
-                        print(json.dumps({"reset": True, "agent": "PONG"}))
+                        print(json.dumps({"reset": args.op, "agent": "PONG"}))
                         return 0
                 except RuntimeError:
                     time.sleep(.5)

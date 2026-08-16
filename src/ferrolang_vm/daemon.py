@@ -232,6 +232,10 @@ class Host:
             return {"agent_connected": self.agent_ready.is_set(), "qemu_running": running, "log": str(LOG_PATH)}
         if op == "start": return self.start()
         if op == "stop": return self.stop()
+        if op == "soft-reset":
+            self.monitor("system_reset")
+            log_event(logging.INFO, "qemu soft reset requested")
+            return {"reset": "requested"}
         if op == "ping": return self.ping()
         if op == "exec": return self.exec(str(request["command"]))
         if op == "put": return self.put(str(request["source"]), str(request["destination"]))

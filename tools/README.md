@@ -26,6 +26,8 @@ lnav .qemu/ferro-vm.log
 Commands:
 
 ```powershell
+uv run ferro-vm reset       # clean QEMU quit and restart
+uv run ferro-vm soft-reset  # QEMU system_reset
 uv run ferro-vm ping
 uv run ferro-vm exec 'dir C:\FEC'
 uv run ferro-vm put fec/src/check.c 'C:\FEC\SRC\CHECK.C'
@@ -35,8 +37,9 @@ uv run ferro-vm ocr
 uv run ferro-vm stop
 ```
 
-The daemon logs command metadata, DOS output, exit status, transfers, and
-agent lifecycle events as UTF-8 lines. It deliberately never logs raw binary
+Both reset modes wait for FreeDOS to boot, submit the default boot-menu Enter,
+and require TCPAGENT `PING`/`PONG` before succeeding. The daemon logs command
+metadata, DOS output, exit status, transfers, and agent lifecycle events as UTF-8 lines. It deliberately never logs raw binary
 payloads or protocol hex.
 
 ## Standalone OCR
