@@ -24,6 +24,10 @@ int fe_own_is_copy_type(FeType *type)
     if (type->kind == FE_TYPE_OWNED) return 0;
     if (type->kind == FE_TYPE_REF || type->kind == FE_TYPE_SLICE)
         return !type->ref_mut;
+    if (type->kind == FE_TYPE_OPTIONAL)
+        return fe_own_is_copy_type(type->elem);
+    if (type->kind == FE_TYPE_ERROR_UNION)
+        return fe_own_is_copy_type(type->error_value);
     if (type->kind == FE_TYPE_ARRAY)
         return fe_own_is_copy_type(type->elem);
     if (type->kind == FE_TYPE_STRUCT) {
@@ -314,9 +318,6 @@ static int fe_own_live_add(FeOwnLiveness *live, FeNode *decl)
     FeOwnLastUse *slot;
     unsigned capacity;
     const char *cname;
-    /* This prepass runs before local inference.  Recording every local is
-       harmless (only reference bindings consume the result) and lets an
-       inferred `let r = &x` participate in last-use analysis. */
     if (!live || !decl || !live->arena)
         return 1;
     cname = decl->cname ? decl->cname : decl->text;
@@ -450,6 +451,23 @@ const FeOwnLastUse *fe_own_last_use(const FeOwnLiveness *live,
     return 0;
 }
 
+static int fe_own_replace_unwrap(FeNode *expr)
+{
+    FeNode *call;
+    FeNode *member;
+    if (!expr || expr->kind != FE_N_MEMBER || !expr->text ||
+        strcmp(expr->text,".?") != 0)
+        return 0;
+    call=expr->a;
+    if (!call || call->kind != FE_N_CALL || !call->a ||
+        call->a->kind != FE_N_MEMBER)
+        return 0;
+    member=call->a;
+    return member->a && member->a->kind==FE_N_IDENT && member->a->text &&
+           strcmp(member->a->text,"mem")==0 && member->b && member->b->text &&
+           strcmp(member->b->text,"replace")==0;
+}
+
 void fe_own_mark_consumed(FeDiags *diags, int *state, FeNode *decl,
                           FeNode *expr, FeType *type, int in_defer)
 {
@@ -457,7 +475,8 @@ void fe_own_mark_consumed(FeDiags *diags, int *state, FeNode *decl,
     if (expr->kind == FE_N_INDEX && type->kind == FE_TYPE_SLICE &&
         (expr->c || !expr->b))
         return;
-    if (expr->kind == FE_N_MEMBER || expr->kind == FE_N_INDEX) {
+    if ((expr->kind == FE_N_MEMBER || expr->kind == FE_N_INDEX) &&
+        !fe_own_replace_unwrap(expr)) {
         fe_diag_error(diags, expr->loc,
             "cannot move a non-Copy value out of a projection; use mem.replace");
         return;
@@ -470,8 +489,6 @@ void fe_own_mark_consumed(FeDiags *diags, int *state, FeNode *decl,
     }
 
     *state = FE_OWN_MOVED;
-    /* The consuming use owns the live-flag transition.  The declaration must
-       stay live on control-flow paths where the move did not execute. */
     expr->flags |= FE_OWN_NODE_CONSUMED;
 }
 
