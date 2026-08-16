@@ -25,3 +25,6 @@ __pycache__/
 node_modules/
 .npm/
 .cache/
+
+# host build output of the front end
+.build/
