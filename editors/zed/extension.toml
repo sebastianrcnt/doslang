@@ -1,0 +1,11 @@
+id = "ferro"
+name = "Ferro"
+version = "0.0.1"
+schema_version = 1
+authors = ["sebastianrcnt"]
+description = "Ferro syntax highlighting for Zed"
+repository = "https://github.com/sebastianrcnt/doslang"
+
+[grammars.ferro]
+repository = "https://github.com/tree-sitter/tree-sitter-rust"
+rev = "77a3747266f4d621d0757825e6b11edcbf991ca5"
