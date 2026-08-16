@@ -294,6 +294,7 @@ static void m7_emit_drop_helpers(FeEmitter *e)
 static void m7_emit_type_helpers(FeEmitter *e)
 {
     FeType *t;
+    FeType *st;
     unsigned i;
     unsigned j;
     const char *ct;
@@ -396,11 +397,34 @@ static void m7_emit_type_helpers(FeEmitter *e)
             if (!e->no_checks)
                 fprintf(e->out,"if (i >= %lu) fe_trap_bounds(); ",t->length);
             fputs("return x.a[i]; }\n",e->out);
+            if (t->slicer) {
+                st=fe_type_slice(&e->check->types,t->elem);
+                fprintf(e->out,"static %s %s(%s *x, unsigned long a, unsigned long b) { ",
+                        m7_c_type(e,st),t->slicer,m7_c_type(e,t));
+                if (!e->no_checks)
+                    fprintf(e->out,"if (a > b || b > %lu) fe_trap_bounds(); ",t->length);
+                fprintf(e->out,"return %s(x->a+a,b-a); }\n",st->maker);
+                fprintf(e->out,"static %s %s(%s *x) { return %s(x,0,%lu); }\n",
+                        m7_c_type(e,st),t->full_slicer,m7_c_type(e,t),t->slicer,t->length);
+                fprintf(e->out,"static %s %s(%s *x, unsigned long a) { return %s(x,a,%lu); }\n",
+                        m7_c_type(e,st),t->tail_slicer,m7_c_type(e,t),t->slicer,t->length);
+            }
         } else if (t->kind==FE_TYPE_SLICE && t->indexer) {
             fprintf(e->out,"static %s %s(%s x, unsigned long i) { ",
                     m7_c_type(e,t->elem),t->indexer,m7_c_type(e,t));
             if (!e->no_checks) fputs("if (i >= x.n) fe_trap_bounds(); ",e->out);
             fputs("return x.p[i]; }\n",e->out);
+            if (t->slicer) {
+                fprintf(e->out,"static %s %s(%s x, unsigned long a, unsigned long b) { ",
+                        m7_c_type(e,t),t->slicer,m7_c_type(e,t));
+                if (!e->no_checks)
+                    fputs("if (a > b || b > x.n) fe_trap_bounds(); ",e->out);
+                fprintf(e->out,"return %s(x.p+a,b-a); }\n",t->maker);
+                fprintf(e->out,"static %s %s(%s x) { return %s(x,0,x.n); }\n",
+                        m7_c_type(e,t),t->full_slicer,m7_c_type(e,t),t->slicer);
+                fprintf(e->out,"static %s %s(%s x, unsigned long a) { return %s(x,a,x.n); }\n",
+                        m7_c_type(e,t),t->tail_slicer,m7_c_type(e,t),t->slicer);
+            }
         }
     }
 }
@@ -492,6 +516,14 @@ static void emit_lvalue(FeEmitter *e, FeNode *n)
     FeType *bt;
     if (!n) { fputs("fe_bad_lvalue",e->out); return; }
     if (n->kind==FE_N_IDENT) {
+        fputs(cname(n,"fe_local"),e->out);
+        return;
+    }
+    /* A declaration names its own storage.  The initializer for `let`/`var` is
+       emitted as a separate assignment statement, so the declaration node is
+       handed here as the target; without this it falls through to the raw
+       expression path, which emits a declaration as "0" and produces `0 = ...`. */
+    if (n->kind==FE_N_LET || n->kind==FE_N_VAR || n->kind==FE_N_CONST) {
         fputs(cname(n,"fe_local"),e->out);
         return;
     }
@@ -762,12 +794,31 @@ static void m7_emit_raw_expr(FeEmitter *e, FeNode *n)
     (void)x;
 }
 
+/* Emit the initializer for a `const` declaration.
+
+   A string literal normally lowers to a maker call, but C89 requires the
+   initializer of an aggregate -- at file scope and for automatics alike -- to be
+   a constant expression, and the build runs with -za.  Emit the slice braced
+   instead.  Returns non-zero when it handled the initializer. */
+static int m7_emit_const_init(FeEmitter *e, FeNode *n)
+{
+    if (n->kind!=FE_N_CONST || !n->b || n->b->kind!=FE_N_LITERAL ||
+        !n->b->text || n->b->text[0]!='"') return 0;
+    fputs("{ (const unsigned char*)",e->out);
+    emit_c_literal(e->out,n->b->text,1);
+    fputs(", sizeof(",e->out);
+    emit_c_literal(e->out,n->b->text,1);
+    fputs(")-1 }",e->out);
+    return 1;
+}
+
 static void emit_decl(FeEmitter *e, FeNode *n)
 {
     pad(e); fputs(m7_c_type(e,n->sem_type),e->out); fputc(' ',e->out);
     fputs(cname(n,"fe_local"),e->out);
     if (n->kind==FE_N_CONST && n->b) {
-        fputs(" = ",e->out); emit_expr(e,n->b);
+        fputs(" = ",e->out);
+        if (!m7_emit_const_init(e,n)) emit_expr(e,n->b);
     }
     fputs(";\n",e->out);
     if ((n->kind==FE_N_LET || n->kind==FE_N_VAR) && n->sem_type &&
@@ -1267,7 +1318,10 @@ void fe_emit_c_program(FeEmitter *e)
         if (n->kind==FE_N_GLOBAL || n->kind==FE_N_CONST) {
             fputs(m7_c_type(e,n->sem_type),e->out); fputc(' ',e->out);
             fputs(cname(n,"fe_global"),e->out);
-            if (n->b) { fputs(" = ",e->out); emit_expr(e,n->b); }
+            if (n->b) {
+                fputs(" = ",e->out);
+                if (!m7_emit_const_init(e,n)) emit_expr(e,n->b);
+            }
             fputs(";\n",e->out);
         }
     }
