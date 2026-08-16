@@ -287,13 +287,14 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
         console = run_root / "CONSOLE.LOG"
         config = run_root / "DOSBOX.CON"
         config.write_text(
-            # Do not tune [cpu] here. core=dynamic is roughly 5x faster but the
-            # recompiler loses abort()'s exit status -- a program that traps
-            # exits 0 instead, so the M3 bounds cases stop reporting the trap
-            # they exist to prove. Verified against a compiler built under
-            # core=normal, so it is the runtime and not the build.
+            # core=auto leaves real mode on the interpreter, which is where the
+            # 16-bit compiler build spends its time. Nothing here is timing
+            # sensitive -- a compiler and a batch file -- so ask for the
+            # recompiler explicitly. The M3 bounds cases confirm abort() still
+            # reports its exit status under it.
             f"[log]\nlogfile={console}\n"
-            f"[dosbox]\nlog console=quiet\n",
+            f"[dosbox]\nlog console=quiet\n"
+            f"[cpu]\ncore=dynamic\ncycles=max\n",
             encoding="ascii",
         )
         if cached.is_file():
