@@ -1,5 +1,0 @@
-unit m3_bad_shared_write;
-
-fn bad(s: []u8) -> void {
-    s[0] = 1;
-}

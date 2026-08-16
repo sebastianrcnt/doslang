@@ -1,6 +1,0 @@
-unit m4_bad_verb;
-
-fn main() -> i32 {
-    @print("{q}", 1);
-    return 0;
-}

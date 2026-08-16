@@ -302,12 +302,46 @@ static FeNode *statement(FeParser *p)
     e=expr(p,0); if(is(p,FE_TOK_EQ)||is(p,FE_TOK_PLUS_EQ)||is(p,FE_TOK_MINUS_EQ)||is(p,FE_TOK_STAR_EQ)||is(p,FE_TOK_SLASH_EQ)||is(p,FE_TOK_PERCENT_EQ)||is(p,FE_TOK_AND_EQ)||is(p,FE_TOK_OR_EQ)||is(p,FE_TOK_XOR_EQ)||is(p,FE_TOK_SHL_EQ)||is(p,FE_TOK_SHR_EQ)){n=toknode(p,FE_N_ASSIGN,p->current);n->a=e;next(p);n->b=expr(p,0);}else{n=toknode(p,FE_N_EXPR_STMT,t);n->a=e;}want(p,FE_TOK_SEMI,"expected ';' after statement");return n;
 }
 
+/* A unit path is dotted: `game.world.map`. It is stored canonically, dots and
+   all, because that spelling is the unit's identity everywhere else. */
+static char *unit_path(FeParser *p)
+{
+    char buf[256];
+    unsigned long len=0;
+    if(!is_name(p)) return 0;
+    for(;;) {
+        unsigned long n=p->current.length;
+        if(len && len+1<sizeof buf) buf[len++]='.';
+        if(len+n>=sizeof buf){error(p,"unit path is too long");return 0;}
+        memcpy(buf+len,p->current.begin,n);
+        len+=n;
+        next(p);
+        if(!eat(p,FE_TOK_DOT)) break;
+        if(!is_name(p)){error(p,"expected a name after '.' in unit path");return 0;}
+    }
+    return fe_arena_strdup(&p->ast->arena,buf,len);
+}
+
 FeNode *fe_parse_unit(FeParser *p)
 {
-    FeToken t=p->current, name; FeNode *root;
+    FeToken t=p->current; FeNode *root; char *path;
     if(!eat(p,FE_TOK_UNIT)){error(p,"source must start with 'unit'");return fe_node(p->ast,FE_N_ERROR_NODE,t.loc,"unit",4);}
-    root=toknode(p,FE_N_UNIT,t);if(is_name(p)){name=p->current;root->text=fe_arena_strdup(&p->ast->arena,name.begin,name.length);next(p);}else error(p,"expected unit name");want(p,FE_TOK_SEMI,"expected ';' after unit name");
-    while(eat(p,FE_TOK_IMPORT)){FeToken it=p->previous;FeNode *i=toknode(p,FE_N_IMPORT,it);if(is_name(p)){next(p);i->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected import name");want(p,FE_TOK_SEMI,"expected ';' after import");fe_node_add(root,i);}
+    root=toknode(p,FE_N_UNIT,t);
+    path=unit_path(p);
+    if(path) root->text=path; else error(p,"expected unit name");
+    want(p,FE_TOK_SEMI,"expected ';' after unit name");
+    while(eat(p,FE_TOK_IMPORT)){
+        FeToken it=p->previous;FeNode *i=toknode(p,FE_N_IMPORT,it);
+        path=unit_path(p);
+        if(path) i->text=path; else error(p,"expected import name");
+        /* `as` renames the binding; without it the binding is the last segment. */
+        if(eat(p,FE_TOK_AS)) {
+            if(is_name(p)){i->aux_text=fe_arena_strdup(&p->ast->arena,p->current.begin,p->current.length);next(p);}
+            else error(p,"expected an alias name after 'as'");
+        }
+        want(p,FE_TOK_SEMI,"expected ';' after import");
+        fe_node_add(root,i);
+    }
     while(!is(p,FE_TOK_EOF)){FeNode *d=decl(p);if(d)fe_node_add(root,d);}
     return root;
 }

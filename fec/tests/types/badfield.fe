@@ -1,4 +1,4 @@
-unit fail_m3_let_field;
+unit badfield;
 
 struct Point { x: i32, y: i32, }
 fn main() -> i32 {

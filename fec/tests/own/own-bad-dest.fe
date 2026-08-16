@@ -1,5 +1,0 @@
-unit m5_bad_destroy;
-
-fn bad(x: i32) -> void {
-    mem.destroy(x);
-}

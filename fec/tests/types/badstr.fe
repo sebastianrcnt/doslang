@@ -1,4 +1,4 @@
-unit fail_m3_str;
+unit badstr;
 fn main() -> i32 {
     var text: str = "abc";
     text[0] = 'z';

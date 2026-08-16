@@ -1,0 +1,8 @@
+unit bad_cond;
+
+fn take(p: ^i32) -> void { mem.destroy(p); }
+
+fn bad(p: ^i32, flag: bool) -> void {
+    if flag { take(p); }
+    p.^ = 3;
+}

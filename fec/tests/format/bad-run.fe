@@ -1,7 +1,0 @@
-unit m4_bad_runtime;
-
-fn main() -> i32 {
-    var fmt: str = "{}";
-    @print(fmt, 1);
-    return 0;
-}

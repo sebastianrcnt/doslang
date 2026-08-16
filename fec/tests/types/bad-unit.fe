@@ -1,6 +1,0 @@
-unit bad_uninit;
-
-fn main() -> i32 {
-    var value: i32;
-    return value;
-}

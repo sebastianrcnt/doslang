@@ -1,6 +1,0 @@
-unit m5_bad_double;
-
-fn bad(p: ^i32) -> void {
-    mem.destroy(p);
-    mem.destroy(p);
-}

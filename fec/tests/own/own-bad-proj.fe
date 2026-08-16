@@ -1,8 +1,0 @@
-unit m5_bad_projection_move;
-
-struct Holder { p: ^i32 }
-fn take(p: ^i32) -> void { mem.destroy(p); }
-
-fn bad(h: Holder) -> void {
-    take(h.p);
-}

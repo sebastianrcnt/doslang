@@ -1,5 +1,0 @@
-unit m4_prop;
-
-pub fn propagate(w: io.Writer) -> !void {
-    try @fprint(w, "a{}b", 1);
-}

@@ -1,4 +1,4 @@
-unit fail_m3_char;
+unit badchar;
 
 fn main() -> i32 {
     let u: u8 = 'A';

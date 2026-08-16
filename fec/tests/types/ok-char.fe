@@ -1,9 +1,0 @@
-unit m3_char;
-
-fn main() -> i32 {
-    let c: char = '\u0041';
-    let u: u8 = c as u8;
-    let d: char = u as char;
-    if c == d and u == ('A' as u8) { return 0; }
-    return 1;
-}

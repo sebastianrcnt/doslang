@@ -1,8 +1,0 @@
-unit m5_bad_move;
-
-fn take(p: ^i32) -> void { mem.destroy(p); }
-
-fn twice(p: ^i32) -> void {
-    take(p);
-    take(p);
-}

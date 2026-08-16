@@ -1,5 +1,6 @@
 #include "parser.h"
 #include "check.h"
+#include "resolve.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,15 @@ int main(int argc, char **argv)
         fe_ast_destroy(&ast);
         free(src);
         return d.errors?1:0;
+    }
+    /* Unit identity before semantic analysis: a unit that is not named
+       correctly, or does not sit where its name says, cannot be resolved from
+       another unit either. */
+    fe_resolve_unit_identity(&ast,&d,file);
+    if(d.errors){
+        fe_ast_destroy(&ast);
+        free(src);
+        return 1;
     }
     fe_check_init(&check,&ast,&d,pointer_bits,no_checks);
     if(!fe_check_program(&check)){

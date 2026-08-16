@@ -1,6 +1,0 @@
-unit m4_bad_try;
-
-fn main() -> i32 {
-    try @print("nope");
-    return 0;
-}

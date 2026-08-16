@@ -1,4 +1,4 @@
-unit fail_m3_cycle;
+unit badcycle;
 
 struct A { b: B, }
 struct B { a: A, }

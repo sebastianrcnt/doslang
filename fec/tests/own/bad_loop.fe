@@ -1,0 +1,7 @@
+unit bad_loop;
+
+fn take(p: ^i32) -> void { mem.destroy(p); }
+
+fn bad(p: ^i32, again: bool) -> void {
+    while again { take(p); }
+}
