@@ -137,6 +137,10 @@ int fe_type_is_integer(const FeType *t);
 int fe_type_is_indexable(const FeType *t);
 const char *fe_type_c_name(const FeType *t, unsigned pointer_bits);
 unsigned long fe_type_size(const FeType *t);
+/* Where the payload of an optional or an error union sits. The tag comes
+   first and the value is aligned after it; both the layout pass and the
+   code generator have to agree, so the rule lives in one place. */
+unsigned long fe_type_payload_offset(const FeType *t);
 unsigned fe_type_align(const FeType *t);
 
 #endif

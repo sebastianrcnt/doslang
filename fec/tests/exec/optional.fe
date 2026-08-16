@@ -1,0 +1,15 @@
+// EXIT:42
+unit optional;
+
+fn pick(flag: bool) -> ?i32 {
+    if flag { return 42; }
+    return null;
+}
+
+fn main() -> i32 {
+    let a: ?i32 = pick(true);
+    let b: ?i32 = pick(false);
+    let x: i32 = a orelse 0;
+    let y: i32 = b orelse 0;
+    return x + y;
+}

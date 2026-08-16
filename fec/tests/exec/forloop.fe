@@ -1,0 +1,11 @@
+// EXIT:60
+unit forloop;
+
+fn main() -> i32 {
+    let a: [5]i32 = [4, 8, 12, 16, 20];
+    var sum: i32 = 0;
+    for v in a {
+        sum = sum + v.^;
+    }
+    return sum;
+}

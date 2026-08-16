@@ -1,5 +1,6 @@
 #include "lower.h"
 #include <string.h>
+#include "m7.h"
 #include <stdio.h>
 
 /* ------------------------------------------------------------------------- *
@@ -35,6 +36,16 @@ typedef struct Lower {
     unsigned break_target[32];
     unsigned continue_target[32];
     unsigned loop_depth;
+    /* `defer` blocks in the order they were written. Every exit path runs the
+       ones that are live, last written first. */
+    FeNode *deferred[32];
+    unsigned defer_count;
+    /* Every `error.Name` used anywhere in the build, sorted, numbered from one.
+       SPEC 4.6: the names are collected rather than declared, and the order is
+       fixed by the spelling so that the same program always gets the same
+       codes however the build was ordered. */
+    const char *error_names[256];
+    unsigned error_count;
     int failed;
 } Lower;
 
@@ -50,6 +61,19 @@ static Slot lower_expr(Lower *L, FeNode *n);
 static void lower_stmt(Lower *L, FeNode *n);
 static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
                        unsigned long size);
+static void lower_for(Lower *L, FeNode *n);
+static Slot wrap_context(Lower *L, Slot v, FeNode *n);
+static Slot lower_try(Lower *L, FeNode *n);
+static Slot lower_lazy(Lower *L, FeNode *n, int is_catch);
+static Slot wrapper_payload(Lower *L, Slot w, const FeType *t);
+static unsigned scratch(Lower *L, const FeType *t, const char *why);
+static int uses_niche(const FeType *t);
+static FeIrType tag_type(const FeType *t);
+static void run_deferred(Lower *L, unsigned from);
+static unsigned declare_var(Lower *L, const char *cname, const FeType *t,
+                            const char *name);
+static void indexable_parts(Lower *L, Slot base, const FeType *t,
+                            unsigned *data, unsigned *length, FeNode *n);
 
 static void fail(Lower *L, const char *why, FeNode *n)
 {
@@ -204,6 +228,19 @@ static void guard(Lower *L, unsigned ok, FeIrTrap reason, unsigned long line)
     L->b = cont;
 }
 
+/* A tag says which of the two things a wrapper holds. An optional is one byte
+   at the front unless the payload has a spare representation; an error union is
+   a two-byte error code, and zero means there is no error. */
+static FeIrType tag_type(const FeType *t)
+{
+    return t && t->kind == FE_TYPE_ERROR_UNION ? FE_IR_I16 : FE_IR_I8;
+}
+
+static int uses_niche(const FeType *t)
+{
+    return t && t->kind == FE_TYPE_OPTIONAL && fe_m7_optional_uses_niche(t->elem);
+}
+
 /* Somewhere to build an aggregate that has no home of its own yet. */
 static unsigned scratch(Lower *L, const FeType *t, const char *why)
 {
@@ -233,6 +270,46 @@ static void indexable_parts(Lower *L, Slot base, const FeType *t,
         lp.offset += SLICE_LEN_OFFSET;
         *length = fe_ir_load(L->m, L->b, FE_IR_I32, lp);
     }
+}
+
+/* ------------------------------------------------------- error codes ----- */
+
+static void note_error_name(Lower *L, const char *name)
+{
+    unsigned i;
+    unsigned at;
+    if (!name || L->error_count >= 256) return;
+    for (i = 0; i < L->error_count; ++i)
+        if (!strcmp(L->error_names[i], name)) return;
+    /* Kept sorted as it is built, so the numbering is the spelling order. */
+    at = L->error_count;
+    while (at > 0 && strcmp(L->error_names[at - 1], name) > 0) {
+        L->error_names[at] = L->error_names[at - 1];
+        --at;
+    }
+    L->error_names[at] = name;
+    ++L->error_count;
+}
+
+static void collect_error_names(Lower *L, FeNode *n)
+{
+    FeNode *x;
+    if (!n) return;
+    if (n->kind == FE_N_MEMBER && n->a && n->a->kind == FE_N_IDENT &&
+        n->a->text && !strcmp(n->a->text, "error") && n->b && n->b->text)
+        note_error_name(L, n->b->text);
+    collect_error_names(L, n->a);
+    collect_error_names(L, n->b);
+    collect_error_names(L, n->c);
+    for (x = n->children; x; x = x->next) collect_error_names(L, x);
+}
+
+static long error_code(Lower *L, const char *name)
+{
+    unsigned i;
+    for (i = 0; i < L->error_count; ++i)
+        if (!strcmp(L->error_names[i], name)) return (long)(i + 1);
+    return 0;
 }
 
 /* ---------------------------------------------------------- expressions --- */
@@ -363,7 +440,19 @@ static Slot lower_call(Lower *L, FeNode *n)
     return slot_value(fe_ir_call(L->m, L->b, rt, callee, args, count), rt);
 }
 
+static Slot lower_expr_core(Lower *L, FeNode *n);
+
+/* Every expression may be standing where a wrapper is expected, so the wrap is
+   applied once, here, rather than at each place that could need it. */
 static Slot lower_expr(Lower *L, FeNode *n)
+{
+    Slot v;
+    if (!n || L->failed) return slot_void();
+    v = lower_expr_core(L, n);
+    return n->sem_context ? wrap_context(L, v, n) : v;
+}
+
+static Slot lower_expr_core(Lower *L, FeNode *n)
 {
     FeType *t;
     FeIrType it;
@@ -397,6 +486,8 @@ static Slot lower_expr(Lower *L, FeNode *n)
         unsigned a;
         unsigned b;
         FeIrType operand;
+        if (n->text && !strcmp(n->text, "orelse")) return lower_lazy(L, n, 0);
+        if (n->text && !strcmp(n->text, "catch")) return lower_lazy(L, n, 1);
         if (n->text && (!strcmp(n->text, "and") || !strcmp(n->text, "or")))
             return lower_logical(L, n, !strcmp(n->text, "and"));
         op = binary_op(n->text, &is_cmp);
@@ -410,6 +501,7 @@ static Slot lower_expr(Lower *L, FeNode *n)
                           is_cmp ? FE_IR_I8 : operand);
     }
     case FE_N_UNARY:
+        if (n->text && !strcmp(n->text, "try")) return lower_try(L, n);
         if (n->text && !strcmp(n->text, "-")) {
             unsigned zero = fe_ir_const(L->m, L->b, it, 0);
             unsigned v = as_value(L, lower_expr(L, n->a), n->a);
@@ -429,6 +521,19 @@ static Slot lower_expr(Lower *L, FeNode *n)
         fail(L, "this unary operator", n);
         return slot_void();
     case FE_N_MEMBER:
+        /* `error.Name` is a member of the open default set: a code, and
+           nothing to look up. */
+        if (n->a && n->a->kind == FE_N_IDENT && n->a->text &&
+            !strcmp(n->a->text, "error") && n->b && n->b->text)
+            return slot_value(fe_ir_const(L->m, L->b, FE_IR_I16,
+                                          error_code(L, n->b->text)),
+                              FE_IR_I16);
+        /* `.?` is the payload of an optional the checker already proved is
+           there. */
+        if (n->text && !strcmp(n->text, ".?")) {
+            FeType *bt = n->a ? n->a->sem_type : 0;
+            return wrapper_payload(L, lower_expr(L, n->a), bt);
+        }
         /* `p.^` reads through a pointer. */
         if (n->text && !strcmp(n->text, ".^")) {
             unsigned p = as_value(L, lower_expr(L, n->a), n->a);
@@ -529,6 +634,168 @@ static Slot lower_expr(Lower *L, FeNode *n)
     }
 }
 
+/* Run the `defer` blocks that are live, most recent first. A `return` in the
+   middle of a function still owes them, so every exit path calls this. */
+static void run_deferred(Lower *L, unsigned from)
+{
+    unsigned i;
+    for (i = L->defer_count; i > from; --i) lower_stmt(L, L->deferred[i - 1]);
+}
+
+/* ------------------------------------------------------- wrappers -------- *
+ * An optional is a tag and a payload; an error union is an error code and a
+ * payload, where a code of zero means there is no error. Both are memory, and
+ * both are built the same way: write the tag, then write the value after it.
+ * -------------------------------------------------------------------------- */
+
+static Slot wrap_context(Lower *L, Slot v, FeNode *n)
+{
+    FeType *want = n->sem_context;
+    unsigned local;
+    long payload_at;
+    if (!want) return v;
+    local = scratch(L, want, "wrapped");
+    payload_at = (long)fe_type_payload_offset(want);
+    if (want->kind == FE_TYPE_OPTIONAL) {
+        if (fe_m7_is_null(n)) {
+            /* A payload with a spare representation uses it for "nothing"
+               instead of carrying a separate tag. */
+            unsigned z = fe_ir_const(L->m, L->b,
+                                     uses_niche(want) ? FE_IR_PTR : FE_IR_I8, 0);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), z,
+                        uses_niche(want) ? FE_IR_PTR : FE_IR_I8);
+            return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(want));
+        }
+        if (!uses_niche(want)) {
+            unsigned one = fe_ir_const(L->m, L->b, FE_IR_I8, 1);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), one, FE_IR_I8);
+        }
+        store_into(L, fe_ir_at_local(local, payload_at), v, n,
+                   ir_size(want->elem));
+        return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(want));
+    }
+    if (want->kind == FE_TYPE_ERROR_UNION) {
+        FeType *value_type = want->error_value;
+        if (n->sem_type && n->sem_type->is_error) {
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0),
+                        as_value(L, v, n), FE_IR_I16);
+        } else {
+            unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I16, 0);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), zero, FE_IR_I16);
+            if (value_type && value_type->kind != FE_TYPE_VOID)
+                store_into(L, fe_ir_at_local(local, payload_at), v, n,
+                           ir_size(value_type));
+        }
+        return slot_place(fe_ir_at_local(local, 0), FE_IR_MEM, ir_size(want));
+    }
+    return v;
+}
+
+/* The tag of a wrapper that is already in memory. */
+static unsigned wrapper_tag(Lower *L, Slot w, const FeType *t, FeNode *n)
+{
+    FeIrPlace p;
+    if (!w.is_place) { fail(L, "a wrapper with no place", n); return 0; }
+    p = w.place;
+    if (uses_niche(t)) return fe_ir_load(L->m, L->b, FE_IR_PTR, p);
+    return fe_ir_load(L->m, L->b, tag_type(t), p);
+}
+
+static Slot wrapper_payload(Lower *L, Slot w, const FeType *t)
+{
+    FeType *payload = t ? (t->kind == FE_TYPE_ERROR_UNION ? t->error_value
+                                                          : t->elem) : 0;
+    FeIrPlace p = w.place;
+    (void)L;
+    p.offset += (long)fe_type_payload_offset(t);
+    return slot_place(p, ir_type(payload), ir_size(payload));
+}
+
+/* Leave the function with this error code, after the deferred blocks. */
+static void return_error(Lower *L, unsigned err, FeNode *n)
+{
+    FeType *ret = L->ret_type;
+    unsigned local = scratch(L, ret, "failure");
+    fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), err, FE_IR_I16);
+    run_deferred(L, 0);
+    if (L->fn->returns_by_address) {
+        unsigned dst = fe_ir_load(L->m, L->b, FE_IR_PTR,
+                                  fe_ir_at_local(L->ret_local, 0));
+        fe_ir_copy(L->m, L->b, fe_ir_at_temp(dst, 0), fe_ir_at_local(local, 0),
+                   ir_size(ret));
+        fe_ir_ret(L->b, 0, 0);
+        return;
+    }
+    fe_ir_ret(L->b, fe_ir_load(L->m, L->b, ir_type(ret),
+                               fe_ir_at_local(local, 0)), 1);
+    (void)n;
+}
+
+/* `try e` -- if e failed, leave with its error; otherwise the value. */
+static Slot lower_try(Lower *L, FeNode *n)
+{
+    FeType *t = n->a ? n->a->sem_type : 0;
+    Slot e = lower_expr(L, n->a);
+    unsigned err = wrapper_tag(L, e, t, n);
+    unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I16, 0);
+    unsigned ok = fe_ir_binary(L->m, L->b, FE_IR_EQ, FE_IR_I16, err, zero, 1);
+    FeIrBlock *bad = new_block(L);
+    FeIrBlock *good = new_block(L);
+    fe_ir_br(L->b, ok, good->id, bad->id);
+    L->b = bad;
+    return_error(L, err, n);
+    L->b = good;
+    return wrapper_payload(L, e, t);
+}
+
+/* `e orelse d` and `e catch d` both mean "the value, or that instead". The
+   right-hand side is only evaluated when it is needed, so it is a branch. */
+static Slot lower_lazy(Lower *L, FeNode *n, int is_catch)
+{
+    FeType *t = n->a ? n->a->sem_type : 0;
+    FeType *payload = t ? (is_catch ? t->error_value : t->elem) : 0;
+    Slot e;
+    unsigned tag;
+    unsigned zero;
+    unsigned ok;
+    unsigned result;
+    FeIrBlock *other;
+    FeIrBlock *join;
+    FeIrBlock *have;
+    e = lower_expr(L, n->a);
+    tag = wrapper_tag(L, e, t, n);
+    zero = fe_ir_const(L->m, L->b, is_catch || uses_niche(t) ? FE_IR_PTR
+                                                             : FE_IR_I8, 0);
+    /* An error union is fine when its code is zero; an optional is fine when
+       its tag is not. */
+    ok = fe_ir_binary(L->m, L->b, is_catch ? FE_IR_EQ : FE_IR_NE,
+                      is_catch ? FE_IR_I16 : (uses_niche(t) ? FE_IR_PTR
+                                                            : FE_IR_I8),
+                      tag, zero, 1);
+    result = scratch(L, payload, "result");
+    have = new_block(L);
+    other = new_block(L);
+    join = new_block(L);
+    fe_ir_br(L->b, ok, have->id, other->id);
+    L->b = have;
+    store_into(L, fe_ir_at_local(result, 0), wrapper_payload(L, e, t), n,
+               ir_size(payload));
+    fe_ir_jmp(L->b, join->id);
+    L->b = other;
+    if (is_catch && n->c) {
+        /* The block form handles the error and must not fall through with a
+           value, so whatever it leaves behind is what the checker allowed. */
+        lower_stmt(L, n->c);
+    } else {
+        Slot d = lower_expr(L, n->b);
+        store_into(L, fe_ir_at_local(result, 0), d, n->b, ir_size(payload));
+    }
+    fe_ir_jmp(L->b, join->id);
+    L->b = join;
+    return slot_place(fe_ir_at_local(result, 0), ir_type(payload),
+                      ir_size(payload));
+}
+
 /* ----------------------------------------------------------- statements --- */
 
 static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
@@ -545,8 +812,13 @@ static void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
 static void lower_return(Lower *L, FeNode *n)
 {
     Slot v;
-    if (!n->a) { fe_ir_ret(L->b, 0, 0); return; }
+    if (!n->a) { run_deferred(L, 0); fe_ir_ret(L->b, 0, 0); return; }
+    /* The value is computed before the deferred blocks run, because they may
+       destroy what it was read from. */
     v = lower_expr(L, n->a);
+    if (v.type != FE_IR_MEM && v.is_place)
+        v = slot_value(as_value(L, v, n->a), v.type);
+    run_deferred(L, 0);
     if (L->fn->returns_by_address) {
         unsigned dst = fe_ir_load(L->m, L->b, FE_IR_PTR,
                                   fe_ir_at_local(L->ret_local, 0));
@@ -597,14 +869,153 @@ static void lower_while(Lower *L, FeNode *n)
     L->b = done;
 }
 
+/* Three shapes share the keyword.
+
+     for i in a..b { }        counts
+     for x in thing { }       walks, binding a reference to each element
+     for i, x in thing { }    walks, binding the position as well
+
+   The count is read once before the body, so a thing that grows underneath the
+   loop cannot walk past what was measured. The element binding is a reference
+   (`x.^` reads it), which is what lets a loop write back into the thing. */
+static void lower_for(Lower *L, FeNode *n)
+{
+    FeIrBlock *head;
+    FeIrBlock *body;
+    FeIrBlock *step;
+    FeIrBlock *done;
+    unsigned counter;
+    unsigned limit;
+
+    if (n->c) {
+        /* The counting form: the variable is the count itself. */
+        unsigned from = as_value(L, lower_expr(L, n->a), n->a);
+        unsigned to;
+        counter = declare_var(L, n->cname, 0, n->text);
+        L->fn->locals[counter].type = FE_IR_I32;
+        L->fn->locals[counter].size = 4;
+        L->fn->locals[counter].align = 4;
+        fe_ir_store(L->m, L->b, fe_ir_at_local(counter, 0), from, FE_IR_I32);
+        to = as_value(L, lower_expr(L, n->c), n->c);
+        limit = fe_ir_local(L->m, L->fn, FE_IR_I32, 4, 4, "limit");
+        fe_ir_store(L->m, L->b, fe_ir_at_local(limit, 0), to, FE_IR_I32);
+        head = new_block(L);
+        body = new_block(L);
+        step = new_block(L);
+        done = new_block(L);
+        fe_ir_jmp(L->b, head->id);
+        L->b = head;
+        {
+            unsigned i = fe_ir_load(L->m, L->b, FE_IR_I32,
+                                    fe_ir_at_local(counter, 0));
+            unsigned e = fe_ir_load(L->m, L->b, FE_IR_I32,
+                                    fe_ir_at_local(limit, 0));
+            unsigned more = fe_ir_binary(L->m, L->b, FE_IR_LT, FE_IR_I32, i, e, 1);
+            fe_ir_br(L->b, more, body->id, done->id);
+        }
+    } else {
+        FeType *bt = n->a ? n->a->sem_type : 0;
+        FeType *elem = bt ? bt->elem : 0;
+        Slot base = lower_expr(L, n->a);
+        unsigned data;
+        unsigned length;
+        unsigned data_local;
+        unsigned item;
+        indexable_parts(L, base, bt, &data, &length, n);
+        data_local = fe_ir_local(L->m, L->fn, FE_IR_PTR, 4, 4, "data");
+        fe_ir_store(L->m, L->b, fe_ir_at_local(data_local, 0), data, FE_IR_PTR);
+        limit = fe_ir_local(L->m, L->fn, FE_IR_I32, 4, 4, "count");
+        fe_ir_store(L->m, L->b, fe_ir_at_local(limit, 0), length, FE_IR_I32);
+        /* With two names the first is the position and the second the element;
+           with one it is the element. */
+        counter = fe_ir_local(L->m, L->fn, FE_IR_I32, 4, 4, "index");
+        if (n->aux_cname) {
+            L->vars[L->var_count].cname = n->cname;
+            L->vars[L->var_count].local = counter;
+            L->vars[L->var_count].by_address = 0;
+            if (L->var_count < LOWER_MAX_LOCALS) ++L->var_count;
+            item = fe_ir_local(L->m, L->fn, FE_IR_PTR, 4, 4, n->aux_text);
+            L->vars[L->var_count].cname = n->aux_cname;
+            L->vars[L->var_count].local = item;
+            L->vars[L->var_count].by_address = 0;
+            if (L->var_count < LOWER_MAX_LOCALS) ++L->var_count;
+        } else {
+            item = fe_ir_local(L->m, L->fn, FE_IR_PTR, 4, 4, n->text);
+            L->vars[L->var_count].cname = n->cname;
+            L->vars[L->var_count].local = item;
+            L->vars[L->var_count].by_address = 0;
+            if (L->var_count < LOWER_MAX_LOCALS) ++L->var_count;
+        }
+        {
+            unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I32, 0);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(counter, 0), zero, FE_IR_I32);
+        }
+        head = new_block(L);
+        body = new_block(L);
+        step = new_block(L);
+        done = new_block(L);
+        fe_ir_jmp(L->b, head->id);
+        L->b = head;
+        {
+            unsigned i = fe_ir_load(L->m, L->b, FE_IR_I32,
+                                    fe_ir_at_local(counter, 0));
+            unsigned e = fe_ir_load(L->m, L->b, FE_IR_I32,
+                                    fe_ir_at_local(limit, 0));
+            unsigned more = fe_ir_binary(L->m, L->b, FE_IR_LT, FE_IR_I32, i, e, 1);
+            fe_ir_br(L->b, more, body->id, done->id);
+        }
+        L->b = body;
+        {
+            unsigned i = fe_ir_load(L->m, L->b, FE_IR_I32,
+                                    fe_ir_at_local(counter, 0));
+            unsigned scale = fe_ir_const(L->m, L->b, FE_IR_I32,
+                                         (long)ir_size(elem));
+            unsigned off = fe_ir_binary(L->m, L->b, FE_IR_MUL, FE_IR_I32, i,
+                                        scale, 1);
+            unsigned p = fe_ir_load(L->m, L->b, FE_IR_PTR,
+                                    fe_ir_at_local(data_local, 0));
+            unsigned at = fe_ir_binary(L->m, L->b, FE_IR_ADD, FE_IR_PTR, p,
+                                       off, 1);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(item, 0), at, FE_IR_PTR);
+        }
+        L->b = head;
+    }
+
+    if (L->loop_depth < 32) {
+        L->break_target[L->loop_depth] = done->id;
+        L->continue_target[L->loop_depth] = step->id;
+        ++L->loop_depth;
+    }
+    L->b = body;
+    lower_stmt(L, n->b);
+    fe_ir_jmp(L->b, step->id);
+    L->b = step;
+    {
+        unsigned i = fe_ir_load(L->m, L->b, FE_IR_I32,
+                                fe_ir_at_local(counter, 0));
+        unsigned one = fe_ir_const(L->m, L->b, FE_IR_I32, 1);
+        unsigned next = fe_ir_binary(L->m, L->b, FE_IR_ADD, FE_IR_I32, i, one, 1);
+        fe_ir_store(L->m, L->b, fe_ir_at_local(counter, 0), next, FE_IR_I32);
+    }
+    fe_ir_jmp(L->b, head->id);
+    if (L->loop_depth) --L->loop_depth;
+    L->b = done;
+}
+
 static void lower_stmt(Lower *L, FeNode *n)
 {
     FeNode *x;
     if (!n || L->failed) return;
     switch (n->kind) {
-    case FE_N_BLOCK:
+    case FE_N_BLOCK: {
+        unsigned outer = L->defer_count;
         for (x = n->children; x; x = x->next) lower_stmt(L, x);
+        /* Leaving a block normally runs what it deferred. An exit that jumped
+           away already ran them on its way out. */
+        if (!L->b->terminated) run_deferred(L, outer);
+        L->defer_count = outer;
         return;
+    }
     case FE_N_LET:
     case FE_N_VAR:
     case FE_N_CONST: {
@@ -643,6 +1054,12 @@ static void lower_stmt(Lower *L, FeNode *n)
         return;
     case FE_N_UNSAFE:
         lower_stmt(L, n->a);
+        return;
+    case FE_N_DEFER:
+        if (L->defer_count < 32) L->deferred[L->defer_count++] = n->a;
+        return;
+    case FE_N_FOR:
+        lower_for(L, n);
         return;
     default:
         fail(L, "this statement", n);
@@ -697,6 +1114,10 @@ int fe_lower_program(FeCheck *c, FeIrModule *out)
     memset(&L, 0, sizeof L);
     L.c = c;
     L.m = out;
+    /* The codes have to be known while the bodies are lowered, so the names
+       are gathered from the whole build first. */
+    for (u = 0; u < c->build->count; ++u)
+        collect_error_names(&L, c->build->units[u].ast.root);
     for (u = 0; u < c->build->count; ++u) {
         FeUnit *unit = &c->build->units[u];
         c->ast = &unit->ast;

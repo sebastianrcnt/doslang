@@ -1,0 +1,18 @@
+// EXIT:9
+unit errunion;
+
+fn half(v: i32) -> !i32 {
+    if v == 0 { return error.Empty; }
+    return v / 2;
+}
+
+fn chain(v: i32) -> !i32 {
+    let h: i32 = try half(v);
+    return h + 1;
+}
+
+fn main() -> i32 {
+    let good: i32 = chain(16) catch 100;
+    let bad: i32 = chain(0) catch 0;
+    return good + bad;
+}

@@ -417,6 +417,20 @@ unsigned long fe_type_size(const FeType *t)
     return t ? t->size : 0;
 }
 
+unsigned long fe_type_payload_offset(const FeType *t)
+{
+    if (!t) return 0;
+    if (t->kind == FE_TYPE_ERROR_UNION) {
+        if (!t->error_value || t->error_value->kind == FE_TYPE_VOID) return 2;
+        return round_up(2UL, fe_type_align(t->error_value));
+    }
+    if (t->kind == FE_TYPE_OPTIONAL) {
+        if (fe_m7_optional_uses_niche(t->elem)) return 0;
+        return round_up(1UL, fe_type_align(t->elem));
+    }
+    return 0;
+}
+
 unsigned fe_type_align(const FeType *t)
 {
     return t && t->align ? t->align : 1U;
