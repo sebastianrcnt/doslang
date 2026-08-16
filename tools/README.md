@@ -1,26 +1,48 @@
 # Development tools
 
-## QEMU console OCR
+## Host support
 
-Capture the current QEMU VGA screen and print detected console text:
+Automation currently supports **Windows 10/11 only**. It requires `uv`, QEMU
+with WHPX support, and `ffmpeg.exe` on `PATH`. The Python implementation uses
+portable APIs where possible, but other hosts are not supported yet.
+
+## QEMU and FreeDOS automation
+
+Start the Python daemon and QEMU:
 
 ```powershell
-uv run python tools/qemu_ocr.py
+uv run ferro-vm start
+uv run ferro-vm status
 ```
 
-Useful options:
+`TCPAGENT.EXE` connects only to `127.0.0.1:5558`. Local commands use the
+Windows named pipe `\\.\pipe\ferrolang-vm`; there is no controller or observer
+TCP port. Monitor the append-only structured log in another terminal:
 
 ```powershell
-# Machine-readable boxes, confidence scores, and text
-uv run python tools/qemu_ocr.py --json
+lnav .qemu/ferro-vm.log
+```
 
-# OCR an existing screenshot without recapturing
+Commands:
+
+```powershell
+uv run ferro-vm ping
+uv run ferro-vm exec 'dir C:\FEC'
+uv run ferro-vm put fec/src/check.c 'C:\FEC\SRC\CHECK.C'
+uv run ferro-vm get 'C:\FEC\TEST.OK' .qemu/TEST.OK
+uv run ferro-vm screenshot
+uv run ferro-vm ocr
+uv run ferro-vm stop
+```
+
+The daemon logs command metadata, DOS output, exit status, transfers, and
+agent lifecycle events as UTF-8 lines. It deliberately never logs raw binary
+payloads or protocol hex.
+
+## Standalone OCR
+
+`tools/qemu_ocr.py` remains available for OCRing an existing image:
+
+```powershell
 uv run python tools/qemu_ocr.py --image .qemu/qemu-screen.png
-
-# Save extracted text
-uv run python tools/qemu_ocr.py -o .qemu/qemu-screen.txt
 ```
-
-The tool invokes `.qemu/screenshot.ps1`, runs RapidOCR with ONNX Runtime, sorts
-recognized lines by screen position, and emits UTF-8 text. Screenshots and OCR
-output under `.qemu/` remain ignored build artifacts.

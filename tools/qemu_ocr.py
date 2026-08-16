@@ -14,19 +14,11 @@ from rapidocr import RapidOCR
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = ROOT / ".qemu" / "qemu-screen.png"
-SCREENSHOT = ROOT / ".qemu" / "screenshot.ps1"
 
 
 def capture() -> Path:
     subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(SCREENSHOT),
-        ],
+        ["ferro-vm", "screenshot"],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,

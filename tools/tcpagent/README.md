@@ -1,8 +1,13 @@
 # FreeDOS resident TCP agent
 
 `TCPAGENT.EXE` is a foreground resident automation process. It uses the mTCP
-packet-driver stack and maintains an outbound connection to QEMU's host at
-`10.0.2.2:5558`. The host relay keeps the existing Pi tool endpoint on 5555.
+packet-driver stack and maintains an outbound connection to the QEMU host at
+`10.0.2.2:5558`.
+
+The Windows-only Python `ferro-vm` daemon owns that listener. It logs metadata
+and decoded command output to `.qemu/ferro-vm.log`; it does not expose an
+observer/controller TCP port or emit binary payloads to the log. Local host
+control uses a Windows named pipe.
 
 ## Build in FreeDOS
 
@@ -17,16 +22,18 @@ therefore distributed under GPLv3 when linked with mTCP.
 
 ## Protocol
 
-Legacy text commands remain for Pi tool compatibility: `PING`, `READ`,
-`WRITE`, `LIST`, and `EXEC`. Fast staging uses binary framing:
+`PING`, `READ`, `WRITE`, `LIST`, and `EXEC` use text commands. Fast transfer
+commands are:
 
 - `PUT <hex DOS path> <byte length>\n<raw bytes>` -> `OK\r\n`
 - `GET <hex DOS path>\n` -> `DATA <length>\r\n<raw bytes>`
 - `HASH <hex DOS path>\n` -> `STAT <length> <FNV1A32>\r\n`
 
-Use `python tools/dos_stage.py --binary LOCAL=C:\\DOS\\PATH` for verified
-staging. Verification reads only the length and FNV-1a hash, avoiding a slow
-full-file return transfer.
+The host invokes them through:
 
-Use `.qemu/reset.ps1` to restart QEMU. It waits for an established TCP agent
-and a successful PONG rather than sleeping for a fixed boot duration.
+```powershell
+uv run ferro-vm put host-file 'C:\DOS\FILE'
+uv run ferro-vm get 'C:\DOS\FILE' host-file
+```
+
+No DOS-side change is required for the Python host automation.
