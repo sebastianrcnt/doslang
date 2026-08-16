@@ -1,0 +1,14 @@
+// ERROR:13:try
+unit badtry;
+
+error E {
+    Bad = 1,
+}
+
+fn leaf() -> E!i32 {
+    return E.Bad;
+}
+
+fn bad() -> i32 {
+    return try leaf();
+}

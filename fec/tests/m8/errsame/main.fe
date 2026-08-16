@@ -1,0 +1,6 @@
+unit main;
+import alpha;
+import beta;
+
+fn one() -> !void { return alpha.fail(); }
+fn two() -> !void { return beta.fail(); }

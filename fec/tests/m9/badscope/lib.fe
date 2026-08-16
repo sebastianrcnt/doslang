@@ -1,0 +1,6 @@
+// ERROR:5:helper
+unit lib;
+
+pub fn call(comptime T: type, v: T) -> T {
+    return helper(v);
+}

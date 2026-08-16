@@ -1,0 +1,11 @@
+unit okslreb;
+
+fn first(s: []u8) -> u8 { return s[0]; }
+
+fn test() -> u8 {
+    var a: [2]u8 = [1 as u8, 2 as u8];
+    var s = a[..];
+    let v = first(s);
+    s[0] = 9 as u8;
+    return v;
+}

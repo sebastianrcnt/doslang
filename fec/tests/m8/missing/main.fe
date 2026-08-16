@@ -1,0 +1,5 @@
+// ERROR:3:import
+unit main;
+import absent;
+
+fn main() -> void {}

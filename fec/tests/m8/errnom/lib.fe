@@ -1,0 +1,9 @@
+unit lib;
+
+pub error LibError {
+    Bad = 1,
+}
+
+pub fn value() -> LibError!i32 {
+    return LibError.Bad;
+}

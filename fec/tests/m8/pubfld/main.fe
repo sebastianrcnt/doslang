@@ -1,0 +1,7 @@
+unit main;
+import data;
+
+fn main() -> i32 {
+    let r = data.Record{ value: 7 };
+    return r.value;
+}

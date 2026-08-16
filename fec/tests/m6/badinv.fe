@@ -1,0 +1,9 @@
+// ERROR:6:borrow
+unit badinv;
+
+fn bad(p: ^i32, q: ^i32) -> void {
+    let r = &p;
+    p = q;
+    let keep = r;
+    mem.destroy(p);
+}

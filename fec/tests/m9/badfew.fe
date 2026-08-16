@@ -1,0 +1,10 @@
+// ERROR:9:generic
+unit badfew;
+
+struct Box(T) {
+    value: T,
+}
+
+fn bad() -> void {
+    var x: Box;
+}

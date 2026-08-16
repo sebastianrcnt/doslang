@@ -1,0 +1,6 @@
+unit main;
+import lib;
+
+fn main() -> i32 {
+    return lib.bump(i32, 4);
+}

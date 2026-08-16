@@ -1,0 +1,10 @@
+// ERROR:9:comptime
+unit badarg;
+
+fn id(comptime T: type, v: T) -> T {
+    return v;
+}
+
+fn bad() -> i32 {
+    return id(7, 8);
+}

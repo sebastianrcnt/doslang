@@ -1,0 +1,11 @@
+// ERROR:9:borrow
+unit badshwr;
+
+fn read(r: &i32) -> i32 { return r.^; }
+
+fn bad() -> i32 {
+    var x: i32 = 0;
+    let r = &x;
+    x = 1;
+    return read(r);
+}

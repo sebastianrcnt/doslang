@@ -1,0 +1,13 @@
+unit okisint;
+
+fn is_integer(comptime T: type) -> bool {
+    comptime if @is_int(T) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+fn test() -> bool {
+    return is_integer(u16);
+}

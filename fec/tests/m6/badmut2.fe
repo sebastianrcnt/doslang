@@ -1,0 +1,11 @@
+// ERROR:7:borrow
+unit badmut2;
+
+fn bad() -> i32 {
+    var x: i32 = 0;
+    let a = &mut x;
+    let b = &mut x;
+    a.^ = 1;
+    b.^ = 2;
+    return x;
+}
