@@ -12,7 +12,7 @@ from pathlib import Path
 
 HOST = "127.0.0.1"
 PORT = 5555
-CHUNK_SIZE = 4096
+DEFAULT_CHUNK_SIZE = 4096
 
 
 def request(line: str) -> str:
@@ -32,11 +32,50 @@ def request(line: str) -> str:
     return text
 
 
-def stage(local: Path, remote: str) -> None:
+def recv_line(sock: socket.socket) -> bytes:
+    line = bytearray()
+    while not line.endswith(b"\n"):
+        part = sock.recv(1)
+        if not part:
+            raise RuntimeError("TCP agent closed the connection")
+        line.extend(part)
+    return bytes(line).strip()
+
+
+def fnv1a(data: bytes) -> int:
+    value = 2166136261
+    for byte in data:
+        value = ((value ^ byte) * 16777619) & 0xFFFFFFFF
+    return value
+
+
+def binary_stage(local: Path, remote: str) -> None:
+    data = local.read_bytes()
+    path_hex = remote.encode("ascii").hex().upper()
+    with socket.create_connection((HOST, PORT), timeout=30) as sock:
+        sock.sendall(("PUT %s %d\n" % (path_hex, len(data))).encode("ascii"))
+        sock.sendall(data)
+        response = recv_line(sock)
+        if not response.startswith(b"OK"):
+            raise RuntimeError("PUT failed: " + response.decode("ascii", "replace"))
+        sock.sendall(("HASH %s\n" % path_hex).encode("ascii"))
+        header = recv_line(sock).decode("ascii", "strict")
+        fields = header.split()
+        if len(fields) != 3 or fields[0] != "STAT":
+            raise RuntimeError("HASH failed: " + header)
+        remote_length = int(fields[1])
+        remote_hash = int(fields[2], 16)
+    if remote_length != len(data) or remote_hash != fnv1a(data):
+        raise RuntimeError("verification mismatch for " + remote)
+    print("staged %s -> %s (%d bytes, sha256 %s, binary TCP)" % (
+        local, remote, len(data), hashlib.sha256(data).hexdigest()))
+
+
+def stage(local: Path, remote: str, chunk_size: int) -> None:
     data = local.read_bytes()
     remote_hex = remote.encode("ascii").hex().upper()
-    for offset in range(0, max(1, len(data)), CHUNK_SIZE):
-        part = data[offset : offset + CHUNK_SIZE]
+    for offset in range(0, max(1, len(data)), chunk_size):
+        part = data[offset : offset + chunk_size]
         mode = "T" if offset == 0 else "A"
         request("WRITE %s %s %s" % (remote_hex, mode, part.hex().upper()))
     remote_data = bytearray()
@@ -56,14 +95,26 @@ def stage(local: Path, remote: str) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: dos_stage.py LOCAL=DOS_PATH [... ]", file=sys.stderr)
+    args = sys.argv[1:]
+    chunk_size = DEFAULT_CHUNK_SIZE
+    binary = False
+    if args and args[0] == "--binary":
+        binary = True
+        args = args[1:]
+    if len(args) >= 2 and args[0] == "--chunk-size":
+        chunk_size = int(args[1])
+        args = args[2:]
+    if not args:
+        print("usage: dos_stage.py [--binary] [--chunk-size N] LOCAL=DOS_PATH [... ]", file=sys.stderr)
         return 2
-    for spec in sys.argv[1:]:
+    for spec in args:
         if "=" not in spec:
             raise SystemExit("missing '=' in " + spec)
         local, remote = spec.split("=", 1)
-        stage(Path(local), remote)
+        if binary:
+            binary_stage(Path(local), remote)
+        else:
+            stage(Path(local), remote, chunk_size)
     return 0
 
 

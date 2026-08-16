@@ -1,0 +1,11 @@
+-0
+-mc
+-DCFG_H="tcpagent.cfg"
+-oh
+-os
+-s
+-zp2
+-zpw
+-we
+-i=..\..\TCPINC
+-i=..\..\INCLUDE
