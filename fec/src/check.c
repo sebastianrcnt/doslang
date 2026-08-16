@@ -156,9 +156,27 @@ static int compatible(FeType *want, FeType *got, FeNode *value)
         value->text[0] != '\'' && value->text[0] != '"';
 }
 
+/* Does passing `arg` to a parameter of type `param` lend it rather than give
+   it away? An exclusive borrow handed to a call comes back when the call
+   returns, so it is not a move. */
+static int call_reborrows(const FeType *param, const FeType *arg)
+{
+    if (!param || !arg) return 0;
+    if (param->kind==FE_TYPE_REF && arg->kind==FE_TYPE_REF &&
+        param->ref_mut && arg->ref_mut) return 1;
+    if (param->kind==FE_TYPE_SLICE && arg->kind==FE_TYPE_SLICE &&
+        param->ref_mut && arg->ref_mut) return 1;
+    return 0;
+}
+
 static int explicit_castable(FeType *a, FeType *b)
 {
     if (!a || !b) return 0;
+    /* An enum without a payload is a number with names on it, so reading it
+       as one is a widening or narrowing and nothing more. The other direction
+       is not allowed: an arbitrary number is not a variant. */
+    if (a->kind == FE_TYPE_ENUM && !a->fields &&
+        (fe_type_is_integer(b) || b->kind == FE_TYPE_CHAR)) return 1;
     return (fe_type_is_integer(a) || a->kind == FE_TYPE_CHAR) &&
            (fe_type_is_integer(b) || b->kind == FE_TYPE_CHAR);
 }
@@ -2820,6 +2838,11 @@ static FeType *check_call_args(FeCheckerState *s, FeNode *n, FeSym *sym,
         } else if (b && a && b->kind==FE_TYPE_SLICE && !b->ref_mut &&
                    a->kind==FE_TYPE_SLICE && a->ref_mut) {
             /* Call-only []mut -> [] weakening is a temporary view. */
+        } else if (call_reborrows(b, a)) {
+            /* Handing an exclusive borrow to a call lends it for the length of
+               that call and takes it back after: the caller cannot touch it
+               meanwhile, so nothing is aliased. Without this an exclusive
+               parameter could be passed onwards exactly once. */
         } else mark_moved(s,arg,a);
         if (!compatible(b, a, arg) &&
             !(b && a && b->kind==FE_TYPE_SLICE && a->kind==FE_TYPE_SLICE &&
@@ -2916,7 +2939,8 @@ static FeType *check_call(FeCheckerState *s, FeNode *n)
                 if (root && root->borrow_root) root=root->borrow_root;
                 if (root) fe_own_call_shared_view(c->diags,&root->own,arg->loc);
             } else if (!(b && a && b->kind==FE_TYPE_SLICE &&
-                         a->kind==FE_TYPE_SLICE && !b->ref_mut && a->ref_mut))
+                         a->kind==FE_TYPE_SLICE && !b->ref_mut && a->ref_mut) &&
+                       !call_reborrows(b, a))
                 mark_moved(s,arg,arg->sem_type ? arg->sem_type : a);
             if (!fe_type_equal(b,a) && !m7_actual_compatible(b,a,arg) &&
                 !(b && a && b->kind==FE_TYPE_SLICE && a->kind==FE_TYPE_SLICE &&

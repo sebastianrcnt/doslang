@@ -1,0 +1,120 @@
+// EXIT:0
+// OUTPUT:1+2*3 = 7
+// OUTPUT:(1+2)*3 = 9
+// OUTPUT:2*(3+4)-5 = 9
+// OUTPUT:10/3 = 3
+// OUTPUT:1+ = error
+// OUTPUT:(1+2 = error
+unit calc;
+import std.io;
+import std.fmt;
+
+// A recursive-descent evaluator over a byte slice.
+//
+// The position travels in a `&mut usize` rather than in a struct beside the
+// text: a struct cannot hold a slice, because a slice is a borrowed view and
+// R4 keeps borrows out of aggregate storage. Passing both is the honest way
+// to say "this text, and how far we have read".
+
+fn done(src: []u8, at: usize) -> bool { return at >= src.n; }
+
+fn peek(src: []u8, at: usize) -> u8 {
+    if done(src, at) { return 0; }
+    return src[at];
+}
+
+fn skip_spaces(src: []u8, at: &mut usize) -> void {
+    while not done(src, at.^) {
+        if src[at.^] != 32 { break; }
+        at.^ = at.^ + 1;
+    }
+}
+
+fn number(src: []u8, at: &mut usize) -> !i32 {
+    var value: i32 = 0;
+    var digits: usize = 0;
+    while not done(src, at.^) {
+        let c: u8 = src[at.^];
+        if c < 48 or c > 57 { break; }
+        value = value * 10 + ((c - 48) as i32);
+        digits = digits + 1;
+        at.^ = at.^ + 1;
+    }
+    if digits == 0 { return error.BadNumber; }
+    return value;
+}
+
+fn factor(src: []u8, at: &mut usize) -> !i32 {
+    skip_spaces(src, at);
+    if peek(src, at.^) == 40 {
+        at.^ = at.^ + 1;
+        let inner: i32 = try expr(src, at);
+        skip_spaces(src, at);
+        if peek(src, at.^) != 41 { return error.Unbalanced; }
+        at.^ = at.^ + 1;
+        return inner;
+    }
+    return number(src, at);
+}
+
+fn term(src: []u8, at: &mut usize) -> !i32 {
+    var left: i32 = try factor(src, at);
+    while true {
+        skip_spaces(src, at);
+        let op: u8 = peek(src, at.^);
+        if op != 42 and op != 47 { break; }
+        at.^ = at.^ + 1;
+        let right: i32 = try factor(src, at);
+        if op == 42 { left = left * right; }
+        else {
+            if right == 0 { return error.DivideByZero; }
+            left = left / right;
+        }
+    }
+    return left;
+}
+
+fn expr(src: []u8, at: &mut usize) -> !i32 {
+    var left: i32 = try term(src, at);
+    while true {
+        skip_spaces(src, at);
+        let op: u8 = peek(src, at.^);
+        if op != 43 and op != 45 { break; }
+        at.^ = at.^ + 1;
+        let right: i32 = try term(src, at);
+        if op == 43 { left = left + right; }
+        else { left = left - right; }
+    }
+    return left;
+}
+
+fn evaluate(text: []u8) -> !i32 {
+    var at: usize = 0;
+    let value: i32 = try expr(text, &mut at);
+    skip_spaces(text, &mut at);
+    if not done(text, at) { return error.Trailing; }
+    return value;
+}
+
+fn show(text: []u8) -> void {
+    var buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    io.print(text);
+    io.print(" = ");
+    let value: i32 = evaluate(text) catch |e| {
+        io.print("error\n");
+        return;
+    };
+    let n: usize = fmt.fmt_i32(buf[..], value);
+    io.print(buf[0..n]);
+    io.print("\n");
+}
+
+fn main() -> i32 {
+    show("1+2*3");
+    show("(1+2)*3");
+    show("2*(3+4)-5");
+    show("10/3");
+    show("1+");
+    show("(1+2");
+    return 0;
+}
