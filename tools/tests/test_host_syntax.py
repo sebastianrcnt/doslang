@@ -7,13 +7,17 @@ declaration or a signature that disagrees with its definition used to surface
 only after a DOSBox-X boot and a full compiler build; here it surfaces in about
 a second, with the line number.
 
-It uses the same Open Watcom the project targets, just the Windows-hosted build,
-and the same strictness as ``fec/build-dos.bat`` (``-za -wx -wcd=202``). The
-target differs -- wcc386 is 32-bit where the DOS build is 16-bit large model --
-so this catches syntax, types and declarations, not code generation or memory
-model problems.
+It runs the pinned toolchain's Windows-hosted 16-bit driver with the exact
+command ``fec/build-dos.bat`` uses, so the diagnostics match what the DOS build
+sees. A 32-bit compile is not equivalent: it misses warnings that only the
+16-bit large model reports, which is how a dead function survived the M7
+unification with a clean 32-bit check.
 
-Skipped when Watcom is not installed, so the suite still runs anywhere.
+What it still cannot see is the DOS environment itself -- memory limits, the
+command line length, the filesystem. The DOS build and the milestone suite
+remain the gate.
+
+Skipped when the toolchain has not been downloaded, so the suite runs anywhere.
 """
 from __future__ import annotations
 
@@ -34,11 +38,13 @@ SOURCES = ("arena", "diag", "lexer", "ast", "parser", "types", "m7", "own",
 
 
 def _watcom() -> Path | None:
+    """Prefer the toolchain the runner pins over anything installed system-wide."""
     root = os.environ.get("WATCOM")
-    candidates = [Path(root)] if root else []
-    candidates.append(Path("C:/WATCOM19"))
+    candidates = [ROOT / ".dosboxx" / "watcom"]
+    if root:
+        candidates.append(Path(root))
     for base in candidates:
-        if (base / "binnt" / "wcc386.exe").is_file():
+        if (base / "binnt" / "wcl.exe").is_file():
             return base
     return None
 
@@ -47,7 +53,7 @@ def _watcom() -> Path | None:
 def watcom() -> Path:
     base = _watcom()
     if base is None:
-        pytest.skip("Open Watcom is not installed on the host; set WATCOM to enable")
+        pytest.skip("run `ferro-dos setup` to download the pinned toolchain")
     return base
 
 
@@ -64,14 +70,18 @@ def test_source_compiles_clean(name: str, watcom: Path, objdir: Path) -> None:
     env = dict(os.environ)
     env["WATCOM"] = os.fspath(watcom)
     env["INCLUDE"] = os.fspath(watcom / "h")
+    env["PATH"] = os.pathsep.join(
+        [os.fspath(watcom / "binnt"), env.get("PATH", "")])
+    # The same command build-dos.bat runs, minus the object name.
     completed = subprocess.run(
-        [os.fspath(watcom / "binnt" / "wcc386.exe"), "-q", "-za", "-wx",
-         "-wcd=202", "-zq", f"-i={SRC}", os.fspath(source)],
+        [os.fspath(watcom / "binnt" / "wcl.exe"), "-q", "-za", "-wx",
+         "-bt=dos", "-ml", "-k32768", "-c", f"-i={SRC}", os.fspath(source)],
         cwd=objdir, capture_output=True, text=True, env=env, timeout=120,
     )
     output = (completed.stdout + completed.stderr).strip()
-    # -wx keeps warnings meaningful, so treat any diagnostic as a failure: the
-    # DOS build runs the same flags and stops on them.
+    # -wx keeps warnings meaningful, so treat any diagnostic as a failure. The
+    # DOS build prints them to a screen nobody reads, which is how they
+    # accumulate unnoticed.
     assert completed.returncode == 0 and not output, (
         f"{name}.c does not compile clean\n{output}"
     )
