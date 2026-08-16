@@ -18,11 +18,20 @@
  * parameter and a local are the same thing to everything below.
  * ------------------------------------------------------------------------- */
 
+/* Which register a temporary lives in, or none. Only ebx, esi and edi are
+   handed out: eax, ecx and edx are the scratch this emitter computes in, and
+   the three that are left survive a call without being saved. */
+#define REG_NONE 0
+#define REG_COUNT 3
+static const char *const REGS[REG_COUNT] = { "ebx", "esi", "edi" };
+
 typedef struct Frame {
     const FeIrFunc *f;
     long *local_off;         /* [ebp + off] for each local */
     long temp_base;          /* first temporary slot */
     long size;               /* bytes to subtract from esp */
+    /* 0 means the temporary lives in its stack slot. */
+    unsigned char *temp_reg;
 } Frame;
 
 static long align_up(long v, long a)
@@ -65,6 +74,120 @@ static void frame_layout(Frame *fr, const FeIrFunc *f, long *storage)
     fr->temp_base = -off;
     off += (long)f->temp_count * TEMP_SLOT;
     fr->size = align_up(off, 4);
+}
+
+/* Which temporaries a value reads. Returns how many it wrote into `used`. */
+static unsigned reads_of(const FeIrValue *v, unsigned *used)
+{
+    unsigned n = 0;
+    unsigned i;
+    switch (v->op) {
+    case FE_IR_CONST: break;
+    case FE_IR_LOAD:
+    case FE_IR_ADDR:
+        if (v->place.base == FE_PLACE_TEMP) used[n++] = v->place.index;
+        break;
+    case FE_IR_STORE:
+        if (v->place.base == FE_PLACE_TEMP) used[n++] = v->place.index;
+        used[n++] = v->a;
+        break;
+    case FE_IR_COPY:
+        if (v->place.base == FE_PLACE_TEMP) used[n++] = v->place.index;
+        if (v->place2.base == FE_PLACE_TEMP) used[n++] = v->place2.index;
+        break;
+    case FE_IR_CAST:
+        used[n++] = v->a;
+        break;
+    case FE_IR_CALL:
+        for (i = 0; i < v->arg_count && n < 18; ++i) used[n++] = v->args[i];
+        break;
+    default:
+        used[n++] = v->a;
+        used[n++] = v->b;
+        break;
+    }
+    return n;
+}
+
+/* Give registers to the temporaries that can hold one.
+
+   A temporary that is defined in one block and read in another has to go
+   through memory: this walks one block at a time and knows nothing about the
+   others. Lowering does produce such temporaries -- a bounds check splits a
+   block between computing an index and using it -- so eligibility is decided
+   over the whole function first, and the scan inside a block only considers
+   what survived that. */
+static void allocate_registers(Frame *fr, const FeIrFunc *f)
+{
+    unsigned n = f->temp_count;
+    unsigned char *single;      /* 1 while the temporary stays in one block */
+    unsigned *home;             /* the block it was defined in */
+    unsigned *last;             /* the last instruction in that block to read it */
+    const FeIrBlock *b;
+    const FeIrValue *v;
+    unsigned used[20];
+    unsigned i, k, at;
+    if (!n) { fr->temp_reg = 0; return; }
+    fr->temp_reg = (unsigned char *)calloc(n, 1);
+    single = (unsigned char *)calloc(n, 1);
+    home = (unsigned *)calloc(n, sizeof(unsigned));
+    last = (unsigned *)calloc(n, sizeof(unsigned));
+    if (!fr->temp_reg || !single || !home || !last) {
+        free(single); free(home); free(last);
+        return;
+    }
+    for (i = 0; i < n; ++i) { single[i] = 1; home[i] = 0xFFFFFFFFU; }
+    for (b = f->first; b; b = b->next) {
+        for (v = b->first; v; v = v->next) {
+            if (v->has_dest) {
+                if (home[v->dest] != 0xFFFFFFFFU) single[v->dest] = 0;
+                home[v->dest] = b->id;
+            }
+            k = reads_of(v, used);
+            for (i = 0; i < k; ++i)
+                if (used[i] < n && home[used[i]] != b->id) single[used[i]] = 0;
+        }
+        if (b->term == FE_IR_BR && b->cond < n && home[b->cond] != b->id)
+            single[b->cond] = 0;
+        if (b->term == FE_IR_RET && b->has_ret_value && b->ret_value < n &&
+            home[b->ret_value] != b->id)
+            single[b->ret_value] = 0;
+    }
+
+    for (b = f->first; b; b = b->next) {
+        unsigned char busy[REG_COUNT];
+        unsigned owner[REG_COUNT];
+        for (i = 0; i < REG_COUNT; ++i) { busy[i] = 0; owner[i] = 0; }
+        /* When each temporary is last read in this block. */
+        at = 0;
+        for (v = b->first; v; v = v->next, ++at) {
+            k = reads_of(v, used);
+            for (i = 0; i < k; ++i)
+                if (used[i] < n && single[used[i]]) last[used[i]] = at;
+        }
+        if (b->term == FE_IR_BR && b->cond < n && single[b->cond])
+            last[b->cond] = at;
+        if (b->term == FE_IR_RET && b->has_ret_value && b->ret_value < n &&
+            single[b->ret_value]) last[b->ret_value] = at;
+
+        at = 0;
+        for (v = b->first; v; v = v->next, ++at) {
+            /* Free whatever was read for the last time before this. */
+            for (i = 0; i < REG_COUNT; ++i)
+                if (busy[i] && last[owner[i]] < at) busy[i] = 0;
+            if (!v->has_dest || !single[v->dest]) continue;
+            /* A call clobbers the scratch registers but not these three, so a
+               result can still be kept in one across the call that made it. */
+            for (i = 0; i < REG_COUNT; ++i)
+                if (!busy[i]) {
+                    busy[i] = 1;
+                    owner[i] = v->dest;
+                    fr->temp_reg[v->dest] = (unsigned char)(i + 1);
+                    break;
+                }
+        }
+    }
+    free(single); free(home); free(last);
 }
 
 static long temp_off(const Frame *fr, unsigned t)
@@ -111,20 +234,66 @@ static void place_addr(const Frame *fr, const FeIrPlace *p, char *buf)
 }
 
 /* A temporary-based place needs its pointer in a register first. */
+static void load_temp(const Frame *fr, unsigned t, const char *reg,
+                      FILE *out);
+
 static void load_place_base(const Frame *fr, const FeIrPlace *p, FILE *out)
 {
     if (p->base != FE_PLACE_TEMP) return;
-    fprintf(out, "        mov     edx, [ebp%+ld]\n", temp_off(fr, p->index));
+    /* Through load_temp, not straight from the slot: the pointer may be living
+       in a register, in which case the slot was never written. */
+    load_temp(fr, p->index, "edx", out);
 }
 
 static void load_temp(const Frame *fr, unsigned t, const char *reg, FILE *out)
 {
+    if (fr->temp_reg && fr->temp_reg[t]) {
+        const char *from = REGS[fr->temp_reg[t] - 1];
+        if (strcmp(from, reg) != 0)
+            fprintf(out, "        mov     %s, %s\n", reg, from);
+        return;
+    }
     fprintf(out, "        mov     %s, [ebp%+ld]\n", reg, temp_off(fr, t));
 }
 
 static void store_temp(const Frame *fr, unsigned t, const char *reg, FILE *out)
 {
+    if (fr->temp_reg && fr->temp_reg[t]) {
+        const char *to = REGS[fr->temp_reg[t] - 1];
+        if (strcmp(to, reg) != 0)
+            fprintf(out, "        mov     %s, %s\n", to, reg);
+        return;
+    }
     fprintf(out, "        mov     [ebp%+ld], %s\n", temp_off(fr, t), reg);
+}
+
+/* The register a temporary lives in, or null when it lives in its slot. */
+static const char *reg_home(const Frame *fr, unsigned t)
+{
+    if (!fr->temp_reg || !fr->temp_reg[t]) return 0;
+    return REGS[fr->temp_reg[t] - 1];
+}
+
+/* Something an instruction can take as its right-hand operand: a register, or
+   the temporary's slot read in place. */
+static void operand_of(const Frame *fr, unsigned t, char *buf)
+{
+    const char *r = reg_home(fr, t);
+    if (r) strcpy(buf, r);
+    else sprintf(buf, "dword ptr [ebp%+ld]", temp_off(fr, t));
+}
+
+static const char *simple_op(FeIrOp op)
+{
+    switch (op) {
+    case FE_IR_ADD: return "add ";
+    case FE_IR_SUB: return "sub ";
+    case FE_IR_AND: return "and ";
+    case FE_IR_OR:  return "or  ";
+    case FE_IR_XOR: return "xor ";
+    case FE_IR_MUL: return "imul";
+    default:        return 0;
+    }
 }
 
 static const char *cmp_set(FeIrOp op, int is_unsigned)
@@ -146,6 +315,39 @@ static void emit_binary(const Frame *fr, const FeIrValue *v, FILE *out)
     FeIrType t = is_cmp ? (FeIrType)v->imm : v->type;
     const char *a = reg_of(t, 0);
     const char *c = reg_of(t, 1);
+    /* When the result has a register of its own and the operation is one that
+       can work on any register, the whole thing happens there: no trip through
+       the scratch register and no trip through memory.
+
+       Only the full-width operations qualify. esi and edi have no byte halves,
+       so a narrow operation still goes through eax, where they do. */
+    if (!is_cmp && v->has_dest && (t == FE_IR_I32 || t == FE_IR_PTR) &&
+        simple_op(v->op)) {
+        const char *d = reg_home(fr, v->dest);
+        const char *rb = reg_home(fr, v->b);
+        if (d && !(rb && strcmp(rb, d) == 0)) {
+            char right[64];
+            load_temp(fr, v->a, d, out);
+            operand_of(fr, v->b, right);
+            fprintf(out, "        %s    %s, %s\n", simple_op(v->op), d, right);
+            return;
+        }
+    }
+    /* A full-width comparison can read both sides where they already are; the
+       answer still has to come out of `al`, which is why it lands in eax when
+       the result has no register of its own. */
+    if (is_cmp && (t == FE_IR_I32 || t == FE_IR_PTR)) {
+        const char *left = reg_home(fr, v->a);
+        const char *d = reg_home(fr, v->dest);
+        char right[64];
+        if (!left) { load_temp(fr, v->a, "eax", out); left = "eax"; }
+        operand_of(fr, v->b, right);
+        fprintf(out, "        cmp     %s, %s\n", left, right);
+        fprintf(out, "        %s   al\n", cmp_set(v->op, v->is_unsigned));
+        fprintf(out, "        movzx   %s, al\n", d ? d : "eax");
+        if (!d) store_temp(fr, v->dest, "eax", out);
+        return;
+    }
     load_temp(fr, v->a, "eax", out);
     load_temp(fr, v->b, "ecx", out);
     if (is_cmp) {
@@ -186,34 +388,50 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
     char addr[128];
     unsigned i;
     switch (v->op) {
-    case FE_IR_CONST:
-        fprintf(out, "        mov     eax, %ld\n", v->imm);
-        store_temp(fr, v->dest, "eax", out);
+    case FE_IR_CONST: {
+        const char *d = reg_home(fr, v->dest);
+        fprintf(out, "        mov     %s, %ld\n", d ? d : "eax", v->imm);
+        if (!d) store_temp(fr, v->dest, "eax", out);
         break;
-    case FE_IR_LOAD:
+    }
+    case FE_IR_LOAD: {
+        const char *d = reg_home(fr, v->dest);
+        const char *into = d ? d : "eax";
         load_place_base(fr, &v->place, out);
         place_addr(fr, &v->place, addr);
         if (v->type == FE_IR_I8)
-            fprintf(out, "        movzx   eax, byte ptr %s\n", addr);
+            fprintf(out, "        movzx   %s, byte ptr %s\n", into, addr);
         else if (v->type == FE_IR_I16)
-            fprintf(out, "        movzx   eax, word ptr %s\n", addr);
+            fprintf(out, "        movzx   %s, word ptr %s\n", into, addr);
         else
-            fprintf(out, "        mov     eax, dword ptr %s\n", addr);
-        store_temp(fr, v->dest, "eax", out);
+            fprintf(out, "        mov     %s, dword ptr %s\n", into, addr);
+        if (!d) store_temp(fr, v->dest, "eax", out);
         break;
-    case FE_IR_STORE:
+    }
+    case FE_IR_STORE: {
+        const char *from = reg_home(fr, v->a);
         load_place_base(fr, &v->place, out);
         place_addr(fr, &v->place, addr);
+        /* A full-width value already in a register goes straight out; a narrow
+           one needs a byte or word half, which only eax has here. */
+        if (from && (v->type == FE_IR_I32 || v->type == FE_IR_PTR)) {
+            fprintf(out, "        mov     %s %s, %s\n", word_of(v->type), addr,
+                    from);
+            break;
+        }
         load_temp(fr, v->a, "eax", out);
         fprintf(out, "        mov     %s %s, %s\n", word_of(v->type), addr,
                 reg_of(v->type, 0));
         break;
-    case FE_IR_ADDR:
+    }
+    case FE_IR_ADDR: {
+        const char *d = reg_home(fr, v->dest);
         load_place_base(fr, &v->place, out);
         place_addr(fr, &v->place, addr);
-        fprintf(out, "        lea     eax, %s\n", addr);
-        store_temp(fr, v->dest, "eax", out);
+        fprintf(out, "        lea     %s, %s\n", d ? d : "eax", addr);
+        if (!d) store_temp(fr, v->dest, "eax", out);
         break;
+    }
     case FE_IR_CAST:
         load_temp(fr, v->a, "eax", out);
         /* Narrowing is free once everything is kept in a 32-bit slot; widening
@@ -240,25 +458,33 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
     case FE_IR_COPY: {
         char dst[128];
         char src[128];
-        /* The source base and the destination base both want edx, so a
-           temporary-based place is resolved into esi or edi first. */
+        /* Both addresses are worked out in the scratch registers first, and
+           only then does the block copy take over esi and edi -- which may be
+           holding temporaries, so it hands them back. */
         if (v->place2.base == FE_PLACE_TEMP) {
-            load_temp(fr, v->place2.index, "esi", out);
-            sprintf(src, "[esi%+ld]", v->place2.offset);
+            load_temp(fr, v->place2.index, "eax", out);
+            if (v->place2.offset)
+                fprintf(out, "        add     eax, %ld\n", v->place2.offset);
         } else {
             place_addr(fr, &v->place2, src);
+            fprintf(out, "        lea     eax, %s\n", src);
         }
         if (v->place.base == FE_PLACE_TEMP) {
-            load_temp(fr, v->place.index, "edi", out);
-            sprintf(dst, "[edi%+ld]", v->place.offset);
+            load_temp(fr, v->place.index, "edx", out);
+            if (v->place.offset)
+                fprintf(out, "        add     edx, %ld\n", v->place.offset);
         } else {
             place_addr(fr, &v->place, dst);
+            fprintf(out, "        lea     edx, %s\n", dst);
         }
-        fprintf(out, "        lea     esi, %s\n", src);
-        fprintf(out, "        lea     edi, %s\n", dst);
+        fprintf(out, "        push    esi\n");
+        fprintf(out, "        push    edi\n");
+        fprintf(out, "        mov     esi, eax\n");
+        fprintf(out, "        mov     edi, edx\n");
         fprintf(out, "        mov     ecx, %ld\n", v->imm);
         fprintf(out, "        cld\n");
         fprintf(out, "        rep movsb\n");
+        fprintf(out, "        pop     edi\n        pop     esi\n");
         break;
     }
     default:
@@ -282,13 +508,15 @@ static void emit_func(const FeIrModule *m, const FeIrFunc *f, FILE *out)
                              sizeof(long));
     if (!storage) return;
     frame_layout(&fr, f, storage);
+    allocate_registers(&fr, f);
 
     fprintf(out, "\npublic %s\n", f->name);
     fprintf(out, "%s proc near\n", f->name);
     fprintf(out, "        push    ebp\n");
     fprintf(out, "        mov     ebp, esp\n");
     if (fr.size) fprintf(out, "        sub     esp, %ld\n", fr.size);
-    fprintf(out, "        push    esi\n        push    edi\n");
+    fprintf(out, "        push    ebx\n        push    esi\n"
+                 "        push    edi\n");
     /* Copy the incoming arguments into the frame. */
     for (i = 0; i < f->param_count; ++i) {
         fprintf(out, "        mov     eax, [ebp+%ld]\n", arg);
@@ -313,7 +541,8 @@ static void emit_func(const FeIrModule *m, const FeIrFunc *f, FILE *out)
             break;
         case FE_IR_RET:
             if (b->has_ret_value) load_temp(&fr, b->ret_value, "eax", out);
-            fprintf(out, "        pop     edi\n        pop     esi\n");
+            fprintf(out, "        pop     edi\n        pop     esi\n"
+                         "        pop     ebx\n");
             fprintf(out, "        mov     esp, ebp\n        pop     ebp\n");
             fprintf(out, "        ret\n");
             break;
@@ -328,6 +557,7 @@ static void emit_func(const FeIrModule *m, const FeIrFunc *f, FILE *out)
     }
     fprintf(out, "%s endp\n", f->name);
     free(storage);
+    free(fr.temp_reg);
     (void)m;
 }
 
