@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "fec" / "tests"
 WATCOM = ROOT / ".dosboxx" / "watcom"
 SOURCES = ("arena", "diag", "lexer", "ast", "parser", "types", "m7", "own",
-           "check", "resolve", "driver")
+           "check", "resolve", "ir", "driver")
 # Fixtures live here until there is a code generator to run them against.
 QUARANTINE = "pending-backend"
 
