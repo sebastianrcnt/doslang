@@ -1,0 +1,37 @@
+// EXIT:0
+// OUTPUT:read 64 bytes
+// OUTPUT:first line: // EXIT:0
+unit readfile;
+import std.io;
+
+// Reads its own source and reports the first line. A program that can open a
+// file is a program that can be a compiler.
+
+fn main() -> i32 {
+    var path: [64]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let n: usize = io.to_cstr(path[..], "fec/tests/exec/readfile.fe");
+    let handle: i32 = io.open_read(path[0..n]) catch |e| {
+        @print("cannot open\n");
+        return 1;
+    };
+    var buf: [64]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let got: usize = io.read(handle, buf[..]) catch |e| {
+        io.close(handle);
+        return 2;
+    };
+    io.close(handle);
+    @print("read {} bytes\n", n);
+    var stop: usize = 0;
+    while stop < got {
+        if buf[stop] == 10 { break; }
+        stop = stop + 1;
+    }
+    @print("first line: {}\n", buf[0..stop]);
+    return 0;
+}

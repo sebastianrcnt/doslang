@@ -333,6 +333,10 @@ void lower_stmt(Lower *L, FeNode *n)
     case FE_N_VAR:
     case FE_N_CONST: {
         unsigned local = declare_var(L, n->cname, n->sem_type, n->text);
+        /* `undefined` says the storage starts out unset, so there is nothing
+           to write into it. */
+        if (n->b && n->b->kind == FE_N_LITERAL && n->b->text &&
+            !strcmp(n->b->text, "undefined")) return;
         if (n->b) {
             Slot v = lower_expr(L, n->b);
             unsigned flag;

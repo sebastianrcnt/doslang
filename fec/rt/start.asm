@@ -131,6 +131,10 @@ fe_trap endp
 extern _GetProcessHeap@0 : near
 extern _HeapAlloc@12 : near
 extern _HeapFree@12 : near
+extern _CreateFileA@28 : near
+extern _ReadFile@20 : near
+extern _CloseHandle@4 : near
+extern _GetCommandLineA@0 : near
 
 ; fe_rt_write(handle, ptr, len) -> bytes written
 public fe_rt_write
@@ -297,6 +301,78 @@ hex_digit:
         pop     ebp
         ret
 fe_rt_write_hex endp
+
+; fe_rt_open(path, write) -> handle, or -1
+; `path` is a NUL-terminated byte string. Reading opens what is there; writing
+; creates or truncates.
+public fe_rt_open
+fe_rt_open proc near
+        push    ebp
+        mov     ebp, esp
+        push    0                       ; hTemplateFile
+        push    128                     ; FILE_ATTRIBUTE_NORMAL
+        cmp     dword ptr [ebp+12], 0
+        jne     open_write
+        push    3                       ; OPEN_EXISTING
+        push    0
+        push    1                       ; FILE_SHARE_READ
+        push    80000000h               ; GENERIC_READ
+        jmp     open_call
+open_write:
+        push    2                       ; CREATE_ALWAYS
+        push    0
+        push    0
+        push    40000000h               ; GENERIC_WRITE
+open_call:
+        push    dword ptr [ebp+8]
+        call    _CreateFileA@28
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_open endp
+
+; fe_rt_read(handle, buf, len) -> bytes read, or -1
+public fe_rt_read
+fe_rt_read proc near
+        push    ebp
+        mov     ebp, esp
+        push    0
+        push    offset written
+        push    dword ptr [ebp+16]
+        push    dword ptr [ebp+12]
+        push    dword ptr [ebp+8]
+        call    _ReadFile@20
+        test    eax, eax
+        jne     read_ok
+        mov     eax, -1
+        jmp     read_done
+read_ok:
+        mov     eax, [written]
+read_done:
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_read endp
+
+; fe_rt_close(handle)
+public fe_rt_close
+fe_rt_close proc near
+        push    ebp
+        mov     ebp, esp
+        push    dword ptr [ebp+8]
+        call    _CloseHandle@4
+        mov     esp, ebp
+        pop     ebp
+        ret
+fe_rt_close endp
+
+; fe_rt_cmdline() -> pointer to the whole command line, NUL terminated.
+; Splitting it is the standard library's job, not the runtime's.
+public fe_rt_cmdline
+fe_rt_cmdline proc near
+        call    _GetCommandLineA@0
+        ret
+fe_rt_cmdline endp
 
 ; fe_rt_exit(code) -- never returns
 public fe_rt_exit

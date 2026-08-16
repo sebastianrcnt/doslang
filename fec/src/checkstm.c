@@ -535,6 +535,14 @@ FeType *m7_check_expected(FeCheckerState *s, FeNode *value,
     FeType *actual;
     FeM7ContextKind context;
     if (!value) return unknown(s->c);
+    /* `undefined` is not a value, it is the absence of one: it takes whatever
+       type was asked for, and says the storage starts out unset. Without this
+       there is no way to declare a buffer larger than you care to type out. */
+    if (value->kind==FE_N_LITERAL && value->text &&
+        !strcmp(value->text,"undefined") && expected) {
+        value->sem_type=expected;
+        return expected;
+    }
     if (fe_m7_is_null(value)) {
         if (!fe_m7_can_contextual_null(expected)) {
             err(s->c,value->loc,"null requires a contextual optional type");

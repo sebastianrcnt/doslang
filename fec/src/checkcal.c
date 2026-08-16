@@ -444,6 +444,14 @@ FeType *check_expr(FeCheckerState *s, FeNode *n)
             n->sem_type=fe_type_intern(&s->c->types,"bool");
             return n->sem_type;
         }
+        /* A raw pointer plus a number is an address further along. Only raw
+           pointers: an owner or a borrow has a place it belongs to, and
+           walking away from it is what `*T` is for. */
+        if (known(a) && a->kind==FE_TYPE_RAW && known(b) &&
+            fe_type_is_integer(b) && op[0] && (op[0]=='+' || op[0]=='-')) {
+            n->sem_type=a;
+            return n->sem_type;
+        }
         if ((known(a) && !fe_type_is_integer(a)) ||
             (known(b) && !fe_type_is_integer(b)) ||
             (known(a) && known(b) && !fe_type_equal(a,b) &&

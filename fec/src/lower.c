@@ -25,7 +25,8 @@ FeIrType ir_type_of(const FeType *t)
         if (t->bits <= 8U) return FE_IR_I8;
         if (t->bits <= 16U) return FE_IR_I16;
         return FE_IR_I32;
-    case FE_TYPE_REF:   return FE_IR_PTR;
+    case FE_TYPE_REF:
+    case FE_TYPE_RAW:   return FE_IR_PTR;
     case FE_TYPE_OWNED:
         /* An owned slice carries a length beside the pointer. */
         return t->elem && t->elem->kind == FE_TYPE_SLICE ? FE_IR_MEM : FE_IR_PTR;
@@ -389,6 +390,36 @@ int lower_builtin(Lower *L, FeNode *n, Slot *out)
         long v = !strcmp(name, "@size_of") ? (long)ir_size(t)
                                            : (long)ir_align(t);
         *out = slot_value(fe_ir_const(L->m, L->b, FE_IR_I32, v), FE_IR_I32);
+        return 1;
+    }
+    if (!strcmp(name, "@volatile_load")) {
+        /* Reading through a raw pointer. Nothing here reorders loads yet, so
+           volatile and ordinary read the same; the keyword is what marks the
+           access as deliberate, and the checker already required `unsafe`. */
+        FeNode *arg = n->children;
+        unsigned p = as_value(L, lower_expr(L, arg), arg);
+        FeIrType t = ir_type(n->sem_type);
+        if (t == FE_IR_VOID || t == FE_IR_MEM) t = FE_IR_I8;
+        *out = slot_place(fe_ir_at_temp(p, 0), t, ir_size(n->sem_type));
+        return 1;
+    }
+    if (!strcmp(name, "@volatile_store")) {
+        FeNode *arg = n->children;
+        FeNode *value = arg ? arg->next : 0;
+        unsigned p = as_value(L, lower_expr(L, arg), arg);
+        Slot v = lower_expr(L, value);
+        FeIrType t = value && value->sem_type ? ir_type(value->sem_type)
+                                              : FE_IR_I8;
+        fe_ir_store(L->m, L->b, fe_ir_at_temp(p, 0), as_value(L, v, value), t);
+        *out = slot_void();
+        return 1;
+    }
+    if (!strcmp(name, "@ptr_cast")) {
+        /* A pointer is a pointer; the type it is said to point at is the
+           checker's business and leaves no trace here. */
+        FeNode *arg = n->children;
+        FeNode *value = arg ? arg->next : 0;
+        *out = slot_value(as_value(L, lower_expr(L, value), value), FE_IR_PTR);
         return 1;
     }
     if (!strcmp(name, "@line")) {

@@ -10,7 +10,8 @@ pub fn write(w: Writer, bytes: []u8) -> usize {
     if w == Writer.Null { return bytes.n; }
     var handle: i32 = 1;
     if w == Writer.Stderr { handle = 2; }
-    let done: i32 = sys.raw_write(handle, &bytes[0], bytes.n);
+    var done: i32 = 0;
+    unsafe { done = sys.raw_write(handle, @ptr_cast(u8, &bytes[0]), bytes.n); }
     if done < 0 { return 0; }
     return done as usize;
 }
@@ -23,3 +24,97 @@ pub fn println(bytes: []u8) -> usize {
     let n: usize = write(Writer.Stdout, bytes);
     return n + write(Writer.Stdout, "\n");
 }
+
+// Files. A handle is what the operating system gave back; -1 means it did not
+// give one. The path has to be NUL terminated because that is what the system
+// call wants, and `to_cstr` is how a Ferro string becomes one.
+
+pub fn open_read(path: []mut u8) -> !i32 {
+    var handle: i32 = 0;
+    unsafe { handle = sys.raw_open(@ptr_cast(u8, &path[0]), 0); }
+    if handle == 0 - 1 { return error.NoSuchFile; }
+    return handle;
+}
+
+pub fn open_write(path: []mut u8) -> !i32 {
+    var handle: i32 = 0;
+    unsafe { handle = sys.raw_open(@ptr_cast(u8, &path[0]), 1); }
+    if handle == 0 - 1 { return error.CannotWrite; }
+    return handle;
+}
+
+pub fn read(handle: i32, into: []mut u8) -> !usize {
+    var got: i32 = 0;
+    unsafe { got = sys.raw_read(handle, @ptr_cast(u8, &into[0]), into.n); }
+    if got < 0 { return error.ReadFailed; }
+    return got as usize;
+}
+
+pub fn close(handle: i32) -> void {
+    sys.raw_close(handle);
+}
+
+/// Put `text` into `buf` with a NUL after it and say how many bytes that took,
+/// the NUL included. A system call cannot be told a length, so it needs this.
+///
+/// The length comes back rather than a slice of `buf`: with two reference-like
+/// parameters the signature cannot say which one a returned slice came from,
+/// and R8 will not guess.
+pub fn to_cstr(buf: []mut u8, text: []u8) -> usize {
+    var i: usize = 0;
+    while i < text.n {
+        if i + 1 >= buf.n { break; }
+        buf[i] = text[i];
+        i = i + 1;
+    }
+    if i < buf.n { buf[i] = 0; }
+    return i + 1;
+}
+
+pub fn write_file(handle: i32, bytes: []u8) -> !usize {
+    var done: i32 = 0;
+    unsafe { done = sys.raw_write(handle, @ptr_cast(u8, &bytes[0]), bytes.n); }
+    if done < 0 { return error.WriteFailed; }
+    return done as usize;
+}
+
+/// Copy the command line into `buf` and say how long it is. It arrives as one
+/// string with the program's own name first; `arg` picks a piece out of it.
+pub fn cmdline(buf: []mut u8) -> usize {
+    let raw: *u8 = sys.raw_cmdline();
+    var i: usize = 0;
+    unsafe {
+        while i + 1 < buf.n {
+            let c: u8 = @volatile_load(raw + i);
+            if c == 0 { break; }
+            buf[i] = c;
+            i = i + 1;
+        }
+    }
+    return i;
+}
+
+/// The `n`th whitespace-separated piece of `line`, or an empty slice when
+/// there is no such piece. Quoting is not handled; nothing here needs it yet.
+pub fn arg(line: []u8, n: usize) -> []u8 {
+    var at: usize = 0;
+    var seen: usize = 0;
+    while at < line.n {
+        while at < line.n {
+            if line[at] != 32 { break; }
+            at = at + 1;
+        }
+        var stop: usize = at;
+        while stop < line.n {
+            if line[stop] == 32 { break; }
+            stop = stop + 1;
+        }
+        if stop > at {
+            if seen == n { return line[at..stop]; }
+            seen = seen + 1;
+        }
+        at = stop;
+    }
+    return line[0..0];
+}
+

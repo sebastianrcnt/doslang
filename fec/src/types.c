@@ -234,6 +234,21 @@ FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable)
     return t;
 }
 
+FeType *fe_type_raw(FeTypeCtx *ctx, FeType *elem)
+{
+    char key[320];
+    FeType *t;
+    sprintf(key, "*%s", elem ? elem->name : "?");
+    t = fe_type_intern(ctx, key);
+    if (t->kind == FE_TYPE_UNKNOWN) {
+        t->kind = FE_TYPE_RAW;
+        t->elem = elem;
+        t->size = FE_PTR_SIZE;
+        t->align = FE_PTR_ALIGN;
+    }
+    return t;
+}
+
 FeType *fe_type_owned(FeTypeCtx *ctx, FeType *elem)
 {
     char key[320];
@@ -485,7 +500,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
         if (t->size > 4UL) t->size = 4UL;
         t->cycle_state = 2; return;
     }
-    if (t->kind == FE_TYPE_REF) {
+    if (t->kind == FE_TYPE_REF || t->kind == FE_TYPE_RAW) {
         t->size = FE_PTR_SIZE;
         t->align = FE_PTR_ALIGN;
         t->cycle_state = 2; return;
@@ -613,7 +628,7 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
         return fe_type_error_union(ctx,fe_type_from_ast(ctx,node->a));
     }
     if (node->text && strcmp(node->text, "*") == 0)
-        return fe_type_intern(ctx, "<unknown>");
+        return fe_type_raw(ctx, fe_type_from_ast(ctx, node->a));
     if (node->text && strcmp(node->text, "fn") == 0)
         return fe_type_intern(ctx, "<unknown>");
     /* A plain named type may be a generic declaration -- with arguments it is

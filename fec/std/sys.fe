@@ -8,6 +8,10 @@ extern "c" fn fe_rt_free(p: *u8);
 extern "c" fn fe_rt_exit(code: i32);
 extern "c" fn fe_rt_allocs() -> i32;
 extern "c" fn fe_rt_frees() -> i32;
+extern "c" fn fe_rt_open(path: *u8, write: i32) -> i32;
+extern "c" fn fe_rt_read(handle: i32, buf: *u8, len: usize) -> i32;
+extern "c" fn fe_rt_close(handle: i32);
+extern "c" fn fe_rt_cmdline() -> *u8;
 
 pub fn exit(code: i32) -> void {
     unsafe { fe_rt_exit(code); }
@@ -29,3 +33,21 @@ pub fn raw_free(p: *u8) -> void {
 // back. A test can insist the two agree; nothing else should care.
 pub fn allocs() -> i32 { unsafe { return fe_rt_allocs(); } }
 pub fn frees() -> i32 { unsafe { return fe_rt_frees(); } }
+
+pub fn raw_open(path: *u8, write: i32) -> i32 {
+    unsafe { return fe_rt_open(path, write); }
+}
+
+pub fn raw_read(handle: i32, buf: *u8, len: usize) -> i32 {
+    unsafe { return fe_rt_read(handle, buf, len); }
+}
+
+pub fn raw_close(handle: i32) -> void {
+    unsafe { fe_rt_close(handle); }
+}
+
+/// The whole command line as one NUL-terminated string. Splitting it into
+/// arguments is `std.io`'s job: the runtime should not know about quoting.
+pub fn raw_cmdline() -> *u8 {
+    unsafe { return fe_rt_cmdline(); }
+}

@@ -1,0 +1,21 @@
+// EXIT:0
+// OUTPUT:args ok
+unit cmdargs;
+import std.io;
+import std.str;
+
+// The command line reaches the program. A compiler is told which file to read
+// this way and no other.
+
+fn main() -> i32 {
+    var line: [512]u8 = undefined;
+    let n: usize = io.cmdline(line[..]);
+    let program: []u8 = io.arg(line[0..n], 0);
+    if program.n == 0 { @print("no program name\n"); return 1; }
+    if str.find(program, "cmdargs") == program.n {
+        @print("unexpected program name: {}\n", program);
+        return 2;
+    }
+    @print("args ok\n");
+    return 0;
+}

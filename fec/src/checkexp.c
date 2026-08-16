@@ -495,6 +495,19 @@ FeType *check_expr_core(FeCheckerState *s, FeNode *n)
             if(!target || !known(target)) err(c,n->loc,"size/align requires a known type");
             n->sem_type=fe_type_intern(&c->types,"usize"); return n->sem_type;
         }
+        if (!n->a && n->text && strcmp(n->text,"@ptr_cast")==0) {
+            /* `@ptr_cast(T, p)`: the first argument names the type the result
+               points at, the second is the address. R9 keeps it in `unsafe`. */
+            FeNode *type_arg=n->children;
+            FeNode *value=type_arg ? type_arg->next : 0;
+            FeType *target=type_arg && type_arg->kind==FE_N_IDENT ?
+                fe_type_intern(&c->types,type_arg->text) : unknown(c);
+            if (!type_arg || !value || value->next)
+                err(c,n->loc,"@ptr_cast requires a type and a pointer");
+            if (value) check_expr(s,value);
+            n->sem_type=fe_type_raw(&c->types,target);
+            return n->sem_type;
+        }
         if (n->a && n->a->kind == FE_N_MEMBER) {
             FeNode *method;
             FeNode *self_param;

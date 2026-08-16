@@ -7,7 +7,11 @@ typedef enum FeTypeKind {
     FE_TYPE_ERROR, FE_TYPE_ERROR_UNION, FE_TYPE_OPTIONAL,
     FE_TYPE_VOID, FE_TYPE_BOOL, FE_TYPE_CHAR, FE_TYPE_INT,
     FE_TYPE_STRUCT, FE_TYPE_ENUM, FE_TYPE_ARRAY, FE_TYPE_SLICE, FE_TYPE_STR,
-    FE_TYPE_REF, FE_TYPE_OWNED, FE_TYPE_UNKNOWN
+    FE_TYPE_REF, FE_TYPE_OWNED,
+    /* `*T`. A machine address and nothing else: no borrow to track, no drop
+       to run, Copy. Everything it is good for is behind `unsafe`. */
+    FE_TYPE_RAW,
+    FE_TYPE_UNKNOWN
 } FeTypeKind;
 
 /* One target, one pointer width (SPEC 2). usize and isize are that width and
@@ -124,6 +128,7 @@ FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_mut_slice(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable);
 FeType *fe_type_owned(FeTypeCtx *ctx, FeType *elem);
+FeType *fe_type_raw(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value);
 void fe_type_require_replace(FeTypeCtx *ctx, FeType *type);
 FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed);
