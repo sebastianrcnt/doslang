@@ -1,0 +1,61 @@
+// EXIT:0
+// OUTPUT:first keyword unit @1
+// OUTPUT:number 42 @3
+// OUTPUT:text "hi" @3
+// OUTPUT:arrow -> @5
+// OUTPUT:keyword 6 name 7 number 1 text 1 punct 15
+// OUTPUT:total 30
+unit main;
+import std.io;
+import tok;
+import scan;
+
+// The Ferro lexer, written in Ferro. This is the shape a self-hosted `fec`
+// would take: read a source, hand back tokens, say where each came from.
+
+const SOURCE: str = "unit demo;\n\nfn answer() { let n = 42; let s = \"hi\"; }\n// a comment\nfn arrow() -> i32 { return n; }\n";
+
+fn main() -> i32 {
+    var at: usize = 0;
+    var line: usize = 1;
+    var keywords: usize = 0;
+    var names: usize = 0;
+    var numbers: usize = 0;
+    var texts: usize = 0;
+    var puncts: usize = 0;
+    var total: usize = 0;
+    var first: bool = true;
+    while true {
+        let t: tok.Token = scan.next(SOURCE, &mut at, &mut line);
+        if t.kind == tok.Kind.End { break; }
+        total = total + 1;
+        if first {
+            @print("first {} {} @{}\n", tok.name_of(t.kind),
+                   tok.text(SOURCE, t), t.line);
+            first = false;
+        }
+        match t.kind {
+            Keyword => { keywords = keywords + 1; }
+            Name => { names = names + 1; }
+            Number => {
+                numbers = numbers + 1;
+                @print("number {} @{}\n", tok.text(SOURCE, t), t.line);
+            }
+            Text => {
+                texts = texts + 1;
+                @print("text {} @{}\n", tok.text(SOURCE, t), t.line);
+            }
+            Punct => {
+                puncts = puncts + 1;
+                if t.len == 2 {
+                    @print("arrow {} @{}\n", tok.text(SOURCE, t), t.line);
+                }
+            }
+            _ => { @print("unexpected {}\n", tok.name_of(t.kind)); }
+        }
+    }
+    @print("keyword {} name {} number {} text {} punct {}\n",
+           keywords, names, numbers, texts, puncts);
+    @print("total {}\n", total);
+    return 0;
+}

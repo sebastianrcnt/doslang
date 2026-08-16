@@ -1,0 +1,39 @@
+unit tok;
+
+// What the lexer produces. A token does not hold the text it came from: R4
+// keeps borrows out of aggregate storage, so it records where in the source it
+// starts and how long it is, and the source travels beside it.
+
+pub enum Kind {
+    End,
+    Name,
+    Number,
+    Text,
+    Punct,
+    Keyword,
+    Bad,
+}
+
+pub struct Token {
+    pub kind: Kind,
+    pub from: usize,
+    pub len: usize,
+    pub line: usize,
+}
+
+pub fn text(src: []u8, t: Token) -> []u8 {
+    return src[t.from..t.from + t.len];
+}
+
+pub fn name_of(k: Kind) -> []u8 {
+    match k {
+        End => { return "end"; }
+        Name => { return "name"; }
+        Number => { return "number"; }
+        Text => { return "text"; }
+        Punct => { return "punct"; }
+        Keyword => { return "keyword"; }
+        Bad => { return "bad"; }
+    }
+    return "?";
+}

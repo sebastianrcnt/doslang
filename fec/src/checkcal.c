@@ -16,7 +16,23 @@ FeType *cross_unit_value(FeCheckerState *s, FeNode *n, int *handled)
     if (!home) return 0;
     *handled=1;
     sym=unit_member(s->c,home,n->b && n->b->text ? n->b->text : "");
-    if (!sym) { err(s->c,n->loc,"unknown name"); return unknown(s->c); }
+    if (!sym) {
+        /* A name in another unit can be a type as well as a value --
+           `binding.Enum.Variant` reaches one through the other. */
+        FeType *there=unit_type(s->c,home,n->b && n->b->text ? n->b->text : "");
+        FeNode *decl=unit_type_decl(s->c,home,
+                                    n->b && n->b->text ? n->b->text : "");
+        if (there && decl) {
+            if (!decl_is_public(decl)) {
+                err(s->c,n->loc,"type is private to its unit");
+                return unknown(s->c);
+            }
+            n->sem_type=there;
+            return there;
+        }
+        err(s->c,n->loc,"unknown name");
+        return unknown(s->c);
+    }
     if (!decl_is_public(sym->decl)) {
         err(s->c,n->loc,"name is private to its unit");
         return unknown(s->c);

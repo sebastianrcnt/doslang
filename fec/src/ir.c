@@ -106,6 +106,20 @@ FeIrGlobal *fe_ir_global(FeIrModule *m, const char *name, FeIrType type,
     return g;
 }
 
+void fe_ir_global_ref(FeIrModule *m, FeIrGlobal *g, unsigned long at,
+                      const char *symbol)
+{
+    FeIrReloc *grown;
+    if (!g) return;
+    grown = (FeIrReloc *)ir_alloc(m, (g->reloc_count + 1) * sizeof(FeIrReloc));
+    if (!grown) return;
+    if (g->relocs) memcpy(grown, g->relocs, g->reloc_count * sizeof(FeIrReloc));
+    grown[g->reloc_count].at = at;
+    grown[g->reloc_count].symbol = symbol;
+    g->relocs = grown;
+    ++g->reloc_count;
+}
+
 const char *fe_ir_string(FeIrModule *m, const char *bytes, unsigned long length)
 {
     FeIrGlobal *g;

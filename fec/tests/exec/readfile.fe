@@ -1,5 +1,5 @@
 // EXIT:0
-// OUTPUT:read 64 bytes
+// OUTPUT:read 27 bytes
 // OUTPUT:first line: // EXIT:0
 unit readfile;
 import std.io;

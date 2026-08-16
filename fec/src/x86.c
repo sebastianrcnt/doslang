@@ -634,10 +634,29 @@ void fe_x86_emit(const FeIrModule *m, FILE *out)
             fprintf(out, "        db      %lu dup(0)\n", g->size ? g->size : 1UL);
             continue;
         }
-        for (i = 0; i < g->size; ++i) {
-            if (i % 16 == 0) fputs("        db      ", out);
-            fprintf(out, "%u%s", g->init[i],
-                    (i + 1 == g->size || (i % 16) == 15) ? "\n" : ",");
+        for (i = 0; i < g->size; ) {
+            unsigned r;
+            unsigned long j;
+            for (r = 0; r < g->reloc_count; ++r)
+                if (g->relocs[r].at == i) break;
+            if (r < g->reloc_count) {
+                /* A hole the linker fills with an address. */
+                fprintf(out, "        dd      offset %s\n",
+                        g->relocs[r].symbol);
+                i += 4;
+                continue;
+            }
+            fputs("        db      ", out);
+            j = 0;
+            while (i < g->size && j < 16) {
+                unsigned q;
+                for (q = 0; q < g->reloc_count; ++q)
+                    if (g->relocs[q].at == i) break;
+                if (q < g->reloc_count) break;
+                fprintf(out, "%s%u", j ? "," : "", g->init[i]);
+                ++i; ++j;
+            }
+            fputc('\n', out);
         }
         if (!g->size) fputs("        db      0\n", out);
     }

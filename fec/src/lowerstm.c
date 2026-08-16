@@ -504,6 +504,41 @@ void lower_global(Lower *L, FeNode *n)
     unsigned char *init = 0;
     unsigned long size = ir_size(t);
     if (!n->cname) return;
+    /* A text constant is a pointer and a length. The pointer is not a number
+       anyone knows yet, so the bytes carry a hole and the linker fills it. */
+    if (n->b && n->b->kind == FE_N_LITERAL && n->b->text &&
+        n->b->text[0] == '"' && t &&
+        (t->kind == FE_TYPE_SLICE || t->kind == FE_TYPE_STR)) {
+        char text[1024];
+        unsigned long raw = strlen(n->b->text);
+        unsigned long len = 0;
+        unsigned long i;
+        const char *label;
+        FeIrGlobal *g;
+        if (raw >= 2) raw -= 2;
+        for (i = 0; i < raw && len + 1 < sizeof text; ++i) {
+            char ch = n->b->text[1 + i];
+            if (ch == 92 && i + 1 < raw) {
+                ++i;
+                switch (n->b->text[1 + i]) {
+                case 'n': ch = 10; break;
+                case 't': ch = 9; break;
+                case 'r': ch = 13; break;
+                case '0': ch = 0; break;
+                default:  ch = n->b->text[1 + i]; break;
+                }
+            }
+            text[len++] = ch;
+        }
+        label = fe_ir_string(L->m, text, len);
+        init = (unsigned char *)fe_arena_alloc(&L->m->arena, 8);
+        if (!init || !label) return;
+        for (i = 0; i < 8; ++i) init[i] = 0;
+        for (i = 0; i < 4; ++i) init[4 + i] = (unsigned char)((len >> (i * 8)) & 0xFF);
+        g = fe_ir_global(L->m, n->cname, FE_IR_MEM, 8, 4, init);
+        fe_ir_global_ref(L->m, g, (unsigned long)SLICE_PTR_OFFSET, label);
+        return;
+    }
     if (n->b && n->b->kind == FE_N_LITERAL && size && size <= 8) {
         long v = literal_value(n->b);
         unsigned long i;

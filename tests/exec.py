@@ -35,14 +35,17 @@ def expectations(path: Path) -> dict:
         m = re.match(r"//\s*(EXIT|OUTPUT|NOCHECKS):(.*)", line)
         if m:
             key, value = m.group(1), m.group(2).strip()
-            want[key] = int(value) if key in ("EXIT", "NOCHECKS") else value
+            if key == "OUTPUT":
+                # Every OUTPUT line has to appear. Keeping only the last one
+                # would let the earlier ones rot unnoticed.
+                want.setdefault("OUTPUT", []).append(value)
+            else:
+                want[key] = int(value)
     return want
 
 
 def check_one(fec: Path, path: Path, out_dir: Path) -> tuple[bool, str]:
     want = expectations(path)
-    if "EXIT" not in want:
-        return False, "no // EXIT: marker"
 
     exe, log = builder.build(fec, path, out_dir)
     if not exe:
@@ -52,8 +55,9 @@ def check_one(fec: Path, path: Path, out_dir: Path) -> tuple[bool, str]:
     code, text = builder.run(exe)
     if code != want["EXIT"]:
         return False, f"exited {code}, expected {want['EXIT']}\n  {text.strip()}"
-    if "OUTPUT" in want and want["OUTPUT"] not in text:
-        return False, f"output has no {want['OUTPUT']!r}\n  {text.strip()}"
+    for line in want.get("OUTPUT", []):
+        if line not in text:
+            return False, f"output has no {line!r}\n  {text.strip()}"
 
     if "NOCHECKS" in want:
         exe2, log2 = builder.build(fec, path, out_dir / "nochecks",
@@ -81,7 +85,9 @@ def main() -> int:
     if out_dir.exists():
         shutil.rmtree(out_dir, ignore_errors=True)
 
-    cases = sorted(PROGRAMS.rglob("*.fe"))
+    # A file with no `// EXIT:` is a unit some program imports, not a program.
+    cases = [p for p in sorted(PROGRAMS.rglob("*.fe"))
+             if "EXIT" in expectations(p)]
     if args.select:
         cases = [p for p in cases if args.select in p.as_posix()]
     if not cases:
