@@ -98,19 +98,6 @@ static FeType *m7_check_expected(FeCheckerState *s, FeNode *value,
     return actual;
 }
 
-/* TRIAL PATCH: m7_error_same was dead (W202); removed for this run.
-static int m7_error_same(FeCheckerState *s, FeType *a, FeType *b)
-{
-    FeType *ea;
-    FeType *eb;
-    if (!a || !b || a->kind!=FE_TYPE_ERROR_UNION ||
-        b->kind!=FE_TYPE_ERROR_UNION) return 0;
-    ea=fe_m7_error_type(&s->c->types,a);
-    eb=fe_m7_error_type(&s->c->types,b);
-    return ea && eb && fe_type_equal(ea,eb);
-}
-*/
-
 static FeType *m7_member_field(FeCheckerState *s, FeNode *n, FeType *base)
 {
     FeFieldType *field;
@@ -433,7 +420,7 @@ static FeType *m7_check_expr(FeCheckerState *s, FeNode *n)
         return n->sem_type;
     }
     if (n->kind==FE_N_IDENT)
-        return check_identifier(s,n,1);
+        return check_identifier(s,n);
     if (n->kind==FE_N_LITERAL)
         return check_expr(s,n);
     if (n->kind==FE_N_CALL)

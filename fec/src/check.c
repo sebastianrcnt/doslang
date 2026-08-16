@@ -808,10 +808,9 @@ static FeType *check_index(FeCheckerState *s, FeNode *n)
     n->sem_type=base->elem; return n->sem_type;
 }
 
-static FeType *check_identifier(FeCheckerState *s, FeNode *n, int read)
+static FeType *check_identifier(FeCheckerState *s, FeNode *n)
 {
     FeSym *sym;
-    (void)read; /* TRIAL PATCH: silence W303 under the check_m7.c wrapper */
     sym = find_symbol(s->scope, n->text ? n->text : "");
     if (!sym) {
         FeType *named=fe_type_intern(&s->c->types,n->text ? n->text : "");
@@ -843,7 +842,7 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
     const char *op;
     if (!n) return unknown(c);
     if (n->kind == FE_N_IDENT)
-        return check_identifier(s, n, 1);
+        return check_identifier(s, n);
     if (n->kind == FE_N_LITERAL) {
         if (!n->text) return unknown(c);
         if (strcmp(n->text, "true") == 0 || strcmp(n->text, "false") == 0)
