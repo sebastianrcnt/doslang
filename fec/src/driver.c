@@ -8,7 +8,7 @@
 static char *read_file(const char *name, unsigned long *size)
 {
     FILE *f; long n; char *p;
-    f=fopen(name,"rb"); if(!f){fprintf(stderr,"fec: cannot open %s\n",name);return 0;}
+    f=fopen(name,"rb"); if(!f){fprintf(fe_diag_stream(),"fec: cannot open %s\n",name);return 0;}
     if(fseek(f,0L,SEEK_END)!=0){fclose(f);return 0;} n=ftell(f); if(n<0){fclose(f);return 0;} rewind(f);
     p=(char *)malloc((unsigned long)n+1); if(!p){fclose(f);return 0;}
     if(n && fread(p,1,(size_t)n,f)!=(size_t)n){free(p);fclose(f);return 0;} fclose(f);p[n]='\0';*size=(unsigned long)n;return p;
@@ -54,7 +54,7 @@ int main(int argc, char **argv)
         else if(strcmp(argv[i],"--dump-tokens")==0) dump_tok=1;
         else if(strcmp(argv[i],"--check")==0) check_only=1;
         else if(strcmp(argv[i],"--emit-c")==0) emit=1;
-        else if(strcmp(argv[i],"-o")==0){if(i+1>=argc){fprintf(stderr,"fec: -o needs a path\n");return 2;}outname=argv[++i];}
+        else if(strcmp(argv[i],"-o")==0){if(i+1>=argc){fprintf(fe_diag_stream(),"fec: -o needs a path\n");return 2;}outname=argv[++i];}
         else if(strncmp(argv[i],"-o",2)==0 && argv[i][2]) outname=argv[i]+2;
         else if(strncmp(argv[i],"--target=bits16",15)==0) pointer_bits=16;
         else if(strncmp(argv[i],"--target=bits32",15)==0) pointer_bits=32;
@@ -62,13 +62,13 @@ int main(int argc, char **argv)
         else if(strncmp(argv[i],"--target=",9)==0 || strncmp(argv[i],"--model=",8)==0 || strcmp(argv[i],"--strip-error-names")==0) { }
         else if(argv[i][0]!='-') file=argv[i];
         else if(strcmp(argv[i],"--help")==0){usage();return 0;}
-        else {fprintf(stderr,"fec: unknown option %s\n",argv[i]);return 2;}
+        else {fprintf(fe_diag_stream(),"fec: unknown option %s\n",argv[i]);return 2;}
     }
     if((dump?1:0)+(dump_tok?1:0)+(check_only?1:0)+(emit?1:0)>1){
-        fprintf(stderr,"fec: choose only one output mode\n");
+        fprintf(fe_diag_stream(),"fec: choose only one output mode\n");
         return 2;
     }
-    if(!file){fprintf(stderr,"fec: no input file\n");return 2;}
+    if(!file){fprintf(fe_diag_stream(),"fec: no input file\n");return 2;}
     src=read_file(file,&n);
     if(!src)return 2;
     fe_diags_init(&d,src,n);
@@ -98,7 +98,7 @@ int main(int argc, char **argv)
         return 0;
     }
     out=outname?fopen(outname,"w"):stdout;
-    if(!out){fprintf(stderr,"fec: cannot create %s\n",outname);fe_ast_destroy(&ast);free(src);return 2;}
+    if(!out){fprintf(fe_diag_stream(),"fec: cannot create %s\n",outname);fe_ast_destroy(&ast);free(src);return 2;}
     fe_emit_c_init(&emitter,out,&check,pointer_bits,no_checks);
     fe_emit_c_program(&emitter);
     if(outname)fclose(out);

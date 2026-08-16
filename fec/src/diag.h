@@ -16,6 +16,13 @@ typedef struct FeDiags {
     unsigned long source_len;
 } FeDiags;
 
+/* Stream diagnostics are written to.  Defaults to stderr; returns stdout when
+   FE_DIAG_STDOUT is set in the environment.  DOS offers no way to redirect
+   handle 2 -- COMMAND.COM understands ">" and nothing else -- so under the test
+   runner every error message would otherwise be written straight to the screen
+   and lost.  Interactive use is unaffected: both streams reach the console. */
+FILE *fe_diag_stream(void);
+
 void fe_diags_init(FeDiags *d, const char *source, unsigned long source_len);
 void fe_diag_error(FeDiags *d, FeLoc loc, const char *msg);
 void fe_diag_errorf(FeDiags *d, FeLoc loc, const char *msg, const char *arg);
