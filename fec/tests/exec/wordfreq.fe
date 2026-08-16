@@ -1,0 +1,82 @@
+// EXIT:0
+// OUTPUT:the 3
+// OUTPUT:cat 2
+// OUTPUT:sat 1
+// OUTPUT:distinct 5
+// OUTPUT:balanced
+unit wordfreq;
+import std.io;
+import std.fmt;
+import std.str;
+import std.list;
+import std.sys;
+
+// Count how often each word appears, in the order the words were first seen.
+// A word is a run of anything that is not a space.
+
+struct Word {
+    from: usize,
+    len: usize,
+    count: i32,
+}
+
+fn report(text: []u8, w: Word) -> void {
+    var buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let n: usize = fmt.fmt_i32(buf[..], w.count);
+    io.print(text[w.from..w.from + w.len]);
+    io.print(" ");
+    io.print(buf[0..n]);
+    io.print("\n");
+}
+
+fn tally(text: []u8) -> !i32 {
+    var words: list.List(Word) = try list.List(Word).with_capacity(4);
+    var at: usize = 0;
+    while at < text.n {
+        var stop: usize = at;
+        while stop < text.n {
+            if text[stop] == 32 { break; }
+            stop = stop + 1;
+        }
+        if stop > at {
+            let word: []u8 = text[at..stop];
+            var seen: bool = false;
+            var i: usize = 0;
+            while i < words.count() {
+                let known: Word = words.at(i);
+                if str.eq(text[known.from..known.from + known.len], word) {
+                    words.set(i, Word{ from: known.from, len: known.len,
+                                       count: known.count + 1 });
+                    seen = true;
+                    break;
+                }
+                i = i + 1;
+            }
+            if not seen {
+                try words.push(Word{ from: at, len: stop - at, count: 1 });
+            }
+        }
+        at = stop + 1;
+    }
+    var k: usize = 0;
+    while k < words.count() {
+        let w: Word = words.at(k);
+        if w.count > 1 or k < 3 { report(text, w); }
+        k = k + 1;
+    }
+    return words.count() as i32;
+}
+
+fn main() -> i32 {
+    let distinct: i32 = tally("the cat sat on the mat the cat") catch |e| {
+        return 1;
+    };
+    var buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let n: usize = fmt.fmt_i32(buf[..], distinct);
+    io.print("distinct ");
+    io.print(buf[0..n]);
+    io.print("\n");
+    if sys.allocs() != sys.frees() { io.print("leaked\n"); return 2; }
+    io.print("balanced\n");
+    return 0;
+}
