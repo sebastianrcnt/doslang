@@ -26,9 +26,13 @@ wcl -q -za -wx -bt=dos -ml -k32768 -c -fo=parser.obj src\parser.c
 if errorlevel 1 goto build_fail
 wcl -q -za -wx -bt=dos -ml -k32768 -c -fo=types.obj src\types.c
 if errorlevel 1 goto build_fail
+wcl -q -za -wx -bt=dos -ml -k32768 -c -fo=m7.obj src\m7.c
+if errorlevel 1 goto build_fail
 wcl -q -za -wx -bt=dos -ml -k32768 -c -fo=own.obj src\own.c
 if errorlevel 1 goto build_fail
 wcl -q -za -wx -bt=dos -ml -k32768 -c -fo=check.obj src\check.c
+if errorlevel 1 goto build_fail
+wcl -q -za -wx -bt=dos -ml -k32768 -c -fo=lower.obj src\lower.c
 if errorlevel 1 goto build_fail
 rem Use an unambiguous short object name for the emit_c source.
 wcl -q -za -wx -bt=dos -ml -k32768 -c -fo=emitc.obj src\emit_c.c
