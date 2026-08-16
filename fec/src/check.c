@@ -12,6 +12,7 @@ struct FeSym {
     FeNode *fn;
     int mutable;
     int initialized;
+    int moved;
     FeNode *decl;
 };
 
@@ -22,11 +23,15 @@ struct FeScope {
     unsigned capacity;
 };
 
+static FeSym *find_symbol(FeScope *scope, const char *name);
+
 typedef struct FeCheckerState {
     FeCheck *c;
     FeScope *scope;
     FeScope *globals;
     FeType *ret;
+    unsigned loop_depth;
+    unsigned defer_depth;
 } FeCheckerState;
 
 static FeType *unknown(FeCheck *c)
@@ -42,6 +47,41 @@ static void err(FeCheck *c, FeLoc loc, const char *msg)
 static int known(FeType *t)
 {
     return t && t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_ERROR;
+}
+
+static int is_copy_type(FeType *t)
+{
+    unsigned i;
+    if (!t) return 1;
+    if (t->kind==FE_TYPE_OWNED) return 0;
+    if (t->kind==FE_TYPE_REF) return !t->ref_mut;
+    if (t->kind==FE_TYPE_ARRAY) return is_copy_type(t->elem);
+    if (t->kind==FE_TYPE_STRUCT) {
+        if (t->has_drop) return 0;
+        for (i=0;i<t->field_count;i++) if (!is_copy_type(t->fields[i].type)) return 0;
+    }
+    if (t->kind==FE_TYPE_ENUM)
+        for (i=0;i<t->variant_count;i++) {
+            unsigned j;
+            for (j=0;j<t->variants[i].field_count;j++)
+                if (!is_copy_type(t->variants[i].fields[j].type)) return 0;
+        }
+    return 1;
+}
+
+static void mark_moved(FeCheckerState *s, FeNode *n, FeType *t)
+{
+    FeSym *sym;
+    if (!n || !t || is_copy_type(t) || n->kind!=FE_N_IDENT) return;
+    sym=find_symbol(s->scope,n->text ? n->text : "");
+    if (sym) {
+        if (s->defer_depth) {
+            if (sym->decl) sym->decl->flags |= 0x200U;
+        } else {
+            sym->moved=1;
+            if (sym->decl) sym->decl->flags |= 0x100U;
+        }
+    }
 }
 
 static int compatible(FeType *want, FeType *got, FeNode *value)
@@ -193,6 +233,7 @@ static FeSym *add_symbol(FeCheckerState *s, FeScope *scope,
     sym->fn = fn;
     sym->mutable = mutable;
     sym->initialized = initialized;
+    sym->moved = 0;
     sym->decl = decl;
     if (decl) {
         decl->cname = cname;
@@ -216,6 +257,47 @@ void fe_check_init(FeCheck *c, FeAst *ast, FeDiags *diags,
 static FeType *check_expr(FeCheckerState *s, FeNode *n);
 static void check_match(FeCheckerState *s, FeNode *n);
 static void check_stmt(FeCheckerState *s, FeNode *n);
+
+typedef struct FeFlowSlot {
+    FeSym *sym;
+    int moved;
+    int initialized;
+} FeFlowSlot;
+
+static unsigned flow_capture(FeScope *scope, FeFlowSlot *slots, unsigned cap)
+{
+    unsigned count=0;
+    unsigned i;
+    FeScope *p;
+    for (p=scope; p && count<cap; p=p->parent)
+        for (i=0; i<p->count && count<cap; ++i) {
+            slots[count].sym=&p->items[i];
+            slots[count].moved=p->items[i].moved;
+            slots[count].initialized=p->items[i].initialized;
+            ++count;
+        }
+    return count;
+}
+
+static void flow_restore(FeFlowSlot *slots, unsigned count)
+{
+    unsigned i;
+    for (i=0; i<count; ++i) {
+        slots[i].sym->moved=slots[i].moved;
+        slots[i].sym->initialized=slots[i].initialized;
+    }
+}
+
+static void flow_merge(FeFlowSlot *base, FeFlowSlot *left, FeFlowSlot *right,
+                       unsigned count)
+{
+    unsigned i;
+    for (i=0; i<count; ++i) {
+        base[i].sym->moved = left[i].moved==1 && right[i].moved==1 ? 1 :
+            (left[i].moved || right[i].moved ? 2 : 0);
+        base[i].sym->initialized = left[i].initialized && right[i].initialized;
+    }
+}
 
 static FeNode *find_const_node(FeCheck *c, const char *name)
 {
@@ -390,6 +472,7 @@ static FeType *check_struct_init(FeCheckerState *s, FeNode *n)
                 }
                 if (!field) { err(s->c,f->loc,"invalid enum payload field"); continue; }
                 v=check_expr(s,f->a);
+                mark_moved(s,f->a,v);
                 if (!compatible(field->type,v,f->a) && v->kind!=FE_TYPE_UNKNOWN) err(s->c,f->loc,"enum payload type mismatch");
             }
         } else if (n->children) err(s->c,n->loc,"empty enum variant cannot have payload");
@@ -402,6 +485,7 @@ static FeType *check_struct_init(FeCheckerState *s, FeNode *n)
         field=fe_type_field(t,f->text);
         if(!field) { err(s->c,f->loc,"invalid struct field"); continue; }
         v=check_expr(s,f->a);
+        mark_moved(s,f->a,v);
         if(!compatible(field->type,v,f->a) && v->kind!=FE_TYPE_UNKNOWN) err(s->c,f->loc,"struct field type mismatch");
     }
     for(i=0;i<t->field_count;i++) if(!has_field(n->children,t->fields[i].name)) err(s->c,n->loc,"missing struct field");
@@ -411,7 +495,7 @@ static FeType *check_struct_init(FeCheckerState *s, FeNode *n)
 static FeType *check_array_init(FeCheckerState *s, FeNode *n)
 {
     FeNode *x; FeType *elem=0; FeType *v; unsigned long count=0;
-    for(x=n->children;x;x=x->next) { v=check_expr(s,x); if(!elem) elem=v; else if(!compatible(elem,v,x)&&v->kind!=FE_TYPE_UNKNOWN) err(s->c,x->loc,"array element type mismatch"); ++count; }
+    for(x=n->children;x;x=x->next) { v=check_expr(s,x); mark_moved(s,x,v); if(!elem) elem=v; else if(!compatible(elem,v,x)&&v->kind!=FE_TYPE_UNKNOWN) err(s->c,x->loc,"array element type mismatch"); ++count; }
     if(!elem) elem=unknown(s->c);
     n->sem_type=fe_type_array(&s->c->types,count,elem); return n->sem_type;
 }
@@ -446,6 +530,8 @@ static FeType *check_identifier(FeCheckerState *s, FeNode *n, int read)
     }
     n->cname = sym->cname;
     n->sem_type = sym->type;
+    if (sym->moved == 1) err(s->c,n->loc,"use of moved value");
+    else if (sym->moved == 2) err(s->c,n->loc,"use of possibly moved value");
     if (read && !sym->initialized && !sym->fn)
         err(s->c, n->loc, "use of uninitialized variable");
     return sym->type;
@@ -545,6 +631,34 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
         return a;
     }
     if (n->kind == FE_N_CALL) {
+        if (n->a && n->a->kind==FE_N_MEMBER && n->a->b && n->a->b->text &&
+            strcmp(n->a->b->text,"drop")==0) {
+            err(c,n->loc,"drop may only be invoked by scope cleanup");
+            return unknown(c);
+        }
+        if (n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+            n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+            strcmp(n->a->a->text,"mem")==0 && n->a->b && n->a->b->text) {
+            FeNode *arg=n->children;
+            if (strcmp(n->a->b->text,"destroy")==0) {
+                a=arg ? check_expr(s,arg) : unknown(c);
+                if (!arg || arg->next || !a || a->kind!=FE_TYPE_OWNED)
+                    err(c,n->loc,"mem.destroy requires exactly one owned pointer");
+                else
+                    mark_moved(s,arg,a);
+                n->sem_type=fe_type_intern(&c->types,"void");
+                return n->sem_type;
+            }
+            if (strcmp(n->a->b->text,"create")==0) {
+                if (!arg || arg->next || arg->kind!=FE_N_IDENT)
+                    err(c,n->loc,"mem.create requires exactly one type argument");
+                a=arg && arg->kind==FE_N_IDENT ?
+                    fe_type_owned(&c->types,fe_type_intern(&c->types,arg->text)) :
+                    fe_type_owned(&c->types,unknown(c));
+                n->sem_type=fe_type_error_union(&c->types,a);
+                return n->sem_type;
+            }
+        }
         if (n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
             n->a->a->kind==FE_N_IDENT && n->a->a->text &&
             strcmp(n->a->a->text,"io")==0 && n->a->b && n->a->b->text &&
@@ -606,6 +720,7 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
             arg = n->children;
             while (param && arg) {
                 a = check_expr(s, arg);
+                mark_moved(s,arg,a);
                 b = node_type(c, param->a);
                 if (!compatible(b, a, arg) && a->kind != FE_TYPE_UNKNOWN)
                     err(c, arg->loc, "argument type mismatch");
@@ -630,6 +745,11 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
         }
         a=check_expr(s,n->a);
         if (a->kind == FE_TYPE_REF && n->b && n->b->text &&
+            strcmp(n->b->text,"^")==0) {
+            n->sem_type=a->elem;
+            return a->elem;
+        }
+        if (a->kind == FE_TYPE_OWNED && n->b && n->b->text &&
             strcmp(n->b->text,"^")==0) {
             n->sem_type=a->elem;
             return a->elem;
@@ -681,6 +801,11 @@ static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
             strcmp(n->b->text,"^")==0) {
             if (!base->ref_mut)
                 err(s->c,n->loc,"cannot write through shared reference");
+            n->sem_type=base->elem;
+            return base->elem;
+        }
+        if (base && base->kind == FE_TYPE_OWNED && n->b && n->b->text &&
+            strcmp(n->b->text,"^")==0) {
             n->sem_type=base->elem;
             return base->elem;
         }
@@ -817,7 +942,7 @@ static void check_type_cycle(FeCheck *c, FeType *t)
     unsigned i;
     FeType *next;
     if (!t || t->kind == FE_TYPE_SLICE || t->kind == FE_TYPE_STR ||
-        t->kind == FE_TYPE_REF ||
+        t->kind == FE_TYPE_REF || t->kind == FE_TYPE_OWNED ||
         t->kind == FE_TYPE_INT || t->kind == FE_TYPE_BOOL ||
         t->kind == FE_TYPE_CHAR || t->kind == FE_TYPE_VOID ||
         t->kind == FE_TYPE_UNKNOWN || t->kind == FE_TYPE_ERROR) return;
@@ -889,6 +1014,7 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             err(c, n->loc, "initializer type mismatch");
         if (b->kind == FE_TYPE_VOID)
             err(c, n->loc, "void expression cannot initialize a variable");
+        mark_moved(s,n->b,b);
         add_symbol(s, s->scope, n->text, a, 0, 0, 1,
                    local_cname(c, n->text ? n->text : "local"), n);
         break;
@@ -904,6 +1030,7 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             err(c, n->loc, "initializer type mismatch");
         if (b->kind == FE_TYPE_VOID)
             err(c, n->loc, "void expression cannot initialize a variable");
+        mark_moved(s,n->b,b);
         initialized = n->b != 0;
         add_symbol(s, s->scope, n->text, a, 0, 1, initialized,
                    local_cname(c, n->text ? n->text : "local"), n);
@@ -913,6 +1040,7 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         a = check_lvalue(s, n->a, compound_operator(n->text));
         if (!compatible(a, b, n->b) && b->kind != FE_TYPE_UNKNOWN)
             err(c, n->loc, "assignment type mismatch");
+        mark_moved(s,n->b,b);
         sym = n->a && n->a->kind == FE_N_IDENT ?
             find_symbol(s->scope, n->a->text) : 0;
         if (sym && sym->mutable) sym->initialized = 1;
@@ -924,27 +1052,67 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             (!s->ret || s->ret->kind!=FE_TYPE_ERROR_UNION))
             err(c,n->loc,"try requires an enclosing error result");
         break;
-    case FE_N_IF:
+    case FE_N_DEFER:
+        ++s->defer_depth;
+        check_stmt(s,n->a);
+        --s->defer_depth;
+        break;
+    case FE_N_IF: {
+        FeFlowSlot base[128], left[128], right[128];
+        unsigned flow_count;
         a = check_expr(s, n->a);
         if (known(a) && a->kind != FE_TYPE_BOOL)
             err(c, n->loc, "if condition must be bool");
+        flow_count=flow_capture(s->scope,base,128);
         check_stmt(s, n->b);
-        check_stmt(s, n->c);
+        flow_capture(s->scope,left,flow_count);
+        flow_restore(base,flow_count);
+        if (n->c) check_stmt(s, n->c);
+        if (n->c) flow_capture(s->scope,right,flow_count);
+        else {
+            unsigned i;
+            for (i=0;i<flow_count;++i) right[i]=base[i];
+        }
+        flow_merge(base,left,right,flow_count);
         break;
-    case FE_N_WHILE:
+    }
+    case FE_N_WHILE: {
+        FeFlowSlot base[128], body[128];
+        unsigned flow_count;
         a = check_expr(s, n->a);
         if (known(a) && a->kind != FE_TYPE_BOOL)
             err(c, n->loc, "while condition must be bool");
+        flow_count=flow_capture(s->scope,base,128);
+        if (s->loop_depth < 255U) ++s->loop_depth;
         check_stmt(s, n->b);
+        if (s->loop_depth) --s->loop_depth;
+        flow_capture(s->scope,body,flow_count);
+        flow_restore(base,flow_count);
+        {
+            unsigned i;
+            for (i=0;i<flow_count;++i) {
+                if (body[i].moved) base[i].moved=2;
+                if (!body[i].initialized) base[i].initialized=0;
+            }
+        }
+        flow_restore(base,flow_count);
         break;
+    }
     case FE_N_FOR:
+        if (s->loop_depth < 255U) ++s->loop_depth;
         check_for(s,n);
+        if (s->loop_depth) --s->loop_depth;
         break;
     case FE_N_MATCH:
         check_match(s,n);
         break;
+    case FE_N_BREAK:
+    case FE_N_CONTINUE:
+        if (!s->loop_depth) err(c,n->loc,"break or continue outside loop");
+        break;
     case FE_N_RETURN:
         b = n->a ? check_expr(s, n->a) : fe_type_intern(&c->types, "void");
+        mark_moved(s,n->a,b);
         if (known(b) && b->kind == FE_TYPE_VOID && s->ret->kind != FE_TYPE_VOID)
             err(c, n->loc, "void expression returned from value function");
         else if (known(s->ret) && known(b) && !fe_type_equal(s->ret, b) &&
@@ -970,6 +1138,8 @@ static void check_fn(FeCheck *c, FeNode *fn, FeScope *globals)
     s.globals = globals;
     s.scope = scope_new(&s, globals);
     s.ret = fn->b ? node_type(c, fn->b) : fe_type_intern(&c->types, "void");
+    s.loop_depth=0;
+    s.defer_depth=0;
     fn->sem_type = s.ret;
     for (x = fn->a ? fn->a->children : 0; x; x = x->next) {
         t = node_type(c, x->a);
@@ -1047,5 +1217,7 @@ FeType *fe_check_expr_type(FeCheck *c, FeNode *n)
     s.scope = scope_new(&s, 0);
     s.globals = s.scope;
     s.ret = fe_type_intern(&c->types, "void");
+    s.loop_depth=0;
+    s.defer_depth=0;
     return check_expr(&s, n);
 }

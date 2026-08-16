@@ -91,3 +91,14 @@ for f in bad-many bad-open bad-cls; do
     fi
 done
 echo "M4 tests: formatting builtins passed"
+
+for f in defer owned; do
+    "$root"/fec --target=bits32 --emit-c "$root"/tests/m5/$f.fe -o "$m4tmp/m5-$f.c"
+done
+for f in bad-move bad-destroy; do
+    if "$root"/fec --target=bits32 --emit-c "$root"/tests/m5/$f.fe -o "$m4tmp/m5-$f.c" >/dev/null 2>/dev/null; then
+        echo "FAIL (accepted M5 ownership error): $f.fe"
+        exit 1
+    fi
+done
+echo "M5 tests: owned move/defer checks passed"

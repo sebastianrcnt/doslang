@@ -1,0 +1,19 @@
+unit m5_runtime;
+
+pub fn run(mode: i32) -> i32 {
+    var p: ^i32 = try mem.create(i32);
+    defer { mem.destroy(p); }
+    p.^ = 7;
+    if mode == 1 {
+        p = try mem.create(i32);
+        p.^ = 9;
+        return p.^;
+    }
+    while true {
+        break;
+    }
+    if mode == 2 {
+        return 0;
+    }
+    return p.^ - 7;
+}

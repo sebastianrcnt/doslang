@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 
+static void emit_expr(FeEmitter *e, FeNode *n);
+static void emit_stmt(FeEmitter *e, FeNode *n);
+static void emit_block(FeEmitter *e, FeNode *n);
+
 static void pad(FeEmitter *e)
 {
     int i;
@@ -24,6 +28,19 @@ static const char *cname(FeNode *n, const char *fallback)
 
 static void emit_one_type(FeEmitter *e, FeType *t);
 
+static int type_needs_drop(FeType *t)
+{
+    unsigned i;
+    if (!t) return 0;
+    if (t->kind==FE_TYPE_OWNED) return 1;
+    if (t->kind==FE_TYPE_ARRAY) return type_needs_drop(t->elem);
+    if (t->kind==FE_TYPE_STRUCT) {
+        if (t->has_drop) return 1;
+        for (i=0;i<t->field_count;i++) if (type_needs_drop(t->fields[i].type)) return 1;
+    }
+    return 0;
+}
+
 static void emit_type_deps(FeEmitter *e, FeType *t)
 {
     unsigned i,j;
@@ -35,6 +52,8 @@ static void emit_type_deps(FeEmitter *e, FeType *t)
         for (i=0;i<t->variant_count;i++)
             for (j=0;j<t->variants[i].field_count;j++)
                 emit_one_type(e,t->variants[i].fields[j].type);
+    if (t->kind == FE_TYPE_ERROR_UNION && t->error_value)
+        emit_one_type(e,t->error_value);
 }
 
 static void emit_one_type(FeEmitter *e, FeType *t)
@@ -43,7 +62,10 @@ static void emit_one_type(FeEmitter *e, FeType *t)
     if (t && strcmp(t->name,"io.Writer")==0) return;
     if (!t || t->emit_state ||
         (t->kind != FE_TYPE_STRUCT && t->kind != FE_TYPE_ENUM &&
-         t->kind != FE_TYPE_ARRAY && t->kind != FE_TYPE_SLICE)) return;
+         t->kind != FE_TYPE_ARRAY && t->kind != FE_TYPE_SLICE &&
+         t->kind != FE_TYPE_ERROR_UNION) ||
+        (t->kind == FE_TYPE_ERROR_UNION &&
+         (!t->error_value || t->error_value->kind == FE_TYPE_VOID))) return;
     t->emit_state=1;
     emit_type_deps(e,t);
     if(t->kind==FE_TYPE_STRUCT) {
@@ -55,6 +77,10 @@ static void emit_one_type(FeEmitter *e, FeType *t)
     } else if(t->kind==FE_TYPE_SLICE && t->cname) {
         fputs("typedef struct { ",e->out); fputs(fe_type_c_name(t->elem,e->pointer_bits),e->out); fputs(" *p; unsigned long n; } ",e->out); fputs(t->cname,e->out); fputs(";\n",e->out);
         fprintf(e->out,"static %s %s(%s *p, unsigned long n) { %s s; s.p=p; s.n=n; return s; }\n",t->cname,t->maker,fe_type_c_name(t->elem,e->pointer_bits),t->cname);
+    } else if(t->kind==FE_TYPE_ERROR_UNION) {
+        fputs(t->cname,e->out); fputs(" { unsigned short e; ",e->out);
+        fputs(fe_type_c_name(t->error_value,e->pointer_bits),e->out);
+        fputs(" v; } ;\n",e->out);
     } else if(t->kind==FE_TYPE_ENUM) {
         for(i=0;i<t->variant_count;i++) if(t->variants[i].field_count>1) {
             fprintf(e->out,"struct fe_payload_%s_%s {",t->name,t->variants[i].name);
@@ -81,10 +107,95 @@ static void emit_type_defs(FeEmitter *e)
     for(t=e->check->types.types;t;t=t->next) emit_one_type(e,t);
 }
 
+static FeNode *find_drop_method(FeEmitter *e, const char *name)
+{
+    FeNode *n;
+    FeNode *m;
+    for (n=e->check->ast->root ? e->check->ast->root->children : 0; n; n=n->next)
+        if (n->kind==FE_N_STRUCT && n->text && name && strcmp(n->text,name)==0)
+            for (m=n->children; m; m=m->next)
+                if (m->kind==FE_N_FN && m->text && strcmp(m->text,"drop")==0)
+                    return m;
+    return 0;
+}
+
+static void emit_drop_fields(FeEmitter *e, FeType *t)
+{
+    unsigned i;
+    FeType *ft;
+    for (i=t->field_count; i>0; --i) {
+        ft=t->fields[i-1].type;
+        if (!type_needs_drop(ft)) continue;
+        if (ft->kind==FE_TYPE_OWNED) {
+            fputs("if (self->",e->out); fputs(t->fields[i-1].name,e->out);
+            fputs(") { ",e->out);
+            if (ft->elem && type_needs_drop(ft->elem) && ft->elem->drop_cname) {
+                fprintf(e->out,"%s(self->%s); ",ft->elem->drop_cname,t->fields[i-1].name);
+            }
+            fputs("free(self->",e->out); fputs(t->fields[i-1].name,e->out);
+            fputs("); self->",e->out); fputs(t->fields[i-1].name,e->out);
+            fputs("=0; }\n",e->out);
+        } else if (ft->kind==FE_TYPE_STRUCT && ft->drop_cname) {
+            fprintf(e->out,"%s(&self->%s);\n",ft->drop_cname,t->fields[i-1].name);
+        } else if (ft->kind==FE_TYPE_ARRAY && ft->drop_cname) {
+            fprintf(e->out,"%s(&self->%s);\n",ft->drop_cname,t->fields[i-1].name);
+        }
+    }
+}
+
+static void emit_drop_helpers(FeEmitter *e)
+{
+    FeType *t;
+    FeNode *method;
+    FeNode *param;
+    for (t=e->check->types.types; t; t=t->next)
+        if ((t->kind==FE_TYPE_STRUCT || t->kind==FE_TYPE_ARRAY) &&
+            type_needs_drop(t) && t->drop_cname)
+            fprintf(e->out,"static void %s(%s *self);\n",t->drop_cname,t->cname);
+    for (t=e->check->types.types; t; t=t->next) {
+        if (t->kind!=FE_TYPE_STRUCT || !type_needs_drop(t) || !t->drop_cname) continue;
+        fprintf(e->out,"static void %s(%s *self) {\n",t->drop_cname,t->cname);
+        method=find_drop_method(e,t->name);
+        if (method) {
+            param=method->a ? method->a->children : 0;
+            if (param) param->cname="self";
+            if (method->c) emit_block(e,method->c);
+            fputc('\n',e->out);
+        }
+        emit_drop_fields(e,t);
+        fputs("}\n",e->out);
+    }
+    for (t=e->check->types.types; t; t=t->next)
+        if (t->kind==FE_TYPE_ARRAY && type_needs_drop(t) && t->drop_cname) {
+            fprintf(e->out,"static void %s(%s *self) { unsigned long i; for (i=0; i<%lu; ++i) { ",
+                    t->drop_cname,t->cname,t->length);
+            if (t->elem->kind==FE_TYPE_OWNED) {
+                fputs("if (self->a[i]) { ",e->out);
+                if (t->elem->elem && type_needs_drop(t->elem->elem) && t->elem->elem->drop_cname)
+                    fprintf(e->out,"%s(self->a[i]); ",t->elem->elem->drop_cname);
+                fputs("free(self->a[i]); self->a[i]=0; }",e->out);
+            } else if (t->elem->drop_cname)
+                fprintf(e->out,"%s(&self->a[i]);",t->elem->drop_cname);
+            fputs(" } }\n",e->out);
+        }
+}
+
 static void emit_type_helpers(FeEmitter *e)
 {
     FeType *t;
     unsigned i,j;
+    for(t=e->check->types.types;t;t=t->next) {
+        if (t->kind==FE_TYPE_ERROR_UNION && t->error_value &&
+            t->error_value->kind!=FE_TYPE_VOID) {
+            fprintf(e->out,"static %s %s(unsigned short e, %s v) { %s r; r.e=e; r.v=v; return r; }\n",
+                    t->cname,t->maker,fe_type_c_name(t->error_value,e->pointer_bits),t->cname);
+            if (t->error_value->kind==FE_TYPE_OWNED)
+                fprintf(e->out,"static %s %s(void) { %s r; r.v=(%s)malloc(sizeof(%s)); r.e=r.v ? 0 : 1; return r; }\n",
+                        t->cname,t->alloc_cname,t->cname,
+                        fe_type_c_name(t->error_value,e->pointer_bits),
+                        fe_type_c_name(t->error_value->elem,e->pointer_bits));
+        }
+    }
     for(t=e->check->types.types;t;t=t->next) {
         if(t->kind==FE_TYPE_STRUCT && t->maker) {
             fprintf(e->out,"static %s %s(",t->cname,t->maker);
@@ -109,6 +220,7 @@ static void emit_type_helpers(FeEmitter *e)
             }
         }
     }
+    emit_drop_helpers(e);
     for(t=e->check->types.types;t;t=t->next) {
         if (t->kind==FE_TYPE_ARRAY && t->indexer) {
             fprintf(e->out,"static %s %s(%s x, unsigned long i) { ",
@@ -501,6 +613,9 @@ static void emit_lvalue(FeEmitter *e, FeNode *n)
         if (n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_REF &&
             n->b && n->b->text && strcmp(n->b->text,"^")==0) {
             fputs("(*",e->out); emit_expr(e,n->a); fputs(")",e->out);
+        } else if (n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_OWNED &&
+                   n->b && n->b->text && strcmp(n->b->text,"^")==0) {
+            fputs("(*",e->out); emit_expr(e,n->a); fputs(")",e->out);
         } else { emit_lvalue(e,n->a); fputc('.',e->out); fputs(n->b ? n->b->text : "member",e->out); }
         return;
     }
@@ -510,6 +625,19 @@ static void emit_lvalue(FeEmitter *e, FeNode *n)
         emit_expr(e,n->b); fputc(']',e->out); return;
     }
     emit_expr(e,n);
+}
+
+static void emit_destroy_expr(FeEmitter *e, FeNode *n)
+{
+    fputs("(free(",e->out); emit_expr(e,n); fputs(")",e->out);
+    if (n && n->kind==FE_N_IDENT) {
+        fputs(", ",e->out); emit_lvalue(e,n);
+        fputs("=0, fe_live_",e->out); fputs(cname(n,"owned"),e->out);
+        fputs("=0",e->out);
+    } else {
+        fputs(", ",e->out); emit_lvalue(e,n); fputs("=0",e->out);
+    }
+    fputs(", 0)",e->out);
 }
 
 static FeNode *init_field(FeNode *n, const char *name)
@@ -609,7 +737,15 @@ static void emit_expr(FeEmitter *e, FeNode *n)
     }
     case FE_N_UNARY:
         op = n->text ? n->text : "";
-        if (strcmp(op, "try") == 0) { emit_expr(e,n->a); break; }
+        if (strcmp(op, "try") == 0) {
+            if (n->a && n->a->sem_type &&
+                n->a->sem_type->kind==FE_TYPE_ERROR_UNION &&
+                n->a->sem_type->error_value &&
+                n->a->sem_type->error_value->kind!=FE_TYPE_VOID) {
+                fputc('(',e->out); emit_expr(e,n->a); fputs(").v",e->out);
+            } else emit_expr(e,n->a);
+            break;
+        }
         if (strcmp(op, "not") == 0) fputs("(!", e->out);
         else {
             fputc('(', e->out);
@@ -643,6 +779,27 @@ static void emit_expr(FeEmitter *e, FeNode *n)
         if(n->text && (strcmp(n->text,"@print")==0 || strcmp(n->text,"@fprint")==0 || strcmp(n->text,"@sprint")==0)) { emit_m4_builtin(e,n); special=1; }
         else if(n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
                 n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+                strcmp(n->a->a->text,"mem")==0 && n->a->b &&
+                n->a->b->text && strcmp(n->a->b->text,"destroy")==0 &&
+                n->children) {
+            emit_destroy_expr(e,n->children);
+            special=1;
+        }
+        else if(n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+                n->a->a->kind==FE_N_IDENT && n->a->a->text &&
+                strcmp(n->a->a->text,"mem")==0 && n->a->b &&
+                n->a->b->text && strcmp(n->a->b->text,"create")==0 &&
+                n->children && n->children->kind==FE_N_IDENT) {
+            FeType *created=fe_type_intern(&e->check->types,n->children->text);
+            FeType *owned=fe_type_owned(&e->check->types,created);
+            FeType *result=fe_type_error_union(&e->check->types,owned);
+            if (result->alloc_cname) fputs(result->alloc_cname,e->out);
+            else fputs("fe_bad_alloc",e->out);
+            fputs("()",e->out);
+            special=1;
+        }
+        else if(n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
+                n->a->a->kind==FE_N_IDENT && n->a->a->text &&
                 strcmp(n->a->a->text,"io")==0 && n->a->b && n->a->b->text &&
                 strcmp(n->a->b->text,"buf_writer")==0 && n->children) { emit_m4_writer(e,n->children,1); special=1; }
         else if(n->a && n->a->kind==FE_N_MEMBER && n->a->a &&
@@ -660,7 +817,11 @@ static void emit_expr(FeEmitter *e, FeNode *n)
             fputc('(', e->out);
             for (x = n->children; x; x = x->next) {
                 if (x != n->children) fputs(", ", e->out);
-                emit_expr(e, x);
+                if ((x->flags & 0x100U) && x->kind==FE_N_IDENT &&
+                    x->sem_type && x->sem_type->kind==FE_TYPE_OWNED) {
+                    fputs("(fe_live_",e->out); fputs(cname(x,"owned"),e->out);
+                    fputs("=0, ",e->out); emit_expr(e,x); fputc(')',e->out);
+                } else emit_expr(e, x);
             }
             fputc(')', e->out);
         }
@@ -672,6 +833,9 @@ static void emit_expr(FeEmitter *e, FeNode *n)
            strcmp(n->a->text,"io")==0 && n->b && n->b->text &&
            strcmp(n->b->text,"stdout")==0) fputs("fe_m4_stdout_writer()",e->out);
         else if(n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_REF &&
+           n->b && n->b->text && strcmp(n->b->text,"^")==0) {
+            fputs("(*",e->out); emit_expr(e,n->a); fputs(")",e->out);
+        } else if(n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_OWNED &&
            n->b && n->b->text && strcmp(n->b->text,"^")==0) {
             fputs("(*",e->out); emit_expr(e,n->a); fputs(")",e->out);
         } else if(n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_ENUM) { v=fe_type_variant(n->a->sem_type,n->b ? n->b->text : ""); if(v) fputs(v->maker,e->out); else fputs("0",e->out); if(v)fputs("()",e->out); }
@@ -701,6 +865,89 @@ static void emit_decl(FeEmitter *e, FeNode *n)
         } else emit_expr(e,n->b);
     }
     fputs(";\n", e->out);
+    if ((n->kind==FE_N_LET || n->kind==FE_N_VAR) && n->sem_type &&
+        n->sem_type->kind==FE_TYPE_OWNED) {
+        pad(e); fputs("unsigned char fe_live_",e->out);
+        fputs(cname(n,"owned"),e->out); fputs("=0;\n",e->out);
+    }
+}
+
+static void emit_owned_live(FeEmitter *e, FeNode *n, int value)
+{
+    if (n && n->sem_type && n->sem_type->kind==FE_TYPE_OWNED) {
+        pad(e); fputs("fe_live_",e->out); fputs(cname(n,"owned"),e->out);
+        fprintf(e->out,"=%d;\n",value);
+    }
+}
+
+static void emit_value_drop(FeEmitter *e, FeNode *n)
+{
+    FeType *t=n ? n->sem_type : 0;
+    if (!n || !t || !type_needs_drop(t) || (n->flags & 0x100U) ||
+        (n->flags & 0x200U)) return;
+    if (t->kind==FE_TYPE_OWNED) {
+        pad(e); fputs("if (fe_live_",e->out); fputs(cname(n,"owned"),e->out);
+        fputs(") { ",e->out);
+        if (t->elem && type_needs_drop(t->elem) && t->elem->drop_cname) {
+            fprintf(e->out,"%s(%s); ",t->elem->drop_cname,cname(n,"owned"));
+        }
+        fputs("free(",e->out); fputs(cname(n,"owned"),e->out);
+        fputs("); fe_live_",e->out); fputs(cname(n,"owned"),e->out);
+        fputs("=0; }\n",e->out);
+    } else if (t->drop_cname) {
+        pad(e); fprintf(e->out,"%s(&%s);\n",t->drop_cname,cname(n,"local"));
+    }
+}
+
+static void emit_cleanup_block(FeEmitter *e, FeNode *n)
+{
+    FeNode *x;
+    unsigned count=0;
+    unsigned index;
+    unsigned seen=0xffffffffU;
+    unsigned depth;
+    /* A defer becomes active only after its declaration statement was
+       reached.  In particular, a failing initializer must not run a later
+       defer merely because it shares this AST block. */
+    for (depth=0; depth<e->block_depth; ++depth)
+        if (e->block_stack[depth]==n) { seen=e->block_seen[depth]; break; }
+    for (x=n ? n->children : 0, index=0; x; x=x->next, ++index)
+        if (index<seen &&
+            (x->kind==FE_N_DEFER || x->kind==FE_N_LET || x->kind==FE_N_VAR)) ++count;
+    while (count) {
+        index=0;
+        for (x=n->children; x; x=x->next)
+            if ((x->kind==FE_N_DEFER || x->kind==FE_N_LET || x->kind==FE_N_VAR) &&
+                index++==count-1) {
+                if (x->kind==FE_N_DEFER) emit_stmt(e,x->a); else emit_value_drop(e,x);
+                break;
+            }
+        --count;
+    }
+}
+
+static void emit_cleanup_to(FeEmitter *e, unsigned floor)
+{
+    unsigned i;
+    for (i=e->block_depth; i>floor; --i) emit_cleanup_block(e,e->block_stack[i-1]);
+}
+
+static void emit_cleanup_all(FeEmitter *e)
+{
+    emit_cleanup_to(e,0);
+}
+
+static void emit_error_return(FeEmitter *e, const char *error_expr)
+{
+    if (e->current_ret && e->current_ret->kind==FE_TYPE_ERROR_UNION &&
+        e->current_ret->error_value && e->current_ret->error_value->kind!=FE_TYPE_VOID) {
+        fputs("return ",e->out); fputs(e->current_ret->maker,e->out);
+        fputs("(",e->out); fputs(error_expr,e->out); fputs(", (",e->out);
+        fputs(fe_type_c_name(e->current_ret->error_value,e->pointer_bits),e->out);
+        fputs(")0);\n",e->out);
+    } else {
+        fputs("return ",e->out); fputs(error_expr,e->out); fputs(";\n",e->out);
+    }
 }
 
 static void emit_block(FeEmitter *e, FeNode *n)
@@ -718,12 +965,30 @@ static void emit_block(FeEmitter *e, FeNode *n)
     pad(e);
     fputs("{\n", e->out);
     ++e->indent;
+    if (e->block_depth<32U) {
+        e->block_stack[e->block_depth]=n;
+        e->block_seen[e->block_depth]=0;
+        ++e->block_depth;
+    }
     /* C89 requires declarations before statements in each actual block. */
     for (x = n->children; x; x = x->next)
         if (x->kind == FE_N_LET || x->kind == FE_N_VAR ||
             x->kind == FE_N_CONST) emit_decl(e, x);
-    for (x = n->children; x; x = x->next) emit_stmt(e, x);
+    if (e->current_ret && e->current_ret->kind!=FE_TYPE_VOID) {
+        pad(e); fputs(fe_type_c_name(e->current_ret,e->pointer_bits),e->out);
+        fputs(" fe_return_value;\n",e->out);
+    }
+    {
+        unsigned seen=0;
+        for (x = n->children; x; x = x->next) {
+            ++seen;
+            if (e->block_depth) e->block_seen[e->block_depth-1]=seen;
+            emit_stmt(e, x);
+        }
+    }
     --e->indent;
+    emit_cleanup_block(e,n);
+    if (e->block_depth) --e->block_depth;
     if (e->fallthrough_block==n) {
         pad(e);
         fputs("return 0;\n",e->out);
@@ -765,6 +1030,37 @@ static void emit_match(FeEmitter *e, FeNode *n, int value_context)
     }
 }
 
+static int try_has_value(FeNode *n)
+{
+    return n && n->kind==FE_N_UNARY && n->text && strcmp(n->text,"try")==0 &&
+        n->a && n->a->sem_type && n->a->sem_type->kind==FE_TYPE_ERROR_UNION &&
+        n->a->sem_type->error_value && n->a->sem_type->error_value->kind!=FE_TYPE_VOID;
+}
+
+static void emit_try_statement(FeEmitter *e, FeNode *try_node, FeNode *target)
+{
+    char temp[40];
+    char error[48];
+    FeType *result=try_node->a->sem_type;
+    sprintf(temp,"fe_try_%u",e->temp_serial++);
+    sprintf(error,"%s.e",temp);
+    pad(e); fputs("{ ",e->out); fputs(fe_type_c_name(result,e->pointer_bits),e->out);
+    fputc(' ',e->out); fputs(temp,e->out); fputs(" = ",e->out);
+    emit_expr(e,try_node->a); fputs("; if (",e->out); fputs(temp,e->out);
+    fputs(".e) {\n",e->out); ++e->indent;
+    emit_cleanup_all(e);
+    pad(e); emit_error_return(e,error);
+    --e->indent; pad(e); fputs("} ",e->out);
+    if (target) {
+        if (target->kind==FE_N_LET || target->kind==FE_N_VAR)
+            fputs(cname(target,"fe_local"),e->out);
+        else
+            emit_lvalue(e,target);
+        fputs(" = ",e->out); fputs(temp,e->out); fputs(".v;\n",e->out);
+    }
+    fputs("}\n",e->out);
+}
+
 static void emit_stmt(FeEmitter *e, FeNode *n)
 {
     if (!n) return;
@@ -776,46 +1072,91 @@ static void emit_stmt(FeEmitter *e, FeNode *n)
     case FE_N_LET:
     case FE_N_VAR:
         if (n->b) {
-            pad(e);
-            fputs(cname(n, "fe_local"), e->out);
-            fputs(" = ", e->out);
-            emit_expr(e, n->b);
-            fputs(";\n", e->out);
+            if (try_has_value(n->b)) emit_try_statement(e,n->b,n);
+            else {
+                pad(e);
+                fputs(cname(n, "fe_local"), e->out);
+                fputs(" = ", e->out);
+                emit_expr(e, n->b);
+                fputs(";\n", e->out);
+            }
+            emit_owned_live(e,n,1);
         }
         break;
     case FE_N_ASSIGN:
+        if (n->a && n->a->kind==FE_N_IDENT && n->a->sem_type &&
+            n->a->sem_type->kind==FE_TYPE_OWNED) {
+            pad(e); fputs("if (fe_live_",e->out); fputs(cname(n->a,"owned"),e->out);
+            fputs(") { ",e->out);
+            if (n->a->sem_type->elem && type_needs_drop(n->a->sem_type->elem) &&
+                n->a->sem_type->elem->drop_cname)
+                fprintf(e->out,"%s(%s); ",n->a->sem_type->elem->drop_cname,cname(n->a,"owned"));
+            fputs("free(",e->out); fputs(cname(n->a,"owned"),e->out);
+            fputs("); fe_live_",e->out); fputs(cname(n->a,"owned"),e->out);
+            fputs("=0; }\n",e->out);
+        }
         pad(e);
         emit_lvalue(e, n->a);
         fputc(' ', e->out);
         fputs(n->text ? n->text : "=", e->out);
         fputs(" ", e->out);
-        emit_expr(e, n->b);
+        if (n->b && (n->b->flags & 0x100U) && n->b->kind==FE_N_IDENT &&
+            n->b->sem_type && n->b->sem_type->kind==FE_TYPE_OWNED) {
+            fputs("(fe_live_",e->out); fputs(cname(n->b,"owned"),e->out);
+            fputs("=0, ",e->out); emit_expr(e,n->b); fputc(')',e->out);
+        } else emit_expr(e, n->b);
         fputs(";\n", e->out);
+        if (n->a && n->a->kind==FE_N_IDENT) emit_owned_live(e,n->a,1);
         break;
     case FE_N_EXPR_STMT:
-        pad(e);
-        if (n->a && n->a->kind==FE_N_UNARY && n->a->text &&
-            strcmp(n->a->text,"try")==0 && n->a->a) {
-            fputs("if ((fe_m4_error = ",e->out);
-            emit_expr(e,n->a->a);
-            fputs(") != 0) return fe_m4_error;\n",e->out);
+        if (try_has_value(n->a)) {
+            emit_try_statement(e,n->a,0);
         } else {
-            emit_expr(e, n->a);
-            fputs(";\n", e->out);
+            pad(e);
+            if (n->a && n->a->kind==FE_N_UNARY && n->a->text &&
+                strcmp(n->a->text,"try")==0 && n->a->a) {
+                fputs("if ((fe_m4_error = ",e->out);
+                emit_expr(e,n->a->a);
+                fputs(") != 0) {\n",e->out);
+                ++e->indent;
+                emit_cleanup_all(e);
+                pad(e); fputs("return fe_m4_error;\n",e->out);
+                --e->indent;
+                pad(e); fputs("}\n",e->out);
+            } else {
+                emit_expr(e, n->a);
+                fputs(";\n", e->out);
+            }
+        }
+        break;
+    case FE_N_BREAK:
+    case FE_N_CONTINUE:
+        if (e->loop_depth) {
+            emit_cleanup_to(e,e->loop_floor[e->loop_depth-1]);
+            pad(e); fputs(n->kind==FE_N_BREAK ? "break;\n" : "continue;\n",e->out);
         }
         break;
     case FE_N_RETURN:
-        pad(e);
         if (n->a && n->a->kind == FE_N_MATCH) {
             emit_match(e,n->a,1);
             break;
         }
-        fputs("return", e->out);
-        if (n->a) {
-            fputc(' ', e->out);
-            emit_expr(e, n->a);
+        /* Evaluate before cleanup: `return p.^` must not dereference p after
+           its owned cleanup has run.  The block-local temporary is declared
+           before all statements to retain C89 declaration ordering. */
+        if (n->a && e->current_ret && e->current_ret->kind!=FE_TYPE_VOID) {
+            pad(e); fputs("fe_return_value = ",e->out);
+            if ((n->a->flags & 0x100U) && n->a->kind==FE_N_IDENT &&
+                n->a->sem_type && n->a->sem_type->kind==FE_TYPE_OWNED) {
+                fputs("(fe_live_",e->out); fputs(cname(n->a,"owned"),e->out);
+                fputs("=0, ",e->out); emit_expr(e,n->a); fputc(')',e->out);
+            } else emit_expr(e,n->a);
+            fputs(";\n",e->out);
         }
-        fputs(";\n", e->out);
+        emit_cleanup_all(e);
+        pad(e); fputs("return",e->out);
+        if (n->a) fputs(" fe_return_value",e->out);
+        fputs(";\n",e->out);
         break;
     case FE_N_IF:
         pad(e);
@@ -836,12 +1177,15 @@ static void emit_stmt(FeEmitter *e, FeNode *n)
         fputs("while (", e->out);
         emit_expr(e, n->a);
         fputs(") ", e->out);
+        if (e->loop_depth<16U) e->loop_floor[e->loop_depth++]=e->block_depth;
         if (n->b && n->b->kind == FE_N_BLOCK) emit_block(e, n->b);
         else emit_block(e, 0);
+        if (e->loop_depth) --e->loop_depth;
         fputc('\n', e->out);
         break;
     case FE_N_FOR:
         pad(e); fputs("{\n",e->out); ++e->indent;
+        if (e->loop_depth<16U) e->loop_floor[e->loop_depth++]=e->block_depth;
         if (n->c) {
             pad(e); fputs("unsigned long ",e->out); fputs(cname(n,"fe_index"),e->out); fputs(";\n",e->out);
             pad(e); fputs(cname(n,"fe_index"),e->out); fputs(" = ",e->out); emit_expr(e,n->a); fputs(";\n",e->out);
@@ -869,7 +1213,9 @@ static void emit_stmt(FeEmitter *e, FeNode *n)
             fputc('&',e->out); if(mutable_iter) fputs("(*",e->out); fputs(temp,e->out); if(mutable_iter) fputs(")",e->out); if(bt && bt->kind==FE_TYPE_ARRAY) fputs(".a[fe_i]",e->out); else fputs(".p[fe_i]",e->out); fputs("; ",e->out);
             emit_block(e,n->b); fputs(" } }\n",e->out);
         }
-        --e->indent; pad(e); fputs("}\n",e->out); break;
+        --e->indent;
+        if (e->loop_depth) --e->loop_depth;
+        pad(e); fputs("}\n",e->out); break;
     case FE_N_MATCH:
         emit_match(e,n,0); break;
     default:
@@ -899,12 +1245,15 @@ static void emit_fn(FeEmitter *e, FeNode *fn, int prototype)
     fputc(')', e->out);
     if (prototype) fputs(";\n", e->out);
     else {
+        FeType *old_ret=e->current_ret;
+        e->current_ret=fn->sem_type;
         fputs(" ", e->out);
         if (fn->sem_type && fn->sem_type->kind==FE_TYPE_ERROR_UNION &&
             fn->sem_type->error_value &&
             fn->sem_type->error_value->kind==FE_TYPE_VOID)
             e->fallthrough_block=fn->c;
         emit_block(e, fn->c);
+        e->current_ret=old_ret;
         fputc('\n', e->out);
     }
 }
@@ -933,6 +1282,9 @@ void fe_emit_c_init(FeEmitter *e, FILE *out, FeCheck *check,
     e->no_checks = no_checks;
     e->temp_serial = 0;
     e->fallthrough_block = 0;
+    e->block_depth = 0;
+    e->loop_depth = 0;
+    e->current_ret = 0;
 }
 
 void fe_emit_c_program(FeEmitter *e)

@@ -227,6 +227,25 @@ fec.exe --target=bits32 --emit-c TESTS\M4\BAD-OPEN.FE -o TESTS\M4\BAD-OPEN.C > n
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-CLS.FE -o TESTS\M4\BAD-CLS.C > nul
 if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M5\DEFER.FE -o TESTS\M5\DEFER.C > nul
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M5\OWNED.FE -o TESTS\M5\OWNED.C > nul
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-MOVE.FE -o TESTS\M5\BAD-MOVE.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-DES.FE -o TESTS\M5\BAD-DES.C > nul
+if not errorlevel 1 goto test_fail
+if exist TESTS\M5\RUNTIME-G.C del TESTS\M5\RUNTIME-G.C
+if exist TESTS\M5\RUNTIME.O del TESTS\M5\RUNTIME.O
+if exist TESTS\M5\RUNTIME.EXE del TESTS\M5\RUNTIME.EXE
+fec.exe --target=bits32 --emit-c TESTS\M5\RUNTIME.FE -o TESTS\M5\RUNTIME-G.C > nul
+if errorlevel 1 goto test_fail
+rem Compile generated source and the C89 runtime harness in one WCL386 invocation
+rem so both objects use the same DOS/4GW startup and runtime library.
+wcl386 -q -za -bt=dos -fe=TESTS\M5\RUNTIME.EXE TESTS\M5\RUNTIME-G.C TESTS\M5\RUNTIME.C
+if errorlevel 1 goto test_fail
+TESTS\M5\RUNTIME.EXE
+if errorlevel 1 goto test_fail
 
 echo OK>TEST.OK
 cd C:\FEC

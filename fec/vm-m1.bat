@@ -9,6 +9,7 @@ if not exist C:\FEC\TESTS\FAIL md C:\FEC\TESTS\FAIL
 if not exist C:\FEC\TESTS\M2 md C:\FEC\TESTS\M2
 if not exist C:\FEC\TESTS\M3 md C:\FEC\TESTS\M3
 if not exist C:\FEC\TESTS\M4 md C:\FEC\TESTS\M4
+if not exist C:\FEC\TESTS\M5 md C:\FEC\TESTS\M5
 if exist C:\FEC\VM.FAIL del C:\FEC\VM.FAIL
 if exist C:\FEC\STAGE.FAIL del C:\FEC\STAGE.FAIL
 
@@ -168,6 +169,18 @@ if errorlevel 1 goto stage_fail
 copy D:\FEC\TESTS\M4\BAD-OPEN.FE C:\FEC\TESTS\M4\BAD-OPEN.FE > nul
 if errorlevel 1 goto stage_fail
 copy D:\FEC\TESTS\M4\BAD-CLS.FE C:\FEC\TESTS\M4\BAD-CLS.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M5\DEFER.FE C:\FEC\TESTS\M5\DEFER.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M5\OWNED.FE C:\FEC\TESTS\M5\OWNED.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M5\BAD-MOVE.FE C:\FEC\TESTS\M5\BAD-MOVE.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M5\BAD-DES~1.FE C:\FEC\TESTS\M5\BAD-DES.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M5\RUNTIME.FE C:\FEC\TESTS\M5\RUNTIME.FE > nul
+if errorlevel 1 goto stage_fail
+copy D:\FEC\TESTS\M5\RUNTIME.C C:\FEC\TESTS\M5\RUNTIME.C > nul
 if errorlevel 1 goto stage_fail
 
 call C:\FEC\TEST-DOS.BAT
