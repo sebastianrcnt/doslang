@@ -670,6 +670,26 @@ static void m7_emit_call(FeEmitter *e, FeNode *n)
     }
 }
 
+/* `dst = <src>;` as a statement, avoiding a comma expression on the right.
+
+   A consumed identifier lowers to `(fe_live_x=0, x)`.  When dst is a struct,
+   Watcom crashes on a struct assignment whose right side is a comma expression
+   -- hard enough to take DOSBox-X down with it -- so clear the move flag as its
+   own statement and assign the plain name. */
+static void m7_emit_assign_stmt(FeEmitter *e, const char *dst, FeNode *src)
+{
+    if (src && src->kind==FE_N_IDENT && (src->flags & FE_OWN_NODE_CONSUMED) &&
+        src->sem_type && type_needs_drop(src->sem_type)) {
+        pad(e); fputs("fe_live_",e->out); fputs(cname(src,"owned"),e->out);
+        fputs("=0;\n",e->out);
+        pad(e); fputs(dst,e->out); fputs(" = ",e->out);
+        fputs(cname(src,"fe_missing"),e->out); fputs(";\n",e->out);
+        return;
+    }
+    pad(e); fputs(dst,e->out); fputs(" = ",e->out);
+    emit_expr(e,src); fputs(";\n",e->out);
+}
+
 static void m7_emit_raw_expr(FeEmitter *e, FeNode *n)
 {
     FeNode *x;
@@ -1206,6 +1226,32 @@ static void emit_stmt(FeEmitter *e, FeNode *n)
             if (res && res->error_value && res->error_value->kind!=FE_TYPE_VOID)
                 fputs(".v",e->out);
             fputs(";\n",e->out);
+            emit_cleanup_all(e);
+            pad(e); fputs("return fe_return_value;\n",e->out);
+        } else if (n->a && n->a->kind==FE_N_BINARY && !n->a->c &&
+                   fe_m7_lazy_kind(n->a)==FE_M7_LAZY_CATCH &&
+                   e->current_ret && e->current_ret->kind!=FE_TYPE_VOID) {
+            /* Short catch in return position.  As an expression this lowers to
+               `((tmp = X), tmp.e ? fallback : tmp.v)`, and when X carries a move
+               it becomes a struct assignment whose right side is itself a comma
+               expression -- which crashes wcc386 hard enough to take DOSBox-X
+               down with it.  The same lowering as statements is also plainer. */
+            FeNode *cx=n->a;
+            FeType *res=cx->a ? cx->a->sem_type : 0;
+            int has_value=res && res->error_value &&
+                          res->error_value->kind!=FE_TYPE_VOID;
+            m7_emit_assign_stmt(e,cx->aux_cname,cx->a);
+            pad(e); fputs("if (",e->out); fputs(cx->aux_cname,e->out);
+            if (has_value) fputs(".e",e->out);
+            fputs(") {\n",e->out); ++e->indent;
+            pad(e); fputs("fe_return_value = ",e->out);
+            emit_expr(e,cx->b); fputs(";\n",e->out);
+            --e->indent; pad(e); fputs("} else {\n",e->out); ++e->indent;
+            pad(e); fputs("fe_return_value = ",e->out);
+            fputs(cx->aux_cname,e->out);
+            if (has_value) fputs(".v",e->out);
+            fputs(";\n",e->out);
+            --e->indent; pad(e); fputs("}\n",e->out);
             emit_cleanup_all(e);
             pad(e); fputs("return fe_return_value;\n",e->out);
         } else {

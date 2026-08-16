@@ -158,7 +158,10 @@ def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool,
     build = "call BUILD.BAT" if trace_dos else "call BUILD.BAT > RESULTS\\BUILD.LOG"
     if prebuilt:
         # FEC.EXE was restored from cache; BUILD.BAT would delete and rebuild it.
-        build = "echo OK>BUILD.OK"
+        # It also puts the Watcom binaries on PATH, which the case commands need
+        # after it, so that line has to be reproduced rather than skipped.
+        build = ("set PATH=%WATCOM%\\BINW;%WATCOM%\\BINP;%PATH%\r\n"
+                 "echo OK>BUILD.OK")
     lines = [
         "@echo off", "if not exist RESULTS md RESULTS", "if not exist OUT md OUT",
         "set WATCOM=W:", "set INCLUDE=W:\\H",
@@ -284,13 +287,13 @@ def run_suite(cases: list[Case], *, keep: bool = False, show_dos: bool = False,
         console = run_root / "CONSOLE.LOG"
         config = run_root / "DOSBOX.CON"
         config.write_text(
-            # core=auto falls back to the interpreter in real mode, which is
-            # where the 16-bit compiler build spends its time. Nothing here is
-            # timing sensitive -- it is a compiler and a batch file -- so ask for
-            # the recompiler and uncapped cycles explicitly.
+            # Do not tune [cpu] here. core=dynamic is roughly 5x faster but the
+            # recompiler loses abort()'s exit status -- a program that traps
+            # exits 0 instead, so the M3 bounds cases stop reporting the trap
+            # they exist to prove. Verified against a compiler built under
+            # core=normal, so it is the runtime and not the build.
             f"[log]\nlogfile={console}\n"
-            f"[dosbox]\nlog console=quiet\n"
-            f"[cpu]\ncore=dynamic\ncycles=max\n",
+            f"[dosbox]\nlog console=quiet\n",
             encoding="ascii",
         )
         if cached.is_file():
