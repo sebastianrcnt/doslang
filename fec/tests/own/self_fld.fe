@@ -1,5 +1,5 @@
 // ERROR:5:reference
-unit badslfld;
+unit self_fld;
 
 struct Bad {
     bytes: []u8,
