@@ -15,6 +15,10 @@
 .qemu/*.ppm
 .qemu/*.tmp
 
+# Windows reserved-device artifact: `> nul` under Git Bash creates a real file.
+# Committing it breaks checkout on Windows.
+nul
+
 # Local logs and editor/OS metadata
 *.log
 *.tmp
