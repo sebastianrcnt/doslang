@@ -37,9 +37,12 @@ FeType *fe_m7_optional_type(FeTypeCtx *ctx, FeType *payload)
     if (t->kind == FE_TYPE_UNKNOWN) {
         t->kind = FE_TYPE_OPTIONAL;
         t->elem = payload;
+        t->unwrap_cname = m7_generated_name(ctx, "fe_unwrap_option_");
+        t->drop_cname = m7_generated_name(ctx, "fe_drop_option_");
         if (!fe_m7_optional_uses_niche(payload)) {
             t->cname = m7_generated_name(ctx, "struct fe_option_");
             t->maker = m7_generated_name(ctx, "fe_make_option_");
+            t->none_cname = m7_generated_name(ctx, "fe_none_option_");
         }
     }
     return t;
@@ -63,13 +66,13 @@ FeType *fe_m7_error_union_type(FeTypeCtx *ctx, FeType *error_type,
     if (!t) return 0;
     if (t->kind == FE_TYPE_UNKNOWN) {
         t->kind = FE_TYPE_ERROR_UNION;
-        /* For FE_TYPE_ERROR_UNION, elem is the nominal error identity.
-           A null elem denotes the built-in core.Error shorthand !T. */
         t->elem = error_type;
         t->error_value = value_type;
+        t->drop_cname = m7_generated_name(ctx, "fe_drop_result_");
         if (value_type->kind != FE_TYPE_VOID) {
             t->cname = m7_generated_name(ctx, "struct fe_result_");
             t->maker = m7_generated_name(ctx, "fe_make_result_");
+            t->none_cname = m7_generated_name(ctx, "fe_fail_result_");
             t->alloc_cname = m7_generated_name(ctx, "fe_alloc_result_");
         }
     }
@@ -111,4 +114,10 @@ int fe_m7_is_try(const FeNode *node)
 {
     return node && node->kind == FE_N_UNARY && node->text &&
            strcmp(node->text, "try") == 0;
+}
+
+int fe_m7_is_null(const FeNode *node)
+{
+    return node && node->kind == FE_N_LITERAL && node->text &&
+           strcmp(node->text, "null") == 0;
 }
