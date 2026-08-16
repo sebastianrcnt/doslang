@@ -1,0 +1,6 @@
+unit m3_bad_mut_let;
+
+fn bad() -> void {
+    var raw: [2]u8 = [1, 2];
+    let s: []mut u8 = raw[..];
+}

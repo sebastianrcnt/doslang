@@ -15,9 +15,9 @@ fec.exe --dump-ast TESTS\PASS\BASIC.FE > nul
 if errorlevel 1 goto test_fail
 fec.exe --dump-ast TESTS\PASS\LITERALS.FE > nul
 if errorlevel 1 goto test_fail
-fec.exe --dump-ast TESTS\PASS\KEYWORDS-AND-BUILTINS.FE > nul
+fec.exe --dump-ast TESTS\PASS\KEYBUILT.FE > nul
 if errorlevel 1 goto test_fail
-fec.exe --dump-ast TESTS\PASS\V012-FORMS.FE > nul
+fec.exe --dump-ast TESTS\PASS\V012FORM.FE > nul
 if errorlevel 1 goto test_fail
 
 fec.exe --dump-ast STD\CORE.FE > nul
@@ -37,11 +37,11 @@ if errorlevel 1 goto test_fail
 fec.exe --dump-ast STD\SYS.FE > nul
 if errorlevel 1 goto test_fail
 
-fec.exe --dump-ast TESTS\FAIL\MISSING-SEMI.FE > nul
+fec.exe --dump-ast TESTS\FAIL\MISSSEMI.FE > nul
 if not errorlevel 1 goto test_fail
-fec.exe --dump-ast TESTS\FAIL\UNCLOSED-COMMENT.FE > nul
+fec.exe --dump-ast TESTS\FAIL\UNCLCOMM.FE > nul
 if not errorlevel 1 goto test_fail
-fec.exe --dump-ast TESTS\FAIL\LOGICAL-SYMBOLS.FE > nul
+fec.exe --dump-ast TESTS\FAIL\LOGICAL.FE > nul
 if not errorlevel 1 goto test_fail
 
 if exist TESTS\M2\HELLO.C del TESTS\M2\HELLO.C
@@ -67,28 +67,28 @@ TESTS\M2\SCOPES.EXE
 if errorlevel 1 goto test_fail
 
 rem M2 bits16 regression path remains on compiler A (wcl).
-fec.exe --target=bits16 --emit-c TESTS\M2\CAST-WHILE.FE -o TESTS\M2\CAST16.C > nul
+fec.exe --target=bits16 --emit-c TESTS\M2\CASTWHIL.FE -o TESTS\M2\CAST16.C > nul
 if errorlevel 1 goto test_fail
 wcl -q -za -bt=dos -fe=TESTS\M2\CAST16.EXE TESTS\M2\CAST16.C
 if errorlevel 1 goto test_fail
 TESTS\M2\CAST16.EXE
 if errorlevel 1 goto test_fail
 
-fec.exe --target=bits32 --emit-c TESTS\M2\BAD-CONDITION.FE -o TESTS\M2\BAD-CO.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M2\BAD-COND.FE -o TESTS\M2\BAD-CO.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M2\BAD-CAST.FE -o TESTS\M2\BAD-CA.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M2\BAD-ASSIGN.FE -o TESTS\M2\BAD-AS.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M2\BAD-ASGN.FE -o TESTS\M2\BAD-AS.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M2\BAD-UNKNOWN.FE -o TESTS\M2\BAD-UN.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M2\BAD-UNK.FE -o TESTS\M2\BAD-UN.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M2\BAD-ARITY.FE -o TESTS\M2\BAD-AR.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M2\BAD-ARI.FE -o TESTS\M2\BAD-AR.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M2\BAD-TYPES.FE -o TESTS\M2\BAD-TY.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M2\BAD-TYPE.FE -o TESTS\M2\BAD-TY.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M2\BAD-RETURN.FE -o TESTS\M2\BAD-RE.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M2\BAD-RET.FE -o TESTS\M2\BAD-RE.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M2\BAD-UNINIT.FE -o TESTS\M2\BAD-UI.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M2\BAD-UNIT.FE -o TESTS\M2\BAD-UI.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M2\BAD-VOID.FE -o TESTS\M2\BAD-VO.C > nul
 if not errorlevel 1 goto test_fail
@@ -132,6 +132,16 @@ wcl386 -q -za -bt=dos -fe=TESTS\M3\ARRAY.EXE TESTS\M3\ARRAY.C
 if errorlevel 1 goto test_fail
 TESTS\M3\ARRAY.EXE
 if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\MUTABLE.FE -o TESTS\M3\MUTABLE.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\MUTABLE.EXE TESTS\M3\MUTABLE.C
+if errorlevel 1 goto test_fail
+TESTS\M3\MUTABLE.EXE
+if errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BAD-MLET.FE -o TESTS\M3\BAD-MLET.C > nul
+if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\BAD-SHWR.FE -o TESTS\M3\BAD-SHWR.C > nul
+if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M3\STR.FE -o TESTS\M3\STR.C > nul
 if errorlevel 1 goto test_fail
 wcl386 -q -za -bt=dos -fe=TESTS\M3\STR.EXE TESTS\M3\STR.C
@@ -168,6 +178,12 @@ wcl386 -q -za -bt=dos -fe=TESTS\M3\BOUNDS.EXE TESTS\M3\BOUNDS.C
 if errorlevel 1 goto test_fail
 TESTS\M3\BOUNDS.EXE
 if not errorlevel 1 goto test_fail
+fec.exe --target=bits32 --emit-c TESTS\M3\SLCBOUND.FE -o TESTS\M3\SLCBOUND.C > nul
+if errorlevel 1 goto test_fail
+wcl386 -q -za -bt=dos -fe=TESTS\M3\SLCBOUND.EXE TESTS\M3\SLCBOUND.C
+if errorlevel 1 goto test_fail
+TESTS\M3\SLCBOUND.EXE
+if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --no-checks --emit-c TESTS\M3\BOUNDS.FE -o TESTS\M3\BOUNDS-N.C > nul
 if errorlevel 1 goto test_fail
 wcl386 -q -za -bt=dos -fe=TESTS\M3\BOUNDS-N.EXE TESTS\M3\BOUNDS-N.C
@@ -197,7 +213,7 @@ wcl386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\M4\FORMAT.EXE TESTS\M4\FORMAT.C
 if errorlevel 1 goto test_fail
 TESTS\M4\FORMAT.EXE > nul
 if errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M4\TRY-FPRINT.FE -o TESTS\M4\TRY-FPR.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M4\TRY-FPR.FE -o TESTS\M4\TRY-FPR.C > nul
 if errorlevel 1 goto test_fail
 wcl386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\M4\TRY-FPR.EXE TESTS\M4\TRY-FPR.C
 if errorlevel 1 goto test_fail
@@ -209,17 +225,17 @@ wcl386 -q -za -wx -wcd=202 -bt=dos -fe=TESTS\M4\PROP.EXE TESTS\M4\PROPTEST.C
 if errorlevel 1 goto test_fail
 TESTS\M4\PROP.EXE > nul
 if errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M4\BAD-ARITY.FE -o TESTS\M4\BAD-ARI.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-ARI.FE -o TESTS\M4\BAD-ARI.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-VERB.FE -o TESTS\M4\BAD-VERB.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M4\BAD-RUNTIME.FE -o TESTS\M4\BAD-RUN.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-RUN.FE -o TESTS\M4\BAD-RUN.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-TYPE.FE -o TESTS\M4\BAD-TYP.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-TRY.FE -o TESTS\M4\BAD-TRY.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M4\BAD-WRITER.FE -o TESTS\M4\BAD-WRI.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M4\BAD-WRIT.FE -o TESTS\M4\BAD-WRI.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M4\BAD-MANY.FE -o TESTS\M4\BAD-MANY.C > nul
 if not errorlevel 1 goto test_fail
@@ -233,13 +249,13 @@ fec.exe --target=bits32 --emit-c TESTS\M5\OWNED.FE -o TESTS\M5\OWNED.C > nul
 if errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M5\BAD-MOVE.FE -o TESTS\M5\BAD-MOVE.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M5\BAD-DESTROY.FE -o TESTS\M5\BAD-DES.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-DEST.FE -o TESTS\M5\BAD-DES.C > nul
 if not errorlevel 1 goto test_fail
 fec.exe --target=bits32 --emit-c TESTS\M5\BAD-DROP.FE -o TESTS\M5\BAD-DROP.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M5\BAD-DOUBLE.FE -o TESTS\M5\BAD-DBL.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-DBL.FE -o TESTS\M5\BAD-DBL.C > nul
 if not errorlevel 1 goto test_fail
-fec.exe --target=bits32 --emit-c TESTS\M5\BAD-CONDITIONAL.FE -o TESTS\M5\BAD-COND.C > nul
+fec.exe --target=bits32 --emit-c TESTS\M5\BAD-COND.FE -o TESTS\M5\BAD-COND.C > nul
 if not errorlevel 1 goto test_fail
 if exist TESTS\M5\RUNTIME-G.C del TESTS\M5\RUNTIME-G.C
 if exist TESTS\M5\RUNTIME.O del TESTS\M5\RUNTIME.O

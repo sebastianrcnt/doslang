@@ -30,6 +30,7 @@ struct FeNode {
     char *aux_text;
     char *aux_cname;
     FeType *sem_type;
+    FeNode *sem_decl;
     unsigned flags;
 };
 

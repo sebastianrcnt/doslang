@@ -73,6 +73,7 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name);
 FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node);
 FeType *fe_type_array(FeTypeCtx *ctx, unsigned long length, FeType *elem);
 FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem);
+FeType *fe_type_mut_slice(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable);
 FeType *fe_type_owned(FeTypeCtx *ctx, FeType *elem);
 FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value);

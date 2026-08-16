@@ -54,7 +54,7 @@ static int is_copy_type(FeType *t)
     unsigned i;
     if (!t) return 1;
     if (t->kind==FE_TYPE_OWNED) return 0;
-    if (t->kind==FE_TYPE_REF) return !t->ref_mut;
+    if (t->kind==FE_TYPE_REF || t->kind==FE_TYPE_SLICE) return !t->ref_mut;
     if (t->kind==FE_TYPE_ARRAY) return is_copy_type(t->elem);
     if (t->kind==FE_TYPE_STRUCT) {
         if (t->has_drop) return 0;
@@ -311,6 +311,8 @@ static FeNode *find_const_node(FeCheck *c, const char *name)
     return 0;
 }
 
+static int format_is_slice_u8(FeType *t);
+
 static const char *builtin_format(FeCheckerState *s, FeNode *fmt)
 {
     FeNode *decl;
@@ -323,7 +325,7 @@ static const char *builtin_format(FeCheckerState *s, FeNode *fmt)
             sym->decl : find_const_node(s->c,fmt->text);
         if (decl && decl->b && decl->b->kind==FE_N_LITERAL &&
             decl->b->text && decl->b->text[0]=='"') {
-            if (!decl->a || fe_type_from_ast(&s->c->types,decl->a)->kind==FE_TYPE_STR)
+            if (!decl->a || format_is_slice_u8(fe_type_from_ast(&s->c->types,decl->a)))
                 return decl->b->text;
         }
     }
@@ -347,10 +349,10 @@ static int format_arg_ok(FeType *t, int verb)
     if (!t) return 0;
     if (verb=='x') return fe_type_is_integer(t);
     if (verb=='c') return t->kind==FE_TYPE_CHAR;
-    if (verb=='s') return t->kind==FE_TYPE_STR || format_is_slice_u8(t);
+    if (verb=='s') return format_is_slice_u8(t);
     if (verb=='b') return t->kind==FE_TYPE_BOOL;
     if (t->kind==FE_TYPE_INT || t->kind==FE_TYPE_BOOL ||
-        t->kind==FE_TYPE_CHAR || t->kind==FE_TYPE_STR) return 1;
+        t->kind==FE_TYPE_CHAR) return 1;
     return format_is_slice_u8(t) ||
         (t->kind==FE_TYPE_ENUM && t->is_error);
 }
@@ -381,7 +383,8 @@ static void check_format_call(FeCheckerState *s, FeNode *n)
     if (strcmp(n->text,"@sprint")==0) {
         if (!fmt_node) { err(s->c,n->loc,"@sprint requires a buffer"); return; }
         t=check_expr(s,fmt_node);
-        if (!format_is_slice_u8(t)) err(s->c,fmt_node->loc,"@sprint requires []u8 buffer");
+        if (!format_is_slice_u8(t) || !t->ref_mut)
+            err(s->c,fmt_node->loc,"@sprint requires []mut u8 buffer");
         fmt_node=fmt_node->next;
     }
     fmt=builtin_format(s,fmt_node);
@@ -517,7 +520,18 @@ static FeType *check_index(FeCheckerState *s, FeNode *n)
     if(n->c || !n->b) {
         if (base->kind==FE_TYPE_ARRAY && !array_slice_lvalue(n->a))
             err(s->c,n->loc,"array slicing requires a stable lvalue");
-        if(n->c) { idx=check_expr(s,n->c); if(known(idx)&&!fe_type_is_integer(idx)) err(s->c,n->loc,"slice bound must be an integer"); } elem=base->elem; n->sem_type=fe_type_slice(&s->c->types,elem); if(base->kind==FE_TYPE_STR) n->flags|=2U; return n->sem_type; }
+        if(n->c) {
+            idx=check_expr(s,n->c);
+            if(known(idx)&&!fe_type_is_integer(idx))
+                err(s->c,n->loc,"slice bound must be an integer");
+        }
+        elem=base->elem;
+        n->sem_type=(base->kind==FE_TYPE_SLICE ? base->ref_mut :
+                     lvalue_writable(s,n->a)) ?
+            fe_type_mut_slice(&s->c->types,elem) :
+            fe_type_slice(&s->c->types,elem);
+        return n->sem_type;
+    }
     n->sem_type=base->elem; return n->sem_type;
 }
 
@@ -715,6 +729,7 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
                 return unknown(c);
             }
             n->a->cname = sym->cname;
+            n->sem_decl = sym->fn;
             if (!sym->fn) {
                 err(c, n->loc, "name is not a function");
                 return unknown(c);
@@ -725,7 +740,10 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
                 a = check_expr(s, arg);
                 mark_moved(s,arg,a);
                 b = node_type(c, param->a);
-                if (!compatible(b, a, arg) && a->kind != FE_TYPE_UNKNOWN)
+                if (!compatible(b, a, arg) &&
+                    !(b && a && b->kind==FE_TYPE_SLICE && a->kind==FE_TYPE_SLICE &&
+                      !b->ref_mut && a->ref_mut && fe_type_equal(b->elem,a->elem)) &&
+                    a->kind != FE_TYPE_UNKNOWN)
                     err(c, arg->loc, "argument type mismatch");
                 param = param->next;
                 arg = arg->next;
@@ -819,14 +837,15 @@ static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
         n->sem_type=field->type; return field->type;
     }
     if (n && n->kind == FE_N_INDEX) {
-        if (n->a && n->a->sem_type && n->a->sem_type->kind == FE_TYPE_STR) {
-            err(s->c, n->loc, "str is immutable");
-        }
-        if (n->a && n->a->kind == FE_N_INDEX && (n->a->flags & 2U))
-            err(s->c, n->loc, "str slice is immutable");
-        if (!lvalue_writable(s,n->a))
-            err(s->c,n->loc,"cannot assign through immutable value");
         base=check_index(s,n);
+        if (n->a && n->a->sem_type &&
+            n->a->sem_type->kind == FE_TYPE_SLICE &&
+            !n->a->sem_type->ref_mut)
+            err(s->c,n->loc,"cannot write through shared slice");
+        else if (n->a && n->a->sem_type &&
+                 n->a->sem_type->kind != FE_TYPE_SLICE &&
+                 !lvalue_writable(s,n->a))
+            err(s->c,n->loc,"cannot assign through immutable value");
         return base;
     }
     if (n) err(s->c, n->loc, "assignment requires a variable");
@@ -903,8 +922,8 @@ static void check_for(FeCheckerState *s, FeNode *n)
         else if (n->a && n->a->kind==FE_N_INDEX && n->a->a &&
                  n->a->a->kind==FE_N_IDENT)
             iter_sym=find_symbol(s->scope,n->a->a->text ? n->a->a->text : "");
-        iter_mut=iter_sym && iter_sym->mutable;
-        if (start->kind==FE_TYPE_STR) iter_mut=0;
+        iter_mut=start->kind==FE_TYPE_SLICE ? start->ref_mut :
+            (iter_sym && iter_sym->mutable);
         ref_type=fe_type_ref(&s->c->types,elem,iter_mut);
         if (iter_mut) n->flags |= 4U;
         s->scope=scope_new(s,old);
@@ -1017,6 +1036,8 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
             err(c, n->loc, "initializer type mismatch");
         if (b->kind == FE_TYPE_VOID)
             err(c, n->loc, "void expression cannot initialize a variable");
+        if (n->kind==FE_N_LET && a->kind==FE_TYPE_SLICE && a->ref_mut)
+            err(c,n->loc,"let cannot bind a mutable slice");
         mark_moved(s,n->b,b);
         add_symbol(s, s->scope, n->text, a, 0, 0, 1,
                    local_cname(c, n->text ? n->text : "local"), n);

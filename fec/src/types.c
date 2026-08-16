@@ -64,7 +64,8 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
     if (strcmp(name, "void") == 0) kind = FE_TYPE_VOID;
     else if (strcmp(name, "bool") == 0) kind = FE_TYPE_BOOL;
     else if (strcmp(name, "char") == 0) kind = FE_TYPE_CHAR;
-    else if (strcmp(name, "str") == 0) kind = FE_TYPE_STR;
+    else if (strcmp(name, "str") == 0)
+        return fe_type_slice(ctx, fe_type_intern(ctx, "u8"));
     else if (strcmp(name, "io.Writer") == 0) {
         kind = FE_TYPE_STRUCT;
     }
@@ -152,6 +153,26 @@ FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem)
         t->slicer = generated_name(ctx, "fe_slice_slice_", "type");
         t->full_slicer = generated_name(ctx, "fe_full_slice_", "type");
         t->tail_slicer = generated_name(ctx, "fe_tail_slice_", "type");
+    }
+    return t;
+}
+
+FeType *fe_type_mut_slice(FeTypeCtx *ctx, FeType *elem)
+{
+    char key[96];
+    FeType *t;
+    sprintf(key, "[]mut %s", elem ? elem->name : "?");
+    t = fe_type_intern(ctx, key);
+    if (t->kind == FE_TYPE_UNKNOWN) {
+        t->kind = FE_TYPE_SLICE;
+        t->elem = elem;
+        t->ref_mut = 1;
+        t->cname = generated_name(ctx, "fe_mut_slice_", "type");
+        t->maker = generated_name(ctx, "fe_make_mut_slice_", "type");
+        t->indexer = generated_name(ctx, "fe_idx_mut_slice_", "type");
+        t->slicer = generated_name(ctx, "fe_slice_mut_slice_", "type");
+        t->full_slicer = generated_name(ctx, "fe_full_mut_slice_", "type");
+        t->tail_slicer = generated_name(ctx, "fe_tail_mut_slice_", "type");
     }
     return t;
 }
@@ -478,7 +499,7 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
     if (node->text && strcmp(node->text, "as") == 0)
         return fe_type_from_ast(ctx, node->b);
     if (node->text && strcmp(node->text, "str") == 0)
-        return fe_type_intern(ctx, "str");
+        return fe_type_slice(ctx, fe_type_intern(ctx, "u8"));
     if (node->a && node->a->kind==FE_N_IDENT && node->text &&
         strcmp(node->text,"io")==0 && node->a->text) {
         sprintf(qualified,"%s.%s",node->text,node->a->text);
@@ -490,13 +511,16 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
                            strcmp(node->text,"&mut") == 0);
     if (node->text && strcmp(node->text,"^")==0)
         return fe_type_owned(ctx,fe_type_from_ast(ctx,node->a));
-    if (node->text && strcmp(node->text, "[") == 0) {
+    if (node->text && (strcmp(node->text, "[") == 0 ||
+                       strcmp(node->text, "[]mut") == 0)) {
         if (node->a) {
             if (node->a->kind == FE_N_LITERAL && node->a->text)
                 length = strtoul(node->a->text, 0, 0);
             return fe_type_array(ctx, length, fe_type_from_ast(ctx, node->b));
         }
-        return fe_type_slice(ctx, fe_type_from_ast(ctx, node->b));
+        return strcmp(node->text,"[]mut")==0 ?
+            fe_type_mut_slice(ctx, fe_type_from_ast(ctx,node->b)) :
+            fe_type_slice(ctx, fe_type_from_ast(ctx, node->b));
     }
     if (node->text && strcmp(node->text, "!") == 0)
         /* Prefix !T stores T in a; the E!T spelling stores its success

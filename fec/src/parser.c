@@ -49,6 +49,7 @@ static FeNode *type(FeParser *p)
     if (is(p,FE_TOK_LBRACKET)) {
         next(p); n=toknode(p,FE_N_TYPE,t);
         if(!eat(p,FE_TOK_RBRACKET)) { n->a=expr(p,0); want(p,FE_TOK_RBRACKET,"expected ']' in array type"); }
+        else if(eat(p,FE_TOK_MUT)) n->text=fe_arena_strdup(&p->ast->arena,"[]mut",5);
         n->b=type(p); return n;
     }
     if (is(p,FE_TOK_FN)) {
