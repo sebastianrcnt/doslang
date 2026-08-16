@@ -30,6 +30,9 @@ struct FeNode {
     char *aux_text;
     char *aux_cname;
     FeType *sem_type;
+    /* Expected contextual wrapper, used by M7 for null/Some and E!T
+       success/failure construction without mutating the expression's type. */
+    FeType *sem_context;
     FeNode *sem_decl;
     unsigned flags;
 };
