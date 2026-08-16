@@ -159,6 +159,9 @@ def _batch(cases: list[Case], *, show_dos: bool, trace_dos: bool) -> str:
         "@echo off", "if not exist RESULTS md RESULTS", "if not exist OUT md OUT",
         "set WATCOM=W:", "set INCLUDE=W:\\H",
         "set LIB=W:\\LIB286\\DOS;W:\\LIB286;W:\\LIB386\\DOS;W:\\LIB386",
+        # COMMAND.COM can only redirect handle 1, so fec diagnostics written to
+        # stderr never reach RESULTS\<key>.LOG.  Ask it for stdout instead.
+        "set FE_DIAG_STDOUT=1",
         build, "if not exist BUILD.OK goto BUILDFAIL",
         "echo PASS>RESULTS\\BUILD.RES",
     ]
