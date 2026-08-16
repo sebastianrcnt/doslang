@@ -84,6 +84,11 @@ static void mark_moved(FeCheckerState *s, FeNode *n, FeType *t)
                 "cannot move a non-Copy value out of a projection; use mem.replace");
             return;
         }
+        /* Reaching an identifier already ran FE_OWN_READ over it, and that
+           read reported the value as gone if it was. Running the move as well
+           reports the same sentence at the same column a second time, so stop
+           at the state the read left behind. */
+        if (sym->own.move != FE_OWN_AVAILABLE) return;
         if (fe_own_access(s->c->diags,&sym->own,FE_OWN_MOVE,n->loc)) {
             sym->moved=sym->own.move;
             /* Keep the existing emitter contract: ownership-consuming AST
@@ -304,7 +309,8 @@ static void check_match(FeCheckerState *s, FeNode *n);
 static void check_stmt(FeCheckerState *s, FeNode *n);
 static FeType *check_expr_core(FeCheckerState *s, FeNode *n);
 static void check_stmt_core(FeCheckerState *s, FeNode *n);
-static FeType *check_lvalue_core(FeCheckerState *s, FeNode *n, int read);
+static FeType *check_lvalue_core(FeCheckerState *s, FeNode *n, int read,
+                                 FeType *base_in);
 static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read);
 static FeType *check_call(FeCheckerState *s, FeNode *n);
 
@@ -1163,7 +1169,11 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
     return unknown(c);
 }
 
-static FeType *check_lvalue_core(FeCheckerState *s, FeNode *n, int read)
+/* `base_in` is the already-checked type of a member expression's base. The M7
+   lvalue path looks at that base before delegating here, and checking it a
+   second time reports any ownership violation on it a second time too. */
+static FeType *check_lvalue_core(FeCheckerState *s, FeNode *n, int read,
+                                 FeType *base_in)
 {
     FeSym *sym;
     FeType *base;
@@ -1189,7 +1199,7 @@ static FeType *check_lvalue_core(FeCheckerState *s, FeNode *n, int read)
         return sym->type;
     }
     if (n && n->kind == FE_N_MEMBER) {
-        base=check_expr(s,n->a);
+        base=base_in ? base_in : check_expr(s,n->a);
         if (base && base->kind == FE_TYPE_REF && n->b && n->b->text &&
             strcmp(n->b->text,"^")==0) {
             if (!base->ref_mut)
@@ -2223,7 +2233,7 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
 
 static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
 {
-    FeType *base;
+    FeType *base=0;
     FeFieldType *field;
     FeType *owner;
     if (!n) return unknown(s->c);
@@ -2262,7 +2272,7 @@ static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
             return field->type;
         }
     }
-    return check_lvalue_core(s,n,read);
+    return check_lvalue_core(s,n,read,n->kind==FE_N_MEMBER ? base : 0);
 }
 
 static FeType *m7_pattern_binding_type(FeCheckerState *s, FeType *payload,
