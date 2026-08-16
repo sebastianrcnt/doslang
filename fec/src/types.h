@@ -6,7 +6,7 @@
 typedef enum FeTypeKind {
     FE_TYPE_ERROR, FE_TYPE_ERROR_UNION, FE_TYPE_VOID, FE_TYPE_BOOL, FE_TYPE_CHAR, FE_TYPE_INT,
     FE_TYPE_STRUCT, FE_TYPE_ENUM, FE_TYPE_ARRAY, FE_TYPE_SLICE, FE_TYPE_STR,
-    FE_TYPE_REF, FE_TYPE_OWNED, FE_TYPE_UNKNOWN
+    FE_TYPE_REF, FE_TYPE_OWNED, FE_TYPE_OPTIONAL, FE_TYPE_UNKNOWN
 } FeTypeKind;
 
 typedef struct FeFieldType FeFieldType;
@@ -49,7 +49,9 @@ struct FeType {
     unsigned long size;
     unsigned align;
     FeType *elem;
-    /* Success value for an error union; !void is represented directly. */
+    /* Success value for an error union; !void is represented directly.
+       For a nominal E!T created by M7, elem holds E.  A null elem denotes
+       the built-in core.Error shorthand !T. */
     FeType *error_value;
     int ref_mut;
     FeFieldType *fields;
