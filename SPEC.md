@@ -3,7 +3,8 @@
 DOS용 시스템 프로그래밍 언어. C만큼 빠르고, 메모리 안전성을 함수 단위 지역 검사만으로 보장한다.
 파일 확장자 `.fe`, 컴파일러 이름 `fec`, 심볼 파일 `.fei`.
 
-이 문서는 언어 명세 + 컴파일러 구현 지시서를 겸한다. 구현 중 애매한 부분은 §1 철학과 §5 소유권 규칙을 기준으로 결정한다.
+이 문서는 Ferro 언어 명세만 다룬다. 컴파일러 구현 지시서와 표준 라이브러리 상세 명세는
+별도 문서에서 다룬다. 명세 판단이 애매한 부분은 §1 철학과 §5 소유권 규칙을 기준으로 결정한다.
 
 ---
 
@@ -13,7 +14,7 @@ DOS용 시스템 프로그래밍 언어. C만큼 빠르고, 메모리 안전성�
 2. **전역 분석 금지.** 모든 검사(타입, 소유권, 참조)는 함수 하나만 보고 완결되어야 한다. 이 제약이 라이프타임 표기를 없애고, 640KB 머신에서 셀프호스팅을 가능하게 한다.
 3. **숨은 비용 없음.** 힙 할당, 복사, 소멸자 호출, 형변환이 전부 소스에 보인다. GC 없음, 예외 없음, 암묵 변환 없음.
 4. **읽히는 문법.** `이름: 타입` 순서, 좌→우 파싱, LL(1) 재귀하강으로 처리 가능.
-5. **작게 시작.** 기능을 넣기 전에 뺄 이유를 먼저 찾는다. 뺀 것과 그 대체 수단은 §13에 기록한다.
+5. **작게 시작.** 기능을 넣기 전에 뺄 이유를 먼저 찾는다. 뺀 것과 그 대체 수단은 §11에 기록한다.
 6. **기존 도구체인 재사용.** 링커, `.OBJ`/`.LIB`/`.EXE` 포맷, DPMI 익스텐더를 새로 만들지 않는다.
 
 ---
@@ -28,10 +29,8 @@ DOS용 시스템 프로그래밍 언어. C만큼 빠르고, 메모리 안전성�
 | 메모리 모델 | small, large | flat |
 | 시스템 호출 | INT 21h 직접 | DPMI 서비스 + 실모드 콜백 |
 
-- CLI: `fec main.fe --target=bits16|bits32 [--model=small|large] [--strip-error-names]`
 - 소스 분기: `comptime if @bits == 16 { ... } else { ... }`
 - `bits32`에서 `far` 키워드를 쓰면 컴파일 에러.
-- 표준 라이브러리는 코어 공용, `std.sys` 유닛만 타깃별 구현.
 
 ---
 
@@ -172,7 +171,7 @@ fn read_all(path: str) -> !^[]u8 {      // 표준 io는 core.Error로 통일
 - `try`는 에러 유니온 반환 함수 안에서만 허용한다. 피연산자의 nominal error 타입은 현재 함수의 error 타입과 정확히 같아야 한다. 다르면 `catch`에서 명시적으로 매핑한다.
 - `catch`는 현재 함수의 반환 타입과 무관하게 어디서든 에러를 그 자리에서 처리할 수 있다.
 - `try e`: 에러면 현재 함수에서 즉시 반환한다.
-- `e catch |x| { ... }`: 블록은 값을 만들 수 없다. 결과 타입이 `void`이면 정상적으로 끝까지 실행할 수 있고, 값 결과가 필요하면 `return`/`break`/`continue`로 탈출하거나 `@trap()`으로 끝나야 한다. 값이 필요하면 아래 짧은 형태를 쓴다. (언어에 블록 표현식을 도입하지 않기 위한 선택. §13 참조.)
+- `e catch |x| { ... }`: 블록은 값을 만들 수 없다. 결과 타입이 `void`이면 정상적으로 끝까지 실행할 수 있고, 값 결과가 필요하면 `return`/`break`/`continue`로 탈출하거나 `@trap()`으로 끝나야 한다. 값이 필요하면 아래 짧은 형태를 쓴다. (언어에 블록 표현식을 도입하지 않기 위한 선택. §11 참조.)
 - `e catch default_value`: 짧은 형태. 우변은 식이며 그 값이 결과가 된다.
 - 짧은 `catch`의 우변과 block `catch`의 handler는 피연산자가 error일 때만 평가·실행한다. success이면 handler의 부수 효과·이동·대여가 발생하지 않는다.
 - 서로 다른 error 타입 간 자동 변환 없음. `!T`(기본 에러 집합 `core.Error`)로 통일하거나 명시 매핑.
@@ -588,15 +587,13 @@ pub fn main() -> !void {
 - 이항 연산자는 왼쪽 operand를 먼저, 오른쪽 operand를 나중에 평가한다.
 - `and`와 `or`는 왼쪽 operand로 결과가 정해지면 오른쪽을 평가하지 않는다. `orelse`와 `catch`도 §4.5·§4.6에 따라 우변/handler가 필요한 경로에서만 평가한다.
 - 이 순서는 부수 효과뿐 아니라 move, borrow의 시작·마지막 사용, `try` 전파와 defer/drop cleanup 순서를 결정한다.
-- C backend는 C 자체의 미지정 평가 순서에 의존할 수 없다. C에서 순서가 보장되지 않는 호출 인자, 일반 이항 operand 등의 부수 효과·이동·대여는 lower 단계에서 순서가 명시된 temporary statement로 분해한다. `and`/`or` 같은 C의 단락 규칙을 직접 사용하더라도 Ferro의 lazy 의미를 그대로 보존해야 한다.
 
 ---
 
-## 8. 유닛과 빌드
+## 8. 유닛
 
 파일 하나가 유닛 하나다. 유닛의 canonical identity는 fully-qualified dotted unit path이며
-모든 cross-unit 타입·선언·제네릭 identity, `.fei`, C mangling, cache key와 진단에서 같은
-이름을 사용한다.
+모든 cross-unit 타입·선언·제네릭 identity에서 같은 이름을 사용한다.
 
 ```fe
 unit game.main;
@@ -612,8 +609,12 @@ import는 항상 유닛 전체를 가져오며 member는 local unit binding으�
 `parse.read(...)`, `import std.io;` 뒤에는 `io.write(...)`를 쓴다. `as`가 있으면 그
 alias가 binding이다.
 
+`std` 최상위 namespace는 compiler-reserved이며 user unit은 선언할 수 없다. 표준 유닛은
+`import std.io;`, `import std.mem;`, `import std.fmt;`, `import std.sys;`처럼 가져온다.
+`str`은 계속 built-in `[]u8` alias와 alias-method namespace이며 import unit이 아니다.
+
 v0.1은 relative import(`.foo`, `..foo`), glob/selective import, `pub import` re-export,
-package-private/friend visibility를 지원하지 않는다.
+package-private/friend visibility, package manager를 지원하지 않는다.
 
 ### 8.1 unit 이름과 source path
 
@@ -631,42 +632,7 @@ tinyjson.parse  -> tinyjson/parse.fe
 game.world.map  -> game/world/map.fe
 ```
 
-entry source의 선언이 `unit game.main;`이고 실제 파일이
-`C:/PROJECT/SRC/GAME/MAIN.FE`이면 file path 끝의 `game/main.fe` suffix를 ASCII
-case-insensitive 방식으로 비교해 제거하고 project source root `C:/PROJECT/SRC`를 얻는다.
-unit path/file path 대응은 host filesystem의 기본 case 규칙이 아니라 이 규범적 비교를
-써서 DOS와 모든 host에서 같게 처리한다. suffix가 일치하지 않으면 컴파일 에러이며 같은
-unit 선언을 임의 위치에서 조용히 허용하지 않는다. case-sensitive host에 `game/main.fe`와
-`GAME/MAIN.FE`가 별도 실제 파일로 함께 있으면 §8.2의 서로 다른 후보이므로 ambiguous다.
-
-### 8.2 import root와 모호성
-
-candidate root는 다음 집합이다.
-
-1. entry source에서 계산한 project source root
-2. 사용자가 지정한 각 `-I <dir>`
-3. `std.*`에 대해서만 compiler 내장 std root
-
-`std` 최상위 namespace는 compiler-reserved이며 user unit은 선언할 수 없다. 일반 user
-unit은 compiler std root에서 찾지 않는다. 표준 유닛은 `import std.io;`,
-`import std.mem;`, `import std.fmt;`, `import std.sys;`처럼 가져온다. `str`은 계속 built-in
-`[]u8` alias와 alias-method namespace이며 import unit이 아니다.
-
-root를 순서대로 검사해 첫 성공을 고르지 않고 모든 candidate를 조사한다. 동일 canonical
-unit path에 대해 서로 다른 실제 source file이 둘 이상 발견되면 다음 형태의 compile
-error를 내고 각 실제 path를 note로 표시한다.
-
-```
-ambiguous unit 'foo.bar'
-note: ...
-note: ...
-```
-
-filesystem canonicalization 결과 같은 실제 파일이 여러 root 또는 path alias로 발견된
-경우만 하나로 취급할 수 있다. 따라서 `-I` 순서, 디렉터리 열거 순서, host 환경이 source
-선택을 바꾸지 않는다.
-
-### 8.3 binding, visibility와 외부 library
+### 8.2 binding과 visibility
 
 한 unit에서 import binding은 다른 unit-scope declaration/import binding과 충돌할 수 없다.
 `import foo.net; import bar.net;`은 둘 다 `net`을 만들므로 에러이며 두 번째를
@@ -679,74 +645,12 @@ function parameter/return, public field 등 외부 signature에 나타나는 nom
 importer가 이름을 해석할 수 있어야 하며 private nominal type을 public API에 노출하면
 컴파일 에러다.
 
-v0.1 외부 library는 source-only import root다. 예를 들어 `-I deps`와
-`deps/tinyjson/parse.fe`가 있으면 `import tinyjson.parse;`로 사용한다. package manager,
-registry, version solver, manifest dependency 문법은 v0.1에 없다. 미래 package manager도
-dependency source tree를 import root에 배치하고 `-I`를 구성하는 도구일 뿐 Ferro import
-의미론을 바꾸지 않는다. `.fei + .obj/.lib`만 배포하는 binary-only package ABI도 v0.1은
-지원하지 않는다.
-
-### 8.4 `.fei` interface와 cache
-
-`.fei`는 incremental compilation interface, build cache metadata, 다른 unit에서의 generic
-instantiation을 위한 compiler interface다. 물리적 binary/text encoding은 구현 세부지만
-논리적으로 최소한 다음을 표현할 수 있어야 한다.
-
-- magic/format version, Ferro SPEC/compiler interface version
-- target과 해당하는 경우 bits16 memory model
-- canonical unit name
-- public symbol signature와 public nominal type identity/layout
-- anonymous `error.Name` name set
-- exported generic declaration metadata와 body token stream
-- exported generic이 요구하는 private support symbol metadata
-- direct dependency canonical unit name과 dependency interface hash
-
-`.fei` serialization은 결정적이어야 한다. unordered container iteration을 그대로 쓰지
-않고 canonical key/name의 byte ordering으로 정렬해 serialize한다. absolute host path,
-timestamp, build directory를 기록하지 않는다. 같은 source/interface graph와 target/model이면
-build order와 host path에 관계없이 byte-identical `.fei`가 목표다.
-
-다음 hash는 구별한다.
-
-- **source hash**: 해당 unit source 내용 변화 감지
-- **interface hash**: dependent unit이 관찰하는 `.fei` 의미 정보의 hash
-- **compile cache key**: source hash, target/model/options와 실제 재컴파일에 필요한
-  direct/indirect dependency interface hash를 포함한 key
-
-private non-generic 구현만 바뀌어 public/generic-visible interface가 같으면 해당 unit은
-재컴파일하지만 interface hash는 유지되어 dependent unit을 재컴파일하지 않아도 된다.
-public signature/layout 또는 exported generic이 관찰하는 private support 정보가 바뀌면
-interface hash가 바뀐다.
-
-### 8.5 순환과 canonical identity
+### 8.3 순환과 canonical identity
 
 순환 import는 컴파일 에러다. fully-qualified dotted unit path와 선언 이름이 nominal
 identity의 기준이므로 `tinyjson.value.Value`와 `tinyjson.value.Box`처럼 표시한다. nominal
 struct/enum/error는 defining unit + declaration name으로 구별되고 type alias는 새 nominal
-identity를 만들지 않는다. 이 canonical identity 규칙은 §9 generic cache와 §11.4 C
-mangling에도 그대로 적용한다.
-
-```
-fec main.fe --target=bits32 -o game.exe
-fec main.fe --target=bits16 --model=large --no-checks -o game.exe
-fec main.fe --emit-c -o out/          # 트랜스파일 결과만
-fec --dump-ast main.fe
-```
-
-### 8.6 CLI 플래그 (전체)
-
-| 플래그 | 의미 | 규정 |
-|---|---|---|
-| `--target=bits16\|bits32` | 타깃 선택 | §2 |
-| `--model=small\|large` | `bits16` 메모리 모델 | §2 |
-| `-o <경로>` | 출력 파일 또는 디렉터리 | §8 |
-| `-I <디렉터리>` | source-only import candidate root 추가 | §8.2·§8.3 |
-| `--emit-c` | 트랜스파일 결과만 생성 | §8 |
-| `--dump-ast` | AST 덤프 | §8 |
-| `--no-checks` | 경계·오버플로·`.?` 검사 제거 | §7.4 |
-| `--strip-error-names` | 실행 파일에서 에러 이름 문자열 제거 | §4.6 |
-| `--error-table=<파일>` | 유닛 단위 `--emit-c`용 확정 에러 코드 표 | §4.6 |
-| `--deny-recursive-drop` | 재귀 drop 경고를 에러로 승격 | §5 R3 |
+identity를 만들지 않는다.
 
 ---
 
@@ -798,16 +702,9 @@ var xs: List(u8) = List(u8).new();
   identity + canonical type argument list**다. type alias는 새 nominal identity가 아니므로
   underlying/interned canonical type identity로 정규화한다. 따라서 `const Word = i32;` 뒤의
   `id(Word, 1)`과 `id(i32, 2)`는 같은 instance다.
-- 최종 build driver는 모든 unit의 instance request를 모아 canonical key로 중복 제거하고
-  key의 byte ordering으로 정렬한다. 먼저 필요한 prototype을 결정적 순서로 방출하고 이어서
-  body를 같은 순서로 단일 `fe_generics.c`에 방출한다. request 발견 순서, hash iteration,
-  build order에 의존하거나 사용 unit별 external/static 중복 코드를 만들지 않는다.
-- exported generic이 definition unit의 private symbol을 참조하면 `.fei`는 다른 unit에서
-  instantiate하는 데 필요한 support dependency의 transitive closure를 기록한다. private
-  non-generic function은 signature와 backend link identity, private nominal type은 필요한
-  identity/layout/signature, comptime const는 evaluated value/type, private generic은 body
-  token stream과 자기 support dependency를 제공한다. 이 compiler/link metadata는 Ferro
-  source visibility를 public으로 바꾸지 않는다.
+- exported generic은 definition unit의 private symbol을 참조할 수 있다. 이는 컴파일러
+  수준의 처리이며 Ferro source visibility를 public으로 바꾸지 않는다 — 다른 Ferro source는
+  여전히 그 private 심볼을 직접 참조할 수 없다.
 
 ```fe
 unit lib;
@@ -820,8 +717,8 @@ pub fn bump(comptime T: type, x: T) -> T {
 }
 ```
 
-다른 unit이 요청한 `lib.bump(i32)` instance는 generated internal C symbol을 통해
-`helper`를 호출할 수 있지만, 다른 Ferro source가 `lib.helper`를 직접 참조할 수는 없다.
+다른 unit이 요청한 `lib.bump(i32)` instance는 내부적으로 `helper`를 호출할 수 있지만,
+다른 Ferro source가 `lib.helper`를 직접 참조할 수는 없다.
 
 - 재귀적 인스턴스화의 distinct-instance chain 제한은 32다. 이미 pending/known인 동일
   canonical instance key를 다시 요청하는 recursion은 pending instance를 재사용하고 depth를
@@ -832,264 +729,31 @@ pub fn bump(comptime T: type, x: T) -> T {
 
 ---
 
-## 10. 표준 라이브러리 (최소 집합)
+## 10. 표준 라이브러리
 
-표준 라이브러리는 reserved `std` namespace 아래에 있으며 `import std.io;`처럼 명시적으로
-가져온다. import 뒤의 local binding은 마지막 segment라 기존처럼 `io.write`, `mem.replace`
-형태로 사용한다. 실제 `fec/std` source 배치는 M8에서 이 canonical unit path에 맞춘다.
+표준 라이브러리 상세 명세는 별도 문서에서 다룬다. 표준 라이브러리는 reserved `std`
+namespace 아래에 있으며 `import std.io;`처럼 명시적으로 가져온다. import 뒤의 local
+binding은 마지막 segment라 `io.write`, `mem.replace` 형태로 사용한다.
 
-- **`std.core`**: `panic`, `set_panic_handler`, `Error`(기본 에러 집합), `assert`.
-- **`std.mem`**: `create(value: T) -> !^T`(T는 값에서 추론), `destroy(p)`, `alloc_slice(T, n) -> !^[]T`, `replace(dst: &mut T, value: T) -> T`, `copy(dst: []mut u8, src: []u8)`, `set(dst: []mut u8, v: u8)`, `Arena{ init, alloc, reset, drop }`. 초기화되지 않은 힙을 안전 코드에 반환하는 `create(T)` 형태는 없다. `replace`는 이전 값을 이동해 반환하고 새 값으로 자리를 초기화하며 부분 이동과 재귀 구조의 반복 drop에 사용한다.
-- **문자열/바이트**: `str`은 `[]u8` alias다. 내장 alias 메서드 `eq`, `find`, `starts_with`, `split_at`, `parse_int`, `trim`, `to_cstr`, `from_cstr`를 `line.trim()`처럼 호출하며 `str` 이름의 import 유닛은 두지 않는다. 소유 문자열 `String`은 `^[]u8`을 감싸고 `as_str(self: &Self) -> str`을 제공한다.
-- **`std.list`**: `List(T)`.
-- **`std.map`**: `Map(K, V)`(오픈 어드레싱, K는 정수 또는 `String`). `String` key map은 key buffer를 소유하고 조회에는 `get_str(self: &Self, key: str) -> ?&V`를 제공한다.
-- **`std.fmt`**: sink를 소유하지 않는 순수 변환 함수 모음. `fmt_int_i8/i16/i32/u8/u16/u32(buf: []mut u8, v) -> str`, `fmt_hex_*`, `fmt_char`, `fmt_bool`, `fmt_error`, `fmt_int_pad`를 제공한다. 반환 slice는 buf에서 파생된 R8(a) 결과다. `fmt_error`는 `--strip-error-names`를 따른다.
+아래는 언어 규칙(§4~§7)이 직접 참조하거나 언어 표면(빌트인, 예제)이 전제하는 최소
+표면만 남긴 것이다. `std.list`, `std.map`, `std.io.File`의 전체 API, `std.sys`의 OS
+접근 함수 등 나머지 모듈의 정확한 시그니처는 표준 라이브러리 명세가 정의한다.
+
+- **`std.core`**: `panic`, `set_panic_handler`, `Error`(기본 에러 집합, §4.6), `assert`. `panic`/`set_panic_handler`는 §7.4 트랩 동작이 참조한다.
+- **`std.mem`**: `create(value: T) -> !^T`(T는 값에서 추론), `destroy(p)`, `alloc_slice(T, n) -> !^[]T`, `replace(dst: &mut T, value: T) -> T`, `copy(dst: []mut u8, src: []u8)`, `set(dst: []mut u8, v: u8)`, `Arena{ init, alloc, reset, drop }`. 초기화되지 않은 힙을 안전 코드에 반환하는 `create(T)` 형태는 없다. `replace`는 이전 값을 이동해 반환하고 새 값으로 자리를 초기화하며 부분 이동과 재귀 구조의 반복 drop에 사용한다(§4.5, §5 R3·R7·R11).
+- **문자열/바이트**: `str`은 `[]u8` alias다(§4.2). 내장 alias 메서드 `eq`, `find`, `starts_with`, `split_at`, `parse_int`, `trim`, `to_cstr`, `from_cstr`를 `line.trim()`처럼 호출하며(§6.4 예제) `str` 이름의 import 유닛은 두지 않는다.
+- **`std.fmt`**: sink를 소유하지 않는 순수 변환 함수 모음이며 `@print`/`@fprint`/`@sprint`(§6.3.1)가 의존한다. `fmt_int_i8/i16/i32/u8/u16/u32(buf: []mut u8, v) -> str`, `fmt_hex_*`, `fmt_char`, `fmt_bool`, `fmt_error`, `fmt_int_pad`를 제공한다. 반환 slice는 buf에서 파생된 R8(a) 결과다. `fmt_error`는 `--strip-error-names`를 따른다.
 - **`std.io`**:
   ```fe
   pub enum Writer { Stdout, Stderr, File(u16), Null }
   pub enum Reader { Stdin, File(u16) }
   ```
-  둘 다 정수 payload만 가진 Copy handle이며 참조나 raw context pointer를 저장하지 않는다. `io.write(w: Writer, buf: []u8) -> !usize`, `io.read(r: Reader, buf: []mut u8) -> !usize`가 실제 I/O를 수행한다. 닫힌 fd 또는 재사용된 fd를 가진 복사 handle은 I/O 오류나 의도하지 않은 파일 접근이라는 논리 오류를 만들 수 있지만 dangling memory access는 만들지 않는다.
-  - `File{ open, create, read(self: &mut Self, []mut u8), write(self: &mut Self, []u8), seek, size, writer, reader, close }`.
-  - `close(self: Self) -> !void`는 File을 소비하는 일반 메서드이며 `drop`이 아니다. 내부 handle을 먼저 invalid 상태로 만든 뒤 닫기 오류를 반환하므로 함수 종료의 자동 drop은 no-op이다. `drop`은 아직 열린 handle만 오류를 무시하고 닫는다. `drop` 직접 호출 금지는 유지한다.
-  - 안전한 표준 라이브러리 API는 대여 대상을 가리키는 raw pointer를 값에 숨겨 반환해서는 안 된다. 따라서 v0.1에는 함수 포인터/`*void` 기반 Writer·Reader나 buffer Writer가 없다. `@sprint`는 대상 slice에 직접 복사한다.
-- **`std.sys`**: `exit`, `on_exit(f: fn() -> void) -> !void`, `args`, `env`, `ticks`, `int21(regs)`, `dpmi_*`(bits32), `port_in/out`, `far_copy`(bits16). `on_exit`은 allocation 없는 고정 크기 callback registry이며 가득 차면 오류를 반환한다.
+  둘 다 정수 payload만 가진 Copy handle이며 참조나 raw context pointer를 저장하지 않는다(§5 R8 예제). `io.write(w: Writer, buf: []u8) -> !usize`, `io.read(r: Reader, buf: []mut u8) -> !usize`가 실제 I/O를 수행한다.
+- **`std.sys`**: `exit`, `on_exit(f: fn() -> void) -> !void`. `on_exit`은 §7.4 트랩 동작이 참조하는 allocation 없는 고정 크기 callback registry이며 가득 차면 오류를 반환한다.
 
 ---
 
-## 11. 컴파일러 구현
-
-### 11.1 부트스트랩 전략
-
-1. **컴파일러 A** — C89로 작성. Ferro → C 트랜스파일러. 호스트는 현대 PC 또는 DOS. 출력 C는 DJGPP(gcc, bits32) / Open Watcom(bits16, bits32) / Borland C(bits16)로 컴파일.
-2. **컴파일러 B** — Ferro로 A와 동일 구조를 재작성. A로 빌드.
-3. **셀프호스팅** — B로 B를 빌드. 그 결과로 다시 B를 빌드해 출력이 바이트 동일(fixpoint)하면 완료. A 폐기.
-4. **네이티브 백엔드** — B에 386 코드 생성기 추가, 이후 8086 코드 생성기.
-
-A는 버릴 코드다. 최적화하지 말고 B를 컴파일할 수 있는 최소 언어 부분집합만 지원한다.
-
-### 11.2 파이프라인
-
-```
-소스 → lexer → parser(AST) → resolve(이름/import) → check(타입)
-     → own(소유권·참조) → lower(소멸자/defer/try/for 전개 → LIR)
-     → emit_c(C 소스)  [또는 emit_x86]
-```
-
-각 단계는 실패해도 가능한 한 진행해 에러를 모아 보고한다(문장 단위 복구).
-
-### 11.3 디렉터리
-
-```
-fec/
-  src/
-    lexer.c/h      토큰화. 위치(파일, 줄, 열) 보존.
-    ast.c/h        노드 정의, 아레나 할당자.
-    parser.c/h     LL(1) 재귀하강. 에러 복구는 다음 ';' 또는 '}'까지 스킵.
-    types.c/h      타입 인터닝(포인터 비교로 동등성), 레이아웃 계산(타깃별).
-    resolve.c/h    스코프 체인, 심볼 테이블, import, .fei 읽기/쓰기.
-    check.c/h      타입 검사, 리터럴 타입 결정, match 완전성, R4 위치 검사.
-    own.c/h        §11.5 알고리즘.
-    lower.c/h      AST → LIR. 소멸자/defer 삽입, try/catch/for/메서드 호출 전개.
-    emit_c.c/h     LIR → C. §11.4 규칙.
-    generic.c/h    인스턴스 캐시, 토큰 재파싱.
-    driver.c       CLI, 유닛 의존 순서, .fei 캐시, fe_errors.h와 fe_generics.c 생성,
-                   외부 C 컴파일러 호출.
-  rt/              런타임 (C): trap, 힙, 슬라이스 헬퍼, DPMI/INT21 shim
-  std/             표준 라이브러리 (.fe)
-  tests/           §12
-```
-
-위는 목표 구조다. M5까지는 이름 해석·소유권·lower가 `check.c`/`emit_c.c`에 통합되어
-있다. R1~R8 전체를 다루는 M6 착수 시점에 `own.c/h`를 분리한다.
-
-### 11.4 C 방출 규칙
-
-| Ferro | C |
-|---|---|
-| `i16`, `u32` 등 | `int16_t`, `uint32_t` (`<stdint.h>` 없으면 자체 typedef) |
-| `usize` | `uint16_t`(bits16) / `uint32_t`(bits32) |
-| `bool` | `unsigned char` |
-| 일반 `^T`, `*T` | `T*` |
-| `^[]T` | `typedef struct { T* p; fe_usize n; } fe_owned_slice_T;` |
-| `&T` | `const T*` |
-| `&mut T` | `T*` |
-| `far X` | `__far X` (Watcom/Borland), bits32는 무시 |
-| `[N]T` | `struct { T a[N]; }` (값 의미론 유지, 붕괴 방지) |
-| `[]T`/`str` | `typedef struct { const T* p; fe_usize n; } fe_slice_T;` |
-| `[]mut T` | `typedef struct { T* p; fe_usize n; } fe_mut_slice_T;` |
-| `?T` (포인터류) | 원래 포인터, null 사용 |
-| `?^[]T` | `struct { unsigned char has; fe_owned_slice_T v; }` |
-| `?T` (그 외) | `struct { unsigned char has; T v; }` |
-| `E!T` | `struct { uint16_t e; T v; }`, `!void`는 `uint16_t` |
-| `shared [atomic] var x: T` | `volatile T x` |
-| struct | `struct fe_<canonical-unit>_<Name>` |
-| enum | `struct { uint8_t tag; union { ... } u; }`, 배리언트 256개 초과 시 `uint16_t tag` |
-| 함수 | `fe_<canonical-unit>_<name>`, 메서드는 `fe_<canonical-unit>_<Type>_<name>` |
-| 제네릭 인스턴스 | `fe_<canonical-unit>_<Name>__<canonical-type-args>` |
-
-세부:
-- **canonical mangling**: C symbol은 canonical dotted unit path + declaration name + canonical
-  type argument list를 collision-free하게 encode한다. `.`의 separator/escaping 문자는 구현
-  세부지만 host path, pointer address, insertion/hash iteration order를 사용할 수 없다.
-  type alias는 canonical underlying identity를 쓰고 nominal struct/enum/error는 fully-qualified
-  defining unit + name을 쓴다. generic instance 이름도 같은 key에서만 생성해 M12 fixpoint에서
-  byte-identical해야 한다.
-- **Ferro visibility와 C linkage**: Ferro `private`는 source name visibility이며 반드시 C
-  `static`을 뜻하지 않는다. exported generic instance가 definition unit의 private helper를
-  호출할 수 있도록 generic body가 필요로 하는 private top-level function/global을
-  deterministic unit-mangled external C symbol로 방출하고 내부 generated header에 prototype을
-  제공할 수 있다. 이는 resolver의 private 접근을 완화하지 않으며 다른 Ferro unit source의
-  직접 참조는 계속 에러다. 필요한 closure는 §9와 `.fei` metadata가 제공한다.
-- **오버플로 검사**: `fe_add_i16(a, b, LINE)` 인라인 함수. `--no-checks`면 매크로가 `((a)+(b))`로 축약.
-- **경계 검사**: `fe_idx_T(s, i, LINE)` → `(i < s.n ? s.p[i] : (fe_trap_bounds(LINE), s.p[0]))`. `for` 루프는 직접 인덱스.
-- **`try`**: `{ Ttmp t = expr; if (t.e) return (RetT){ t.e }; }` 후 `t.v` 사용. defer/소멸자가 있으면 return 전에 정리 코드 삽입.
-- **`catch`**: `t.e`가 참일 때만 block 또는 짧은 RHS를 평가하고 바인딩 변수는 `t.e`다.
-- **`defer`/소멸자**: lower 단계에서 스코프 종료 지점(정상 흐름, `return`, `break`, `continue`, `try` 전파)마다 역순 호출을 명시적으로 삽입. C의 goto 라벨을 써도 되고 복제해도 된다(A는 복제, B는 goto 권장).
-- **조건부 이동**: 이동 여부가 분기에 따라 다르면 `unsigned char fe_live_<var> = 1;` 플래그 삽입, drop 전에 검사.
-- **`match`**: `switch (x.tag)`. Copy payload는 지역 변수로 복사하고 non-Copy projection payload는 R7에 따라 참조로만 바인딩한다. 소유값 추출은 match 전 `mem.replace`로 수행한다.
-- **`asm`**: Intel 문법으로 고정 저장. Watcom/Borland는 그대로, gcc는 `__asm__(".intel_syntax noprefix\n" ...)`로 감싼다.
-- **`@print` 계열**: emit 단계에는 도달하지 않는다. lower 단계에서 `fmt.fmt_*`로 임시 `[]mut u8`에 변환하고 `io.write` 또는 `mem.copy`를 호출하는 나열로 전개한다. `@print`는 각 I/O 오류를 버리고, `@fprint`는 첫 오류를 전파하며, `@sprint`는 남은 길이를 추적해 잘라 쓴 실제 길이를 반환한다. 포맷 문자열 조각은 static const shared slice로 방출하고 동일 문자열은 중복 제거한다.
-- **참조와 aliasing**: `&T` → `const T*` 방출은 aliasing 가정을 하지 않는다. `&mut T`에도 `restrict`를 붙이지 않으며, M13/M14 네이티브 백엔드도 noalias를 가정하지 않는다. R6의 배타성은 R10의 전역 대여 금지가 함께 성립할 때만 프로그램 전체에서 유지되므로, 방출 단계에서 이를 최적화 근거로 쓰지 않는다.
-- **에러 코드**: 드라이버가 emit 전에 확정한 `error.Name`의 `u16` 코드를 단일 `fe_errors.h`의 `#define`으로 방출한다(§4.6). 모든 유닛 C가 이 헤더를 include하므로 에러 `match`를 `switch`로 방출할 수 있고 이름 집합 변경 시 C 재방출 없이 오브젝트만 무효화한다.
-- **논리 연산**: `and`, `or`, `not`은 각각 C의 `&&`, `||`, `!`로 방출한다. `and`와 `or`는 C의 시퀀스 포인트와 단축 평가를 그대로 사용한다.
-- **평가 순서**: §7.6의 callee-first, operand/argument left-to-right 순서를 지킨다. C가
-  순서를 보장하지 않는 일반 호출 인자와 이항 operand에 부수 효과·move·borrow가 있으면
-  lower가 순서대로 temporary statement를 만들고 emit은 그 결과만 조합한다. cleanup과
-  `try` 전파도 같은 순서를 따른다.
-- **공유 상태와 임계 구역**: `shared`는 `volatile`로 방출한다. bits16의 `critical`은 compiler barrier → FLAGS 저장 → `cli` 순서로 진입하고 모든 이탈에서 저장한 FLAGS 복원 → compiler barrier 순서로 끝낸다. GCC 계열은 `asm volatile("" ::: "memory")`, Open Watcom/Borland는 optimizer가 내용을 볼 수 없는 별도 runtime 함수 호출 경계를 사용한다. 한 명령 크기의 `shared atomic` 단일 접근은 volatile load/store만 방출한다.
-- **방출 순서**: `fe_errors.h` → typedef 전방선언 → struct 정의(동률을 canonical name으로
-  끊는 의존 위상 정렬) → 전역 → 함수 프로토타입 → 함수 본문 → 통합 `fe_generics.c`.
-  unordered container나 source 발견 순서에 기대지 않는다. `fe_generics.c`는 canonical
-  instance prototype을 먼저, body를 나중에 각각 key byte ordering으로 방출한다.
-- 유닛 하나당 `.c` 하나, `.fei`에서 필요한 부분은 `.h`로 생성한다. 제네릭 인스턴스 본문은 유닛 C에 중복 방출하지 않는다.
-
-### 11.5 own.c 알고리즘
-
-함수 단위. 각 지역 변수/파라미터에 상태:
-```
-Uninit | Owned | Moved | MaybeMoved | Shared(n) | Exclusive
-```
-
-초기화 여부가 경로마다 다른 합류에는 `MaybeUninit` 또는 같은 의미의 별도 bit/state를
-사용할 수 있다. projection은 root local/parameter를 찾는 데만 사용하고 field/index별
-대여 상태는 만들지 않는다(R6).
-
-1. 먼저 AST를 역방향 순회해 각 참조 변수의 경로별 마지막 사용을 계산한다. `defer` 안의 사용은 해당 스코프 끝으로 올린다.
-2. AST를 §7.6의 평가 순서로 순회하며 상태 전이한다. 표현식의 place 사용을 읽기 / 이동 / `&` 대여 / `&mut` 대여 / 쓰기 / projection으로 분류하고 projection의 root 상태를 갱신한다.
-3. 이동: `Owned → Moved`. `Moved`/`MaybeMoved` 사용 시 에러(최초 이동 위치를 표시). field/index/`.?` projection의 비-Copy 이동은 R7에 따라 거부하고 `mem.replace`만 허용한다.
-4. `&place`: root의 `Owned → Shared(n+1)`. `&mut place`: root의 `Owned → Exclusive`. 역방향 pass가 계산한 마지막 사용에서 해제하며 임시는 문장 끝에 해제한다. 서로 다른 field/index도 같은 root 상태와 충돌한다.
-5. 호출 인자의 `&mut → &`, `[]mut → []`만 Exclusive를 유지하는 호출 기간의 임시 shared view로 검사한다. 일반 `let`/대입에는 이 implicit transition을 적용하지 않는다.
-6. `Shared`/`Exclusive` 상태에서 금지된 쓰기/이동/재대여를 진단한다(R6).
-7. **분기 합류**: `if`/`match`의 각 branch를 독립 상태로 계산한다. branch exit 전에 last-use/liveness에 따라 끝난 borrow를 먼저 해제하고 다음 규칙으로 병합한다.
-
-   | 왼쪽 | 오른쪽 | 결과 |
-   |---|---|---|
-   | 같은 상태 | 같은 상태 | 같은 상태 |
-   | `Owned` | `Moved` | `MaybeMoved` |
-   | `Moved` | `Owned` | `MaybeMoved` |
-   | `MaybeMoved` | `Owned`/`Moved`/`MaybeMoved` | `MaybeMoved` |
-   | `Uninit` | `Owned` 등 initialized 상태 | `MaybeUninit` 또는 동등 상태 |
-
-   merge는 좌우 대칭이다. `MaybeMoved`/`MaybeUninit` 값의 이후 읽기·이동은 에러이고 drop은 필요한 runtime live
-   flag를 쓴다. 한 경로에서만 borrow가 계속 살아 있으면 합류 뒤에도 살아 있는 것으로
-   보수적으로 취급한다. `Shared(n)`과 `Shared(m)`은 필요한 live shared borrow의 합집합을
-   보존하고 단순 count 구현에서는 적어도 `Shared(max(n,m))`으로 합친다. 한쪽만
-   `Exclusive`가 live여도 합류 뒤 root를 `Exclusive` 효과로 잠근다. 서로 양립할 수 없는
-   `Shared`/`Exclusive` 상태는 더 약한 상태로 풀지 않고 양쪽 효과를 보존하는 보수적
-   상태로 합치거나 compile error를 낸다. 구현은 state enum/bitset을 확장할 수 있지만 이
-   의미를 만족해야 한다.
-8. **루프 fixed point**: loop 진입 상태로 body를 한 번 분석하고 종료/backedge 상태를
-   진입 상태와 위 규칙으로 병합한다. 그 merged 상태로 body를 두 번째 분석한다. v0.1
-   compiler A는 이 2-pass를 사용하며 두 번째 분석 뒤에도 의미 상태가 안정되지 않으면
-   compile error다. loop 밖에서 생성되어 loop 안에서 이후 사용되는 borrow는 필요하면
-   loop 전체에 걸쳐 live로 보고, body에서 생성된 borrow가 backedge를 넘는 경우도 같은
-   fixed-point에 포함한다. 첫 iteration만 안전하다는 이유로 허용하지 않는다.
-9. R4 위반은 check 단계에서 타입만 보고 거부한다. 단 `static str`은 initializer가 문자열 리터럴인지 함께 확인한다.
-10. R8 반환 경로마다 `Static`/`Param(N)` provenance를 계산하고 §5 R8 lattice로 합류한다.
-    결과 바인딩을 허용하며 `Param(N)` 원본 대여를 결과의 마지막 사용까지 전파한다.
-    메서드는 `Param(self)`만, 자유 함수는 유일한 참조성 parameter의 `Param(N)`만 허용하고
-    provenance를 lowered signature/`.fei`에 기록한다.
-
-에러 메시지 형식: `file:line:col: error: <설명>` + 관련 위치 `file:line:col: note: <최초 이동/대여 위치>`.
-
-### 11.6 마일스톤
-
-| # | 내용 | 완료 기준 |
-|---|---|---|
-| M1 | lexer, parser, AST 덤프 | `--dump-ast`가 std 소스 전체를 파싱 |
-| M2 | 타입 검사 + C 방출: 정수, 함수, if, while | bits32 hello world 실행 |
-| M3 | struct, enum, match, 배열, `[]T`/`[]mut T`, 경계 검사, `str` alias | 공유/배타 슬라이스와 문자열 처리 예제 통과 |
-| M4 | **`@print`/`@fprint`/`@sprint` 빌트인** (§6.3.1), handle enum `io.Writer`, 순수 `fmt.fmt_*` | `@print` 오류 삼킴, `@fprint` 전파, `@sprint` 잘림/길이와 인자 타입 진단, safe Writer dangling 불가 |
-| M5 | `^T`/`^[]T`, drop, defer, 이동·부분 이동 검사 | 누수/이중해제, 소비 close, `mem.replace` 테스트 통과 |
-| M6 | `&`, `&mut`, 배타성 검사 (own.c 전체) | R1~R8 실패 테스트 통과 |
-| M7 | `?T`, `E!T`, try/catch | `std.io` 유닛 동작 |
-| M8 | 유닛/import/.fei, 의존 hash, `fe_errors.h`, 분리 컴파일, std 초안 | 다중 유닛 증분·결정적 빌드 |
-| M9 | **제네릭** (통합 모노모피제이션) | `fe_generics.c`로 `List(T)`, `Map(K,V)` 중복 없이 빌드 |
-| M10 | bits16 타깃: far, `@seg_ptr`, 메모리 모델, asm, interrupt fn, `shared`/`atomic`/`critical`/`interrupt_safe` | QEMU FreeDOS에서 자동화된 far 포인터·인터럽트 공유 상태 테스트 통과(VGA 데모는 수동/멀티모달 검증 대상이라 완료 게이트에서 제외) |
-| M11 | 컴파일러 B를 Ferro로 작성, A로 빌드 | B가 M1~M10 테스트 통과 |
-| M12 | 셀프호스팅 fixpoint | B(B(B)) == B(B) 바이트 동일, A 폐기 |
-| M13 | 386 네이티브 백엔드 | gcc 없이 빌드, 컴파일 속도 10배 |
-| M14 | 8086 네이티브 백엔드 | Watcom 없이 bits16 빌드 |
-
-배치 근거:
-- **M4(포매팅)를 앞에 두는 이유**: 구현이 작고(check + lower 합쳐 300줄 안팎) 언어 표면에 새 개념을 추가하지 않는다. 이후 모든 마일스톤의 디버깅과 M11의 컴파일러 B 에러 출력이 여기에 의존한다.
-- **M9(제네릭)가 M10보다 앞인 이유**: 제네릭 없이 표준 라이브러리를 쓰는 기간을 최소화한다.
-- **인터페이스(`dyn`)는 마일스톤에 없다**: 부트스트랩 경로에 불필요하고 타입 시스템 전반에 영향을 준다. §13의 v0.2 1순위로 미룬다. 그때까지 dangling이 불가능한 Copy handle enum `io.Writer`/`io.Reader`를 사용한다.
-
----
-
-## 12. 테스트
-
-```
-tests/
-  m<N>/                         마일스톤별 fixture. bad-*.fe는 fail 규약을 따른다
-  pass/*.fe      + *.expected   컴파일→실행→stdout 비교
-  fail/*.fe                     첫 줄 "// ERROR:<line>:<메시지 일부>"
-  run16/*.fe                    bits16 빌드 후 QEMU FreeDOS 실행, 출력 파일 비교
-  boot/                         A/B 출력 비교, fixpoint 검증
-```
-
-- `fail/`은 규칙별 최소 3개: R1(이동 후 사용), R3(직접 drop 호출), R4(필드에 공유/배타 slice, `*[]T`), R5(스코프 초과), R6(배타성 위반), R7(무효화·projection 부분 이동), R8(자유 함수 참조성 파라미터 2개, 메서드의 non-self 파생, 가변성 승격), R9(unsafe 밖 raw 역참조, `*void` 역참조), R10(전역 `var` 대여), match 완전성, 암묵 변환, 타입 불일치, `let`에서 mutable slice 생성.
-- 포매팅(§6.3.1) 전용 `fail/` 케이스: `{}` 개수 > 인자 개수, 인자 개수 > `{}` 개수, 미지원 verb(`{q}`), 런타임 값 포맷 문자열, 대응 `fmt_*` 없는 타입, 닫히지 않은 `{`, `try @print(...)`(void).
-- 포매팅 `pass/` 케이스: 각 verb 1개 이상, `{{` 이스케이프, 인자 0개, `@print` 오류 삼킴, `@sprint` 길이/잘림, handle enum `@fprint`, 동일 `fmt.fmt_*` 결과 재사용.
-- R6·R8 전용 `pass/` 케이스: 참조의 마지막 사용 이후 원본 재접근, 분기별 마지막 사용의 합류, R8(a) 결과를 지역 변수에 바인딩한 뒤 대여 종료 후 원본 접근, R8(b)의 문자열 리터럴 반환, `line.trim()` 형태의 슬라이스 반환 연쇄.
-- `@compile_error`, `@as_far_fn`, `@call_far`의 comptime/타깃/unsafe 제약과 `error.Name`의
-  `core.Error` 등록, 결정적 `fe_errors.h`, `--strip-error-names`, `fmt.fmt_error`를 각각 pass/fail로 검증한다.
-- **M6 필수 edge case**:
-  - 서로 다른 struct field의 `&mut`라도 같은 root borrow 충돌, 서로 다른 array index도 같은 root borrow 충돌.
-  - 호출 인자의 `&mut → &`/`[]mut → []` 약화 성공과 일반 `let` binding의 같은 암묵 약화 실패.
-  - R8 `Static`/`Param(N)` 합류 성공, 서로 다른 `Param` provenance 합류 실패.
-  - 한 branch에서만 live인 borrow의 보수적 합류, `Owned`/`Moved` 및 초기화 상태 합류.
-  - loop-carried borrow와 move가 2-pass fixed point에서 안정되는 경우와 불안정해 거부되는 경우.
-- **M7 필수 edge case**:
-  - 문맥 없는 `null` 실패와 parameter/명시 타입으로 결정되는 contextual `null` 성공.
-  - error declaration의 code 0, 중복 member 이름, 중복 숫자 code 실패.
-  - `E!T` expected 위치의 success/failure contextual construction과 nominal error 자동 변환 실패.
-  - `orelse`, 짧은/block `catch`의 lazy side effect·move·borrow.
-  - non-Copy `Some` pattern이 destructive extraction이 아님을 확인하고 projection 소유 추출에는 `mem.replace`가 필요함을 검증.
-- **M8 필수 edge case**:
-  - dotted unit/import와 alias, 마지막 segment binding, binding conflict.
-  - unit path/file suffix mismatch, uppercase segment와 8자 초과 segment 거부.
-  - 서로 다른 root의 동일 canonical unit ambiguity와 같은 canonical file 중복 발견의 dedup.
-  - reserved `std.*` lookup, 일반 user unit이 builtin std root에서 발견되지 않음.
-  - private type을 public API에 노출하는 경우 실패와 dotted prefix가 private 권한을 주지 않음.
-  - private-only non-generic 구현 변경 뒤 dependency interface hash 안정 및 dependent cache hit.
-  - source/interface graph와 target/model이 같을 때 build order, `-I` order, absolute checkout path가 달라도 byte-identical `.fei`.
-- **M9 필수 edge case**:
-  - value generic과 generic type inference 거부, 명시 type argument 성공.
-  - alias/underlying type의 instance dedup과 동일 canonical instance body 1회 방출.
-  - exported generic이 definition-unit private helper/private generic을 호출하는 support closure.
-  - 같은 instance recursion의 pending 재사용과 distinct growing-instance chain depth 32 초과 실패.
-  - generic request 발견 순서와 build order가 달라도 byte-identical `fe_generics.c`.
-  - invalid dependent operation의 definition 위치 primary error와 `instantiated here` chain note.
-- 각 마일스톤은 해당 기능의 pass/fail 테스트와 함께 완료한다.
-- 정식 회귀 실행은 QEMU FreeDOS 내부 Open Watcom의 `TEST-DOS.BAT`로 전 타깃·마일스톤
-  gate를 확인한다. host compiler 결과는 편집 보조일 뿐 완료 판정에 사용하지 않는다.
-
----
-
-## 13. 의도적으로 제외한 기능
+## 11. 의도적으로 제외한 기능
 
 **등급 정의**
 - `영구` — §1 철학과 정면 충돌. v2.0에서도 넣지 않는다.
@@ -1100,7 +764,7 @@ tests/
 | 기능 | 등급 | 제외 이유 | 대체 수단 |
 |---|---|---|---|
 | 트레잇/인터페이스 (`dyn`) | **v0.2 (1순위)** | 부트스트랩에 불필요, 타입 시스템 전반에 영향 | Copy handle enum (`io.Writer`, §10) |
-| bits32 interrupt/shared/critical | v0.2 | DPMI callback·vector 복원과 backend 지원이 M10 범위 밖 | bits16 실행 파일 또는 polling |
+| bits32 interrupt/shared/critical | v0.2 | DPMI callback·vector 복원과 backend 지원이 아직 범위 밖 | bits16 실행 파일 또는 polling |
 | 클로저 | v0.2 | 캡처 = 참조 저장 = R4 위반 소지 | 콜백에 `ctx: *void` 전달 |
 | 연산자 오버로딩 | v0.2 (인터페이스 이후) | 숨은 비용. 넣더라도 특정 인터페이스 구현으로만 제한 | 메서드 |
 | 튜플 / 다중 반환 | 편의 | 이름 없는 필드는 가독성 손해 | struct |
@@ -1117,7 +781,7 @@ tests/
 | 암묵 형변환 | 영구 | 버그 원인 1위 | `as` |
 | 상속 | 영구 | 숨은 vtable, 취약한 기반 클래스 | 합성 |
 
-### 13.1 인터페이스 설계 스케치 (v0.2 예정)
+### 11.1 인터페이스 설계 스케치 (v0.2 예정)
 
 지금 구현하지 않되, 나중에 `io.Writer` Copy handle enum을 무리 없이 대체할 수 있도록 방향만 고정해 둔다.
 
@@ -1134,7 +798,7 @@ dump(&mut file, buf);          // &mut File → &mut dyn Writer 자동 변환
 - `dyn I`의 표현은 `(ctx, vtable)` 팻 포인터. vtable은 `(인터페이스, 구현 타입)` 쌍마다 `static const` 하나.
 - **동적 디스패치 전용.** 제네릭 타입 제약(trait bound)으로는 쓸 수 없다 — 그걸 허용하면 전역 분석이 생긴다.
 - `&dyn I`는 참조이므로 R4가 적용된다(필드 저장 불가). 필드에 담으려면 `^dyn I`(힙 박싱).
-- `^dyn I`의 drop은 vtable 경유. 이 때문에 `?^dyn I`, drop 전개, 제네릭 인자로서의 `dyn` 등 타입 시스템 여러 곳에 케이스가 추가되므로 독립 마일스톤으로 다룬다.
+- `^dyn I`의 drop은 vtable 경유. 이 때문에 `?^dyn I`, drop 전개, 제네릭 인자로서의 `dyn` 등 타입 시스템 여러 곳에 케이스가 추가되므로 독립적으로 다룬다.
 - 도입 시 `io.Writer`/`io.Reader` handle enum을 `dyn` 기반 API로 교체한다. v0.1 safe API에는 이미 대여 대상을 숨긴 `*void`가 없으므로 이 전환은 기능 확장이지 안전성 수정이 아니다.
 
 위 표에 없는 항목(링크타임 최적화, 디버그 정보 포맷, 언어 서버 등)은 도구 영역이며 v0.2 이후 별도 검토.
