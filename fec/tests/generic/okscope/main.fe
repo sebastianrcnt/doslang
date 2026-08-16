@@ -1,8 +1,0 @@
-unit main;
-import lib;
-
-fn helper(v: i32) -> i32 { return v + 10; }
-
-fn main() -> i32 {
-    return lib.call(i32, 1);
-}

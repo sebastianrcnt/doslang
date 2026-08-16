@@ -42,6 +42,7 @@ struct FeNode {
 #define FE_NODE_STATIC 0x2U
 #define FE_NODE_SHARED 0x4U
 #define FE_NODE_PUB    0x8U
+#define FE_NODE_COMPTIME 0x10U
 
 typedef struct FeAst {
     FeArena arena;

@@ -1,0 +1,12 @@
+// ERROR:unknown function
+// SPEC 9: a generic body resolves its names in the unit that declared it,
+// so lib.call cannot see this unit's `helper`. The mirror of defscope/,
+// where the definition unit's own private helper is reachable.
+unit main;
+import lib;
+
+fn helper(v: i32) -> i32 { return v + 10; }
+
+fn main() -> i32 {
+    return lib.call(i32, 1);
+}

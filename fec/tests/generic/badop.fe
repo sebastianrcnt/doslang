@@ -1,4 +1,6 @@
-// ERROR:16:instantiation
+// ERROR:11:ordering requires
+// SPEC 9: the primary error is the comparison in the body. The call at the
+// bottom gets an `instantiated here` note.
 unit badop;
 
 struct Token {

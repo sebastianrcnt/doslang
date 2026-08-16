@@ -11,6 +11,14 @@ typedef enum FeTypeKind {
 } FeTypeKind;
 
 typedef struct FeFieldType FeFieldType;
+
+/* A type parameter bound to an argument while an instance is checked. */
+#define FE_TYPE_PARAM_MAX 8
+typedef struct FeTypeBind {
+    const char *name;
+    FeType *type;
+} FeTypeBind;
+
 typedef struct FeVariantType FeVariantType;
 
 struct FeFieldType {
@@ -31,7 +39,9 @@ struct FeVariantType {
 
 struct FeType {
     FeTypeKind kind;
-    char name[64];
+    /* Long enough for a nested instance spelling such as
+       `Box(Box(Box(i32)))` at the depth limit. */
+    char name[256];
     /* The unit that declared this type, for the nominal kinds. NULL for
        builtins and for structural types like `[]u8`, which every unit
        shares. Two units declaring the same name declare two types. */
@@ -65,6 +75,15 @@ struct FeType {
     unsigned field_count;
     FeVariantType *variants;
     unsigned variant_count;
+    /* The declaration this type came from, and the bindings that made it if
+       it is a generic instance. A method has to be checked with the same
+       bindings the instance was built with. */
+    /* A small unique number, used to name an instance whose readable
+       spelling would be too long to keep distinct. */
+    unsigned serial;
+    const FeNode *decl_node;
+    FeTypeBind binds[FE_TYPE_PARAM_MAX];
+    unsigned bind_count;
     FeType *next;
     int emit_state;
     int cycle_state;
@@ -76,6 +95,14 @@ typedef struct FeTypeCtx {
     unsigned pointer_bits;
     const char *unit_name;
     unsigned generated_serial;
+    /* Bindings in force right now. A name that is a bound parameter is
+       that argument's type and nothing else. */
+    FeTypeBind params[FE_TYPE_PARAM_MAX];
+    unsigned param_count;
+    /* Instantiate `Name(args...)`. Only the checker knows the declarations,
+       so it installs this and the type layer calls back into it. */
+    FeType *(*instantiate)(void *owner, const FeNode *node);
+    void *instantiate_owner;
 } FeTypeCtx;
 
 void fe_types_init(FeTypeCtx *ctx, FeArena *arena, unsigned pointer_bits);

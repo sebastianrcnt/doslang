@@ -59,6 +59,12 @@ static void err(FeCheck *c, FeLoc loc, const char *msg)
     fe_diag_error(c->diags, loc, msg);
 }
 
+/* Only numbers and characters have an order (SPEC 6.2). */
+static int ordered_type(const FeType *t)
+{
+    return t && (t->kind==FE_TYPE_INT || t->kind==FE_TYPE_CHAR);
+}
+
 static int known(FeType *t)
 {
     return t && t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_ERROR;
@@ -279,6 +285,14 @@ static void enter_unit(FeCheck *c, unsigned index)
     fe_diags_source(c->diags, u->source, u->size);
 }
 
+/* The type bindings in force, saved across a nested instantiation. */
+typedef struct FeBindSave {
+    FeTypeBind params[FE_TYPE_PARAM_MAX];
+    unsigned count;
+} FeBindSave;
+
+static FeType *instantiate_type_node(void *owner, const FeNode *node);
+
 void fe_check_init(FeCheck *c, FeBuild *build, FeDiags *diags,
                    unsigned pointer_bits, int no_checks)
 {
@@ -294,6 +308,12 @@ void fe_check_init(FeCheck *c, FeBuild *build, FeDiags *diags,
     c->no_checks = no_checks;
     fe_types_init(&c->types, &c->arena, pointer_bits);
     c->types.unit_name = "unit";
+    c->types.instantiate = instantiate_type_node;
+    c->types.instantiate_owner = c;
+    c->instances = (FeInstance *)fe_arena_alloc(&c->arena,
+        (unsigned long)FE_GENERIC_INSTANCE_MAX * sizeof(FeInstance));
+    c->instance_count = 0;
+    c->instance_depth = 0;
 }
 
 void fe_check_destroy(FeCheck *c)
@@ -376,6 +396,12 @@ static FeNode *find_method(FeCheck *c, FeType *owner, const char *name)
     FeNode *decl;
     FeNode *method;
     if(!owner || !name) return 0;
+    if(owner->decl_node) {
+        for(method=owner->decl_node->children; method; method=method->next)
+            if(method->kind==FE_N_FN && method->text &&
+               strcmp(method->text,name)==0) return method;
+        return 0;
+    }
     for(decl=c->ast->root ? c->ast->root->children : 0; decl; decl=decl->next)
         if(decl->kind==FE_N_STRUCT && decl->text &&
            strcmp(decl->text,owner->name)==0)
@@ -403,9 +429,37 @@ static FeType *check_lvalue_core(FeCheckerState *s, FeNode *n, int read,
                                  FeType *base_in);
 static FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read);
 static FeType *check_call(FeCheckerState *s, FeNode *n);
-static FeType *check_call_fn(FeCheckerState *s, FeNode *n, FeSym *sym,
-                             const char *home);
+static FeType *check_call_args(FeCheckerState *s, FeNode *n, FeSym *sym,
+                               const char *home, unsigned skip);
 static int is_error_set_member(FeCheckerState *s, FeNode *n);
+static void check_fn(FeCheck *c, FeNode *n, FeScope *globals);
+static void check_method(FeCheck *c, FeNode *n, FeScope *globals, FeType *owner);
+static char *unit_cname(FeCheck *c, const char *name);
+static unsigned unit_index(FeCheck *c, const FeUnit *u);
+static FeNode *unit_type_decl(FeCheck *c, FeUnit *u, const char *name);
+static FeType *check_generic_call(FeCheckerState *s, FeNode *n, FeSym *sym,
+                                  FeUnit *home);
+static FeType *type_from_expr(FeCheckerState *s, FeNode *n, int *ok);
+static FeUnit *current_unit(FeCheck *c);
+static int decl_is_generic(const FeNode *decl);
+static void check_generic_params(FeCheck *c, FeNode *decl);
+static int comptime_condition(FeCheckerState *s, FeNode *n, int *out);
+static FeType *check_static_method_call(FeCheckerState *s, FeNode *n,
+                                        FeType *owner, FeNode *method);
+static FeNode *type_method(FeType *t, const char *name);
+static int method_is_static(const FeNode *method);
+static int const_names_type(FeCheckerState *s, FeNode *n);
+static void push_instance_bindings(FeCheck *c, FeBindSave *save, FeType *t);
+static void pop_bindings(FeCheck *c, const FeBindSave *save);
+static void bind_self(FeCheck *c, FeType *owner);
+static void instance_key(char *out, const char *unit, const char *name,
+                         FeType **args, unsigned count);
+static int instance_record(FeCheck *c, const char *key, FeLoc loc);
+static int instance_descend(FeCheck *c, FeLoc loc);
+static void instantiate_body(FeCheck *c, FeUnit *home, FeNode *decl,
+                             FeType *owner, FeBindSave *bindings, FeLoc site);
+static void check_instance_method(FeCheckerState *s, FeType *owner,
+                                  FeNode *method, FeLoc site);
 
 typedef struct FeFlowSlot {
     FeSym *sym;
@@ -972,6 +1026,10 @@ static FeType *check_identifier(FeCheckerState *s, FeNode *n)
     if (!sym) {
         FeType *named=fe_type_intern(&s->c->types,n->text ? n->text : "");
         if(named->kind==FE_TYPE_STRUCT || named->kind==FE_TYPE_ENUM) { n->sem_type=named; return named; }
+        if(named->kind!=FE_TYPE_UNKNOWN) {
+            err(s->c, n->loc, "a type is not a value here");
+            return unknown(s->c);
+        }
         err(s->c, n->loc, "unknown name");
         return unknown(s->c);
     }
@@ -1074,6 +1132,10 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
             if (known(a) && known(b) && !fe_type_equal(a, b) &&
                 !compatible(a, b, n->b) && !compatible(b, a, n->a))
                 err(c, n->loc, "comparison operands have different types");
+            else if (strcmp(op,"==")!=0 && strcmp(op,"!=")!=0 &&
+                     ((known(a) && !ordered_type(a)) ||
+                      (known(b) && !ordered_type(b))))
+                err(c, n->loc, "ordering requires integer or char operands");
             a = fe_type_intern(&c->types, "bool");
         } else {
             if ((known(a) && !fe_type_is_integer(a)) ||
@@ -1187,16 +1249,42 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                     for (x=n->children;x;x=x->next) check_expr(s,x);
                     return unknown(c);
                 }
-                return check_call_fn(s,n,fsym,home->name);
+                if (decl_is_generic(fsym->fn))
+                    return check_generic_call(s,n,fsym,home);
+                return check_call_args(s,n,fsym,home->name,0);
+            }
+            {
+                int names_type=0;
+                FeType *owner_type=type_from_expr(s,n->a->a,&names_type);
+                if (names_type && owner_type &&
+                    owner_type->kind==FE_TYPE_STRUCT) {
+                    FeNode *m=type_method(owner_type,
+                                          n->a->b ? n->a->b->text : "");
+                    if (!m) { err(c,n->a->loc,"unknown method"); return unknown(c); }
+                    if (!method_is_static(m)) {
+                        err(c,n->loc,"method requires a receiver");
+                        return unknown(c);
+                    }
+                    return check_static_method_call(s,n,owner_type,m);
+                }
             }
             et=check_expr(s,n->a->a);
             method=et && et->kind==FE_TYPE_STRUCT ?
                 find_method(c,et,n->a->b ? n->a->b->text : "") : 0;
             if(method) {
+                FeBindSave msave;
+                int bound=0;
                 self_param=method->a ? method->a->children : 0;
                 if(!self_param) {
                     err(c,n->loc,"method requires self parameter");
                     return unknown(c);
+                }
+                /* A method of a generic instance reads its signature with that
+                   instance's arguments bound. */
+                if (et->bind_count) {
+                    push_instance_bindings(c,&msave,et);
+                    bind_self(c,et);
+                    bound=1;
                 }
                 a=method_type(c,self_param->a,et);
                 if(a->kind==FE_TYPE_REF && a->ref_mut &&
@@ -1218,6 +1306,10 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                 n->sem_decl=method;
                 n->sem_type=method->b ? method_type(c,method->b,et) :
                     fe_type_intern(&c->types,"void");
+                if (bound) {
+                    pop_bindings(c,&msave);
+                    check_instance_method(s,et,method,n->loc);
+                }
                 return n->sem_type;
             }
             if (et && (et->kind==FE_TYPE_SLICE || et->kind==FE_TYPE_STR) &&
@@ -1243,7 +1335,9 @@ static FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                 err(c, n->loc, "unknown function");
                 return unknown(c);
             }
-            return check_call_fn(s, n, sym, 0);
+            if (decl_is_generic(sym->fn))
+                return check_generic_call(s,n,sym,current_unit(c));
+            return check_call_args(s, n, sym, 0, 0);
         }
         for (x = n->children; x; x = x->next) check_expr(s, x);
         return unknown(c);
@@ -1997,6 +2091,537 @@ static int m7_place_is_projection(FeNode *n)
     return n && (n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX);
 }
 
+/* ------------------------------------------------------------------------- *
+ * Generics (SPEC 9)
+ *
+ * A generic declaration is checked once per distinct list of type arguments.
+ * Those arguments are bound as types for the length of that check, so a name
+ * that is a type parameter simply is its argument -- in the body, in field
+ * types and in the signature alike. An instance is identified by its declaring
+ * unit, its declaration and the spelling of its arguments, so asking twice
+ * asks for the same instance, and a chain of new ones is bounded.
+ * ------------------------------------------------------------------------- */
+
+#define FE_GENERIC_DEPTH_MAX 32
+
+static unsigned decl_type_param_count(const FeNode *decl)
+{
+    FeNode *p;
+    unsigned n=0;
+    if (!decl) return 0;
+    if (decl->kind==FE_N_FN) {
+        for (p=decl->a?decl->a->children:0;p;p=p->next)
+            if (p->flags & FE_NODE_COMPTIME) ++n;
+        return n;
+    }
+    if (decl->kind==FE_N_STRUCT || decl->kind==FE_N_ENUM)
+        for (p=decl->a?decl->a->children:0;p;p=p->next) ++n;
+    return n;
+}
+
+static FeNode *decl_type_param(const FeNode *decl, unsigned i)
+{
+    FeNode *p;
+    unsigned n=0;
+    if (!decl) return 0;
+    if (decl->kind==FE_N_FN) {
+        for (p=decl->a?decl->a->children:0;p;p=p->next)
+            if (p->flags & FE_NODE_COMPTIME) { if (n==i) return p; ++n; }
+        return 0;
+    }
+    for (p=decl->a?decl->a->children:0;p;p=p->next) { if (n==i) return p; ++n; }
+    return 0;
+}
+
+static int decl_is_generic(const FeNode *decl)
+{
+    return decl_type_param_count(decl)!=0;
+}
+
+/* SPEC 9: v0.1 has comptime type parameters and no other kind. */
+static void check_generic_params(FeCheck *c, FeNode *decl)
+{
+    FeNode *p;
+    if (!decl || decl->kind!=FE_N_FN) return;
+    for (p=decl->a?decl->a->children:0;p;p=p->next) {
+        if (!(p->flags & FE_NODE_COMPTIME)) continue;
+        if (!p->a || p->a->kind!=FE_N_TYPE || !p->a->text ||
+            strcmp(p->a->text,"type")!=0)
+            err(c,p->loc,"a comptime parameter must be a type parameter");
+    }
+}
+
+static void push_bindings(FeCheck *c, FeBindSave *save, FeNode *decl,
+                          FeType **args, unsigned count)
+{
+    unsigned i;
+    save->count=c->types.param_count;
+    for (i=0;i<FE_TYPE_PARAM_MAX;++i) save->params[i]=c->types.params[i];
+    c->types.param_count=0;
+    for (i=0;i<count && i<FE_TYPE_PARAM_MAX;++i) {
+        FeNode *p=decl_type_param(decl,i);
+        c->types.params[i].name=p && p->text ? p->text : "?";
+        c->types.params[i].type=args[i];
+        ++c->types.param_count;
+    }
+}
+
+/* Restore the bindings recorded on an instance, so a method sees exactly the
+   environment its type was built with. */
+static void push_instance_bindings(FeCheck *c, FeBindSave *save, FeType *t)
+{
+    unsigned i;
+    save->count=c->types.param_count;
+    for (i=0;i<FE_TYPE_PARAM_MAX;++i) save->params[i]=c->types.params[i];
+    c->types.param_count=0;
+    for (i=0;i<t->bind_count && i<FE_TYPE_PARAM_MAX;++i)
+        c->types.params[c->types.param_count++]=t->binds[i];
+}
+
+static void bind_self(FeCheck *c, FeType *owner)
+{
+    if (c->types.param_count>=FE_TYPE_PARAM_MAX) return;
+    c->types.params[c->types.param_count].name="Self";
+    c->types.params[c->types.param_count].type=owner;
+    ++c->types.param_count;
+}
+
+static void pop_bindings(FeCheck *c, const FeBindSave *save)
+{
+    unsigned i;
+    for (i=0;i<FE_TYPE_PARAM_MAX;++i) c->types.params[i]=save->params[i];
+    c->types.param_count=save->count;
+}
+
+/* `unit.Name(arg,arg)` -- the canonical identity of one instance.
+   Nesting makes the readable spelling grow without bound, and a spelling that
+   got cut off would make two different instances look like the same one, so
+   past a length the arguments are written as serial numbers instead. Those are
+   unique, so identity stays exact even where the spelling stops being
+   readable. */
+#define FE_GENERIC_NAME_READABLE 200
+
+static void instance_key(char *out, const char *unit, const char *name,
+                         FeType **args, unsigned count)
+{
+    unsigned i;
+    unsigned long n=0;
+    unsigned long cap=(unsigned long)FE_GENERIC_NAME_READABLE;
+    const char *p;
+    char number[24];
+    int readable=1;
+    for (p=unit?unit:"";*p;++p) { if (n<cap) out[n++]=*p; else readable=0; }
+    if (n<cap) out[n++]='.'; else readable=0;
+    for (p=name?name:"?";*p;++p) { if (n<cap) out[n++]=*p; else readable=0; }
+    if (n<cap) out[n++]='('; else readable=0;
+    for (i=0;i<count && readable;++i) {
+        if (i) { if (n<cap) out[n++]=','; else { readable=0; break; } }
+        for (p=args[i] && args[i]->name[0] ? args[i]->name : "?";*p;++p) {
+            if (n<cap) out[n++]=*p;
+            else { readable=0; break; }
+        }
+    }
+    if (readable && n<cap) out[n++]=')'; else readable=0;
+    if (readable) { out[n]='\0'; return; }
+    n=0;
+    for (p=unit?unit:"";*p && n<cap;++p) out[n++]=*p;
+    if (n<cap) out[n++]='.';
+    for (p=name?name:"?";*p && n<cap;++p) out[n++]=*p;
+    if (n<cap) out[n++]='(';
+    for (i=0;i<count;++i) {
+        if (i && n<cap) out[n++]=',';
+        sprintf(number,"#%u",args[i] ? args[i]->serial : 0U);
+        for (p=number;*p && n<cap;++p) out[n++]=*p;
+    }
+    if (n<cap) out[n++]=')';
+    out[n]='\0';
+}
+
+/* Already built, or being built right now. Re-asking for a pending instance is
+   how a recursive generic terminates, so it must not look like a new one. */
+static int instance_known(FeCheck *c, const char *key)
+{
+    unsigned i;
+    for (i=0;i<c->instance_count;++i)
+        if (strcmp(c->instances[i].key,key)==0) return 1;
+    return 0;
+}
+
+static int instance_record(FeCheck *c, const char *key, FeLoc loc)
+{
+    if (instance_known(c,key)) return 0;
+    if (c->instance_count>=FE_GENERIC_INSTANCE_MAX) {
+        err(c,loc,"too many generic instances");
+        return -1;
+    }
+    strcpy(c->instances[c->instance_count].key,key);
+    ++c->instance_count;
+    return 1;
+}
+
+/* One step further down a chain of instantiations. Chains that keep producing
+   new instances are the ones that never end, so the limit counts nesting. */
+static int instance_descend(FeCheck *c, FeLoc loc)
+{
+    if (c->instance_depth>=FE_GENERIC_DEPTH_MAX) {
+        err(c,loc,"generic instantiation depth exceeded");
+        return 0;
+    }
+    ++c->instance_depth;
+    return 1;
+}
+
+static FeUnit *current_unit(FeCheck *c)
+{
+    unsigned u;
+    for (u=0;u<c->build->count;++u)
+        if (strcmp(c->build->units[u].name,c->types.unit_name)==0)
+            return &c->build->units[u];
+    return c->unit;
+}
+
+/* Build `Box(i32)`: the declaration's fields with the parameters bound, under
+   a name that records which arguments made it. */
+static FeType *build_struct_instance(FeCheck *c, FeUnit *home, FeNode *decl,
+                                     const char *key, FeType **args,
+                                     unsigned count)
+{
+    FeBindSave save;
+    FeType *t;
+    FeNode *f;
+    unsigned fields=0;
+    unsigned i=0;
+    t=fe_type_intern_unit(&c->types,home->name,key);
+    if (!t || t->kind!=FE_TYPE_UNKNOWN) return t;
+    t->kind=FE_TYPE_STRUCT;
+    t->packed=(decl->flags & FE_NODE_PACKED)!=0;
+    t->decl_node=decl;
+    t->bind_count=0;
+    for (i=0;i<count && i<FE_TYPE_PARAM_MAX;++i) {
+        FeNode *p=decl_type_param(decl,i);
+        t->binds[t->bind_count].name=p && p->text ? p->text : "?";
+        t->binds[t->bind_count].type=args[i];
+        ++t->bind_count;
+    }
+    t->cname=unit_cname(c,key);
+    for (f=decl->children;f;f=f->next)
+        if (f->kind==FE_N_FN && f->text && strcmp(f->text,"drop")==0)
+            t->has_drop=1;
+    for (f=decl->children;f;f=f->next) if (f->kind==FE_N_FIELD) ++fields;
+    t->field_count=fields;
+    if (fields) {
+        t->fields=(FeFieldType *)fe_arena_alloc(&c->arena,
+                                                fields*sizeof(FeFieldType));
+        if (!t->fields) { t->field_count=0; return t; }
+        push_instance_bindings(c,&save,t);
+        bind_self(c,t);
+        i=0;
+        for (f=decl->children;f;f=f->next) if (f->kind==FE_N_FIELD) {
+            t->fields[i].name=f->text;
+            t->fields[i].type=node_type(c,f->a);
+            t->fields[i].offset=0;
+            t->fields[i].ast_node=f;
+            ++i;
+        }
+        pop_bindings(c,&save);
+    }
+    fe_type_layout_all(&c->types);
+    return t;
+}
+
+static FeType *instantiate_struct(FeCheck *c, FeUnit *home, const char *name,
+                                  FeType **args, unsigned count, FeLoc loc)
+{
+    FeNode *decl=unit_type_decl(c,home,name);
+    char key[FE_GENERIC_KEY_MAX];
+    if (!decl || !decl_is_generic(decl)) {
+        err(c,loc,"type does not take generic arguments");
+        return unknown(c);
+    }
+    if (decl->kind!=FE_N_STRUCT) {
+        err(c,loc,"only a generic struct can be instantiated");
+        return unknown(c);
+    }
+    if (count!=decl_type_param_count(decl)) {
+        err(c,loc,"wrong number of generic arguments");
+        return unknown(c);
+    }
+    instance_key(key,home->name,name,args,count);
+    if (instance_record(c,key,loc)<0) return unknown(c);
+    return build_struct_instance(c,home,decl,key,args,count);
+}
+
+/* `Name(args...)` written in type position. */
+static FeType *instantiate_type_node(void *owner, const FeNode *node)
+{
+    FeCheck *c=(FeCheck *)owner;
+    FeUnit *home=current_unit(c);
+    FeNode *arg;
+    FeType *args[FE_TYPE_PARAM_MAX];
+    unsigned count=0;
+    FeType *result;
+    if (!node->children) {
+        /* A generic declaration is not a type until it has its arguments. */
+        FeNode *decl=unit_type_decl(c,home,node->text ? node->text : "");
+        if (decl && decl_is_generic(decl)) {
+            err(c,node->loc,"generic type requires type arguments");
+            return unknown(c);
+        }
+        return fe_type_intern(&c->types,node->text);
+    }
+    if (!instance_descend(c,node->loc)) return unknown(c);
+    for (arg=node->children;arg;arg=arg->next) {
+        if (count<FE_TYPE_PARAM_MAX)
+            args[count]=fe_type_from_ast(&c->types,arg);
+        ++count;
+    }
+    if (count>FE_TYPE_PARAM_MAX) {
+        err(c,node->loc,"wrong number of generic arguments");
+        --c->instance_depth;
+        return unknown(c);
+    }
+    result=instantiate_struct(c,home,node->text ? node->text : "",args,count,
+                              node->loc);
+    --c->instance_depth;
+    return result;
+}
+
+/* A type written where an expression is: `i32`, `Box(i32)`. Only a comptime
+   argument position accepts one. */
+static FeType *type_from_expr(FeCheckerState *s, FeNode *n, int *ok)
+{
+    FeCheck *c=s->c;
+    FeType *t;
+    unsigned i;
+    *ok=0;
+    if (!n) return unknown(c);
+    if (n->kind==FE_N_IDENT && n->text) {
+        for (i=0;i<c->types.param_count;++i)
+            if (strcmp(c->types.params[i].name,n->text)==0) {
+                *ok=1;
+                return c->types.params[i].type;
+            }
+        if (find_symbol(s->scope,n->text)) {
+            /* A const alias of a type is that type (SPEC 4.7). */
+            FeSym *sym=find_symbol(s->scope,n->text);
+            if (sym && sym->decl && sym->decl->kind==FE_N_CONST &&
+                sym->decl->b && sym->decl->b->kind==FE_N_IDENT)
+                return type_from_expr(s,sym->decl->b,ok);
+            return unknown(c);
+        }
+        t=fe_type_intern(&c->types,n->text);
+        if (t && t->kind!=FE_TYPE_UNKNOWN) { *ok=1; return t; }
+        return unknown(c);
+    }
+    if (n->kind==FE_N_CALL && n->a && n->a->kind==FE_N_IDENT && n->a->text) {
+        FeType *args[FE_TYPE_PARAM_MAX];
+        unsigned count=0;
+        FeNode *arg;
+        FeType *result;
+        FeUnit *home=current_unit(c);
+        if (!unit_type_decl(c,home,n->a->text)) return unknown(c);
+        if (!instance_descend(c,n->loc)) { *ok=1; return unknown(c); }
+        for (arg=n->children;arg;arg=arg->next) {
+            int inner=0;
+            if (count<FE_TYPE_PARAM_MAX)
+                args[count]=type_from_expr(s,arg,&inner);
+            if (!inner) { --c->instance_depth; return unknown(c); }
+            ++count;
+        }
+        if (count>FE_TYPE_PARAM_MAX) { --c->instance_depth; return unknown(c); }
+        result=instantiate_struct(c,home,n->a->text,args,count,n->loc);
+        --c->instance_depth;
+        *ok=1;
+        return result;
+    }
+    return unknown(c);
+}
+
+/* A `comptime if` condition. Only the forms SPEC 9 allows: type equality and
+   the type predicates. Anything else is not decidable here. */
+static int comptime_condition(FeCheckerState *s, FeNode *n, int *out)
+{
+    FeType *a;
+    FeType *b;
+    int ok=0;
+    int eq;
+    if (!n) return 0;
+    if (n->kind==FE_N_BINARY && n->text &&
+        (strcmp(n->text,"==")==0 || strcmp(n->text,"!=")==0)) {
+        a=type_from_expr(s,n->a,&ok);
+        if (!ok) return 0;
+        b=type_from_expr(s,n->b,&ok);
+        if (!ok) return 0;
+        eq=fe_type_equal(a,b);
+        *out=strcmp(n->text,"==")==0 ? eq : !eq;
+        return 1;
+    }
+    if (n->kind==FE_N_CALL && n->text &&
+        (strcmp(n->text,"@is_int")==0 || strcmp(n->text,"@is_ptr")==0)) {
+        a=type_from_expr(s,n->children,&ok);
+        if (!ok) return 0;
+        *out=strcmp(n->text,"@is_int")==0 ? fe_type_is_integer(a) :
+             (a && (a->kind==FE_TYPE_OWNED || a->kind==FE_TYPE_REF));
+        return 1;
+    }
+    return 0;
+}
+
+/* Check a generic body once, in the unit that declared it and with the
+   instance's arguments bound. Errors land on the operation that is wrong; the
+   call site gets a note, because the call is context and not the defect. */
+static void instantiate_body(FeCheck *c, FeUnit *home, FeNode *decl,
+                             FeType *owner, FeBindSave *bindings, FeLoc site)
+{
+    FeAst *save_ast=c->ast;
+    FeUnit *save_unit=c->unit;
+    const char *save_name=c->types.unit_name;
+    unsigned before=c->diags->errors;
+    (void)bindings;
+    c->ast=&home->ast;
+    c->unit=home;
+    c->types.unit_name=home->name;
+    fe_diags_source(c->diags,home->source,home->size);
+    if (owner) check_method(c,decl,c->unit_scope[unit_index(c,home)],owner);
+    else check_fn(c,decl,c->unit_scope[unit_index(c,home)]);
+    c->ast=save_ast;
+    c->unit=save_unit;
+    c->types.unit_name=save_name;
+    if (save_unit) fe_diags_source(c->diags,save_unit->source,save_unit->size);
+    if (c->diags->errors>before)
+        fe_diag_note_src(c->diags,site,"instantiated here");
+}
+
+/* A call to a generic function: read the type arguments, check the value
+   arguments against the bound signature, then check the body once. */
+static FeType *check_generic_call(FeCheckerState *s, FeNode *n, FeSym *sym,
+                                  FeUnit *home)
+{
+    FeCheck *c=s->c;
+    FeNode *decl=sym->fn;
+    unsigned want=decl_type_param_count(decl);
+    FeType *args[FE_TYPE_PARAM_MAX];
+    FeNode *arg=n->children;
+    unsigned i;
+    char key[FE_GENERIC_KEY_MAX];
+    FeBindSave save;
+    FeType *result;
+    int fresh;
+    if (want>FE_TYPE_PARAM_MAX) {
+        err(c,n->loc,"too many generic parameters");
+        return unknown(c);
+    }
+    for (i=0;i<want;++i) {
+        int ok=0;
+        if (!arg) {
+            err(c,n->loc,"generic call requires explicit type arguments");
+            return unknown(c);
+        }
+        args[i]=type_from_expr(s,arg,&ok);
+        if (!ok) {
+            err(c,arg->loc,"a comptime type argument must name a type");
+            return unknown(c);
+        }
+        arg=arg->next;
+    }
+    instance_key(key,home->name,decl->text,args,want);
+    push_bindings(c,&save,decl,args,want);
+    result=check_call_args(s,n,sym,home->name,want);
+    pop_bindings(c,&save);
+    fresh=instance_record(c,key,n->loc);
+    if (fresh>0) {
+        if (!instance_descend(c,n->loc)) return result;
+        push_bindings(c,&save,decl,args,want);
+        instantiate_body(c,home,decl,0,&save,n->loc);
+        pop_bindings(c,&save);
+        --c->instance_depth;
+    }
+    return result;
+}
+
+/* `Type.method(...)` where Type is a generic instance and the method takes no
+   self parameter. */
+static FeType *check_static_method_call(FeCheckerState *s, FeNode *n,
+                                        FeType *owner, FeNode *method)
+{
+    FeCheck *c=s->c;
+    FeUnit *home=current_unit(c);
+    FeBindSave save;
+    FeType *result;
+    char key[FE_GENERIC_KEY_MAX];
+    FeType *self_args[1];
+    int fresh;
+    FeSym fake;
+    self_args[0]=owner;
+    instance_key(key,home->name,method->text,self_args,1);
+    memset(&fake,0,sizeof fake);
+    fake.name=method->text;
+    fake.cname=method->cname;
+    fake.fn=method;
+    fake.decl=method;
+    push_instance_bindings(c,&save,owner);
+    bind_self(c,owner);
+    result=check_call_args(s,n,&fake,home->name,0);
+    pop_bindings(c,&save);
+    fresh=instance_record(c,key,n->loc);
+    if (fresh>0) {
+        if (!instance_descend(c,n->loc)) return result;
+        push_instance_bindings(c,&save,owner);
+        bind_self(c,owner);
+        instantiate_body(c,home,method,owner,&save,n->loc);
+        pop_bindings(c,&save);
+        --c->instance_depth;
+    }
+    return result;
+}
+
+/* The body of a method on a generic instance, checked once per instance. */
+static void check_instance_method(FeCheckerState *s, FeType *owner,
+                                  FeNode *method, FeLoc site)
+{
+    FeCheck *c=s->c;
+    FeUnit *home=current_unit(c);
+    FeBindSave save;
+    char key[FE_GENERIC_KEY_MAX];
+    FeType *self_args[1];
+    self_args[0]=owner;
+    instance_key(key,home->name,method->text,self_args,1);
+    if (instance_record(c,key,site)<=0) return;
+    if (!instance_descend(c,site)) return;
+    push_instance_bindings(c,&save,owner);
+    bind_self(c,owner);
+    instantiate_body(c,home,method,owner,&save,site);
+    pop_bindings(c,&save);
+    --c->instance_depth;
+}
+
+/* SPEC 4.7: `const Word = i32;` is another spelling of a type, not a value.
+   It has no initializer to check and no storage. */
+static int const_names_type(FeCheckerState *s, FeNode *n)
+{
+    FeType *t;
+    if (!n->b || n->b->kind!=FE_N_IDENT || !n->b->text) return 0;
+    if (n->a) return 0;
+    if (find_symbol(s->globals,n->b->text)) return 0;
+    t=fe_type_intern(&s->c->types,n->b->text);
+    return t && t->kind!=FE_TYPE_UNKNOWN;
+}
+
+static FeNode *type_method(FeType *t, const char *name)
+{
+    FeNode *m;
+    if (!t || !t->decl_node || !name) return 0;
+    for (m=t->decl_node->children;m;m=m->next)
+        if (m->kind==FE_N_FN && m->text && strcmp(m->text,name)==0) return m;
+    return 0;
+}
+
+static int method_is_static(const FeNode *method)
+{
+    FeNode *first=method && method->a ? method->a->children : 0;
+    return !first || !first->text || strcmp(first->text,"self")!=0;
+}
+
 /* A call to a named function. `home` is the unit the signature was written in,
    null when that is the unit being checked: parameter and return types have to
    be read where they were written or a name would mean the caller's type. */
@@ -2030,14 +2655,17 @@ static FeType *cross_unit_value(FeCheckerState *s, FeNode *n, int *handled)
     return sym->type;
 }
 
-static FeType *check_call_fn(FeCheckerState *s, FeNode *n, FeSym *sym,
-                             const char *home)
+/* `skip` leading parameters and arguments have already been consumed as
+   comptime type arguments. */
+static FeType *check_call_args(FeCheckerState *s, FeNode *n, FeSym *sym,
+                               const char *home, unsigned skip)
 {
     FeCheck *c=s->c;
     FeNode *param;
     FeNode *arg;
     FeType *a;
     FeType *b;
+    unsigned k;
     if (n->a) n->a->cname = sym->cname;
     n->sem_decl = sym->fn;
     if (!sym->fn) {
@@ -2046,6 +2674,10 @@ static FeType *check_call_fn(FeCheckerState *s, FeNode *n, FeSym *sym,
     }
     param = sym->fn->a ? sym->fn->a->children : 0;
     arg = n->children;
+    for (k=0;k<skip;++k) {
+        if (param) param=param->next;
+        if (arg) arg=arg->next;
+    }
     while (param && arg) {
         a = check_expr(s, arg);
         b = node_type_in(c, home, param->a);
@@ -2137,6 +2769,8 @@ static FeType *check_call(FeCheckerState *s, FeNode *n)
             n->sem_type=unknown(c);
             return n->sem_type;
         }
+        if (decl_is_generic(sym->fn))
+            return check_generic_call(s,n,sym,current_unit(c));
         n->a->cname=sym->cname;
         n->sem_decl=sym->fn;
         param=sym->fn->a ? sym->fn->a->children : 0;
@@ -2424,6 +3058,11 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
                 !m7_actual_compatible(a,b,n->b) &&
                 !m7_actual_compatible(b,a,n->a))
                 err(s->c,n->loc,"comparison operands have different types");
+            /* Only numbers and characters have an order. */
+            else if (strcmp(op,"==")!=0 && strcmp(op,"!=")!=0 &&
+                     ((known(a) && !ordered_type(a)) ||
+                      (known(b) && !ordered_type(b))))
+                err(s->c,n->loc,"ordering requires integer or char operands");
             n->sem_type=fe_type_intern(&s->c->types,"bool");
             return n->sem_type;
         }
@@ -2825,6 +3464,18 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         --s->defer_depth;
         break;
     case FE_N_IF:
+        if (n->text && strcmp(n->text,"comptime if")==0) {
+            int taken=0;
+            if (!comptime_condition(s,n->a,&taken)) {
+                err(s->c,n->a?n->a->loc:n->loc,
+                    "comptime condition must be decidable at compile time");
+                break;
+            }
+            /* SPEC 9: the branch that is not taken is parsed and nothing more. */
+            if (taken) check_stmt(s,n->b);
+            else if (n->c) check_stmt(s,n->c);
+            break;
+        }
         if (n->text && strcmp(n->text,"if let")==0)
             m7_check_if_let(s,n);
         else {
@@ -2988,15 +3639,21 @@ static void m7_validate_error_decl(FeCheck *c, FeNode *decl)
 static void declare_unit(FeCheck *c)
 {
     FeNode *n;
+    /* A generic declaration is not a type; only its instances are. */
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
-        if (n->kind==FE_N_STRUCT)
+        if (n->kind==FE_N_STRUCT && !decl_is_generic(n))
             fe_type_declare_struct(&c->types,n,(n->flags & FE_NODE_PACKED)!=0);
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next) {
+        FeNode *m;
         m7_check_storage(c,n);
         if (n->kind==FE_N_ERROR_DECL) m7_validate_error_decl(c,n);
+        check_generic_params(c,n);
+        for (m=n->kind==FE_N_STRUCT ? n->children : 0;m;m=m->next)
+            if (m->kind==FE_N_FN) check_generic_params(c,m);
     }
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
-        if (n->kind==FE_N_ENUM) fe_type_declare_enum(&c->types,n);
+        if (n->kind==FE_N_ENUM && !decl_is_generic(n))
+            fe_type_declare_enum(&c->types,n);
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_ERROR_DECL) fe_type_declare_error(&c->types,n);
     check_type_cycles(c);
@@ -3047,6 +3704,7 @@ static void check_unit_bodies(FeCheck *c, FeCheckerState *s)
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_GLOBAL || n->kind==FE_N_CONST) {
             sym=find_current(s->globals,n->text ? n->text : "");
+            if (n->kind==FE_N_CONST && const_names_type(s,n)) continue;
             if (n->b) {
                 iv=m7_check_expected(s,n->b,sym ? sym->type : 0);
                 if (sym && sym->type->kind==FE_TYPE_UNKNOWN) {
@@ -3057,10 +3715,12 @@ static void check_unit_bodies(FeCheck *c, FeCheckerState *s)
                     err(c,n->loc,"global initializer type mismatch");
             }
         }
+    /* A generic body means nothing until its parameters are bound, so it is
+       checked once per instance and not here. */
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
-        if (n->kind==FE_N_FN) check_fn(c,n,s->globals);
+        if (n->kind==FE_N_FN && !decl_is_generic(n)) check_fn(c,n,s->globals);
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
-        if (n->kind==FE_N_STRUCT) {
+        if (n->kind==FE_N_STRUCT && !decl_is_generic(n)) {
             t=fe_type_intern(&c->types,n->text);
             for (m=n->children;m;m=m->next)
                 if (m->kind==FE_N_FN) check_method(c,m,s->globals,t);

@@ -41,6 +41,9 @@ static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
     t->field_count = 0;
     t->variants = 0;
     t->variant_count = 0;
+    t->serial = ctx->generated_serial++;
+    t->decl_node = 0;
+    t->bind_count = 0;
     t->next = ctx->types;
     t->emit_state = 0;
     t->cycle_state = 0;
@@ -55,6 +58,9 @@ void fe_types_init(FeTypeCtx *ctx, FeArena *arena, unsigned pointer_bits)
     ctx->pointer_bits = pointer_bits;
     ctx->unit_name = "unit";
     ctx->generated_serial = 0;
+    ctx->param_count = 0;
+    ctx->instantiate = 0;
+    ctx->instantiate_owner = 0;
 }
 
 /* Does this type answer to `name` for someone checking `unit`? A type with no
@@ -85,7 +91,11 @@ FeType *fe_type_intern(FeTypeCtx *ctx, const char *name)
     unsigned bits = 0;
     int uns = 0;
     FeTypeKind kind = FE_TYPE_UNKNOWN;
+    unsigned i;
     if (!name) name = "<unknown>";
+    /* A bound type parameter is its argument, and shadows everything. */
+    for (i = 0; i < ctx->param_count; ++i)
+        if (strcmp(ctx->params[i].name, name) == 0) return ctx->params[i].type;
     for (t = ctx->types; t; t = t->next)
         if (type_visible_as(t, ctx->unit_name, name)) return t;
     if (strcmp(name, "void") == 0) kind = FE_TYPE_VOID;
@@ -152,7 +162,7 @@ static char *generated_name(FeTypeCtx *ctx, const char *prefix,
 
 FeType *fe_type_array(FeTypeCtx *ctx, unsigned long length, FeType *elem)
 {
-    char key[96];
+    char key[320];
     FeType *t;
     sprintf(key, "[%lu]%s", length, elem ? elem->name : "?");
     t = fe_type_intern(ctx, key);
@@ -173,7 +183,7 @@ FeType *fe_type_array(FeTypeCtx *ctx, unsigned long length, FeType *elem)
 
 FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem)
 {
-    char key[96];
+    char key[320];
     FeType *t;
     sprintf(key, "[]%s", elem ? elem->name : "?");
     t = fe_type_intern(ctx, key);
@@ -192,7 +202,7 @@ FeType *fe_type_slice(FeTypeCtx *ctx, FeType *elem)
 
 FeType *fe_type_mut_slice(FeTypeCtx *ctx, FeType *elem)
 {
-    char key[96];
+    char key[320];
     FeType *t;
     sprintf(key, "[]mut %s", elem ? elem->name : "?");
     t = fe_type_intern(ctx, key);
@@ -212,7 +222,7 @@ FeType *fe_type_mut_slice(FeTypeCtx *ctx, FeType *elem)
 
 FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable)
 {
-    char key[128];
+    char key[320];
     FeType *t;
     sprintf(key,"%s%s",mutable ? "&mut " : "&",elem ? elem->name : "?");
     t=fe_type_intern(ctx,key);
@@ -226,7 +236,7 @@ FeType *fe_type_ref(FeTypeCtx *ctx, FeType *elem, int mutable)
 
 FeType *fe_type_owned(FeTypeCtx *ctx, FeType *elem)
 {
-    char key[128];
+    char key[320];
     FeType *t;
     sprintf(key,"^%s",elem ? elem->name : "?");
     t=fe_type_intern(ctx,key);
@@ -243,7 +253,7 @@ FeType *fe_type_owned(FeTypeCtx *ctx, FeType *elem)
 
 FeType *fe_type_error_union(FeTypeCtx *ctx, FeType *value)
 {
-    char key[128];
+    char key[320];
     FeType *t;
     sprintf(key,"!%s",value ? value->name : "?");
     t=fe_type_intern(ctx,key);
@@ -280,6 +290,7 @@ FeType *fe_type_declare_struct(FeTypeCtx *ctx, const FeNode *node, int packed)
     if (t->kind == FE_TYPE_STRUCT) return t;
     t->kind = FE_TYPE_STRUCT;
     t->packed = packed;
+    t->decl_node = node;
     for (f = node->children; f; f = f->next)
         if (f->kind==FE_N_FN && f->text && strcmp(f->text,"drop")==0)
             t->has_drop=1;
@@ -324,6 +335,7 @@ FeType *fe_type_declare_enum(FeTypeCtx *ctx, const FeNode *node)
     if (t->kind != FE_TYPE_UNKNOWN && t->kind != FE_TYPE_ENUM) return t;
     if (t->kind == FE_TYPE_ENUM) return t;
     t->kind = FE_TYPE_ENUM;
+    t->decl_node = node;
     cname = (char *)fe_arena_alloc(ctx->arena,
         (unsigned long)strlen("struct fe_") + strlen(ctx->unit_name) +
         strlen(node->text) + 2UL);
@@ -592,6 +604,11 @@ FeType *fe_type_from_ast(FeTypeCtx *ctx, const FeNode *node)
         return fe_type_intern(ctx, "<unknown>");
     if (node->text && strcmp(node->text, "fn") == 0)
         return fe_type_intern(ctx, "<unknown>");
+    /* A plain named type may be a generic declaration -- with arguments it is
+       an instance, without them it is a mistake -- and only the checker knows
+       the declarations, so it decides. */
+    if (ctx->instantiate)
+        return ctx->instantiate(ctx->instantiate_owner, node);
     return fe_type_intern(ctx, node->text);
 }
 

@@ -7,6 +7,15 @@
 
 typedef struct FeScope FeScope;
 
+/* One generic instance, identified by declaring unit, declaration and the
+   spelling of its type arguments (SPEC 9). The table both deduplicates
+   requests and bounds how long a chain of new ones can get. */
+#define FE_GENERIC_KEY_MAX 320
+#define FE_GENERIC_INSTANCE_MAX 512
+typedef struct FeInstance {
+    char key[FE_GENERIC_KEY_MAX];
+} FeInstance;
+
 /* The checker spans a whole build, not one file. Names cross unit boundaries,
    so every unit's declarations have to exist before any unit's bodies are
    looked at, and they all have to be interned in one type context or the same
@@ -24,6 +33,9 @@ typedef struct FeCheck {
     unsigned pointer_bits;
     unsigned local_serial;
     int no_checks;
+    FeInstance *instances;
+    unsigned instance_count;
+    unsigned instance_depth;
 } FeCheck;
 
 void fe_check_init(FeCheck *c, FeBuild *build, FeDiags *diags,

@@ -1,4 +1,6 @@
-// ERROR:9:instantiation
+// ERROR:7:arithmetic operands
+// SPEC 9: the defect is the operation in the body, so that is the primary
+// error; the call gets an `instantiated here` note.
 unit badbody;
 
 fn add(comptime T: type, a: T, b: T) -> T {
