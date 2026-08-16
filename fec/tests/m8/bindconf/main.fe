@@ -1,0 +1,6 @@
+// ERROR:4:binding
+unit main;
+import alpha.net;
+import beta.net;
+
+fn main() -> void {}

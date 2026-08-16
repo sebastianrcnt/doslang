@@ -1,0 +1,10 @@
+// ERROR:7:depth
+unit baddist;
+
+struct Box(T) { value: T, }
+
+fn grow(comptime T: type) -> void {
+    grow(Box(T));
+}
+
+fn bad() -> void { grow(i32); }

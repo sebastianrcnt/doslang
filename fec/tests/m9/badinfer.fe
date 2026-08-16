@@ -1,0 +1,8 @@
+// ERROR:7:generic
+unit badinfer;
+
+fn id(comptime T: type, value: T) -> T { return value; }
+
+fn bad() -> i32 {
+    return id(7);
+}

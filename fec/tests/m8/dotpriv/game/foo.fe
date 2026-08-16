@@ -1,0 +1,3 @@
+unit game.foo;
+
+fn hidden() -> i32 { return 1; }

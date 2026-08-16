@@ -1,0 +1,4 @@
+unit main;
+import lib;
+
+fn main() -> void { let value = lib.make(); }

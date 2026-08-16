@@ -8,4 +8,4 @@ These fixtures pin the M6 ownership/borrow rules before implementation.
 - When M6 starts, wire this directory into the DOS/QEMU gate without changing the expected result of any fixture.
 - M6 also owns the general-global borrow restriction from R10 because AGENTS.md explicitly groups that change with the `own.c` state-machine work.
 
-Coverage: R4 storage restrictions, R5 scope, R6 shared/exclusive liveness and reborrows, R7 invalidation, R8 derived returns, defer lifetime extension, and global borrow restrictions.
+Coverage: R4 storage restrictions, R5 scope, R6 shared/exclusive liveness, root-local field/index conflicts, call-only `&mut -> &` reborrows, branch/loop `MaybeMoved` and initialization-state merging, R7 invalidation, R8 derived-return provenance joins, defer lifetime extension, and global borrow restrictions.

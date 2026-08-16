@@ -1,0 +1,4 @@
+// ERROR:2:unit
+unit toolonggg;
+
+fn main() -> void {}

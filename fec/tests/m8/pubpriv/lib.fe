@@ -1,0 +1,5 @@
+unit lib;
+
+struct Hidden { value: i32, }
+// ERROR:4:private
+pub fn make() -> Hidden { return Hidden{ value: 1 }; }

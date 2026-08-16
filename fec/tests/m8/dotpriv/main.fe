@@ -1,0 +1,4 @@
+unit main;
+import game.bar;
+
+fn main() -> i32 { return bar.read(); }

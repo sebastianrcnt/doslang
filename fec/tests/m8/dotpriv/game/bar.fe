@@ -1,0 +1,5 @@
+// ERROR:5:private
+unit game.bar;
+import game.foo;
+
+pub fn read() -> i32 { return foo.hidden(); }

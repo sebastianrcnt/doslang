@@ -1,0 +1,7 @@
+unit oksamrec;
+
+fn repeat(comptime T: type, value: T) -> T {
+    return repeat(T, value);
+}
+
+fn test() -> i32 { return repeat(i32, 1); }

@@ -1,0 +1,4 @@
+// ERROR:4:comptime
+unit badvalue;
+
+fn id(comptime N: usize, value: i32) -> i32 { return value; }

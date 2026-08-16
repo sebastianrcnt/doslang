@@ -1,0 +1,11 @@
+unit okskip;
+
+fn select(comptime T: type, value: T) -> T {
+    comptime if T == i32 {
+        return value;
+    } else {
+        return unknown(value);
+    }
+}
+
+fn test() -> i32 { return select(i32, 1); }

@@ -1,0 +1,4 @@
+unit main;
+import acme.math;
+
+fn main() -> i32 { return math.answer(); }
