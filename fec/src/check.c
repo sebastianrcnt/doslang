@@ -871,6 +871,12 @@ static FeType *check_expr(FeCheckerState *s, FeNode *n)
             if (known(a) && !fe_type_is_integer(a))
                 err(c, n->loc, "unary '-' requires integer");
         } else if (strcmp(op, "try") == 0) {
+            /* SPEC 6.4: try is only allowed inside a function returning an error
+               union.  Checked on the expression rather than on the statement so
+               that it also covers `var x = try e;` and `x = try e;`, which the
+               statement-level check walked straight past. */
+            if (!s->ret || s->ret->kind != FE_TYPE_ERROR_UNION)
+                err(c,n->loc,"try requires an enclosing error result");
             if (a && a->kind==FE_TYPE_ERROR_UNION)
                 a=a->error_value;
             else {
@@ -1549,11 +1555,9 @@ static void check_stmt(FeCheckerState *s, FeNode *n)
         }
         break;
     case FE_N_EXPR_STMT:
+        /* The enclosing-error-result check lives on the try expression itself,
+           so a bare `try e;` needs nothing extra here. */
         check_expr(s, n->a);
-        if (n->a && n->a->kind==FE_N_UNARY && n->a->text &&
-            strcmp(n->a->text,"try")==0 &&
-            (!s->ret || s->ret->kind!=FE_TYPE_ERROR_UNION))
-            err(c,n->loc,"try requires an enclosing error result");
         break;
     case FE_N_DEFER:
         ++s->defer_depth;
