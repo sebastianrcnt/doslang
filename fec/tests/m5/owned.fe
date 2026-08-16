@@ -1,6 +1,6 @@
 unit m5_owned;
 
-fn main() -> void {
+fn main() -> !void {
     var p: ^i32 = try mem.create(0);
     p = try mem.create(0);
     p.^ = 7;
