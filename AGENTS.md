@@ -30,6 +30,7 @@ DOS/Windows용 시스템 프로그래밍 언어 Ferro와 그 컴파일러 `fec`.
 ```powershell
 uv run python tests/run.py     # 컴파일러가 프로그램에 대해 뭐라고 하는가
 uv run python tests/exec.py    # 컴파일된 프로그램이 실제로 무엇을 하는가
+uv run python tests/determ.py  # 출력이 컴파일러가 돈 기계에 의존하는가
 uv run python tests/build.py <프로그램.fe>   # 하나만 빌드해서 돌려보기
 ```
 
@@ -42,6 +43,8 @@ uv run python tests/build.py <프로그램.fe>   # 하나만 빌드해서 돌려
 - 실행 프로그램은 첫 줄들에 `// EXIT:<코드>`, `// OUTPUT:<문구>`, `// NOCHECKS:<코드>`를
   둔다. 마지막 것은 `--no-checks`로 다시 빌드해서 다른 결과를 요구한다.
 - 툴체인은 `.dosboxx/watcom`에 고정되어 있고, 없으면 오류로 멈춘다.
+- `determ.py`의 교차 빌드 검사는 C 컴파일러가 둘 (또는 `-m32`) 있어야 돈다. 하나뿐이면
+  건너뛰었다고 말한다 — 통과했다고 하지 않는다. 리눅스에서 `gcc` + `gcc -m32`가 가장 쉽다.
 
 ## 함정
 
