@@ -142,9 +142,20 @@ int lvalue_writable(FeCheckerState *s, FeNode *n)
         t=n->a ? n->a->sem_type : 0;
         if (t && t->kind==FE_TYPE_REF && n->b && n->b->text &&
             strcmp(n->b->text,"^")==0) return t->ref_mut;
+        /* Through an owner, what may be written is decided by what is owned,
+           not by whether the binding may be pointed somewhere else. `let p:
+           ^[]mut T` fixes p and leaves what it owns writable. */
+        if (t && t->kind==FE_TYPE_OWNED && n->b && n->b->text &&
+            strcmp(n->b->text,"^")==0)
+            return !t->elem || t->elem->kind!=FE_TYPE_SLICE || t->elem->ref_mut;
         return lvalue_writable(s,n->a);
     }
-    if (n->kind == FE_N_INDEX) return lvalue_writable(s,n->a);
+    if (n->kind == FE_N_INDEX) {
+        /* An index into a slice asks the slice, not the binding. */
+        t=n->a ? n->a->sem_type : 0;
+        if (t && t->kind==FE_TYPE_SLICE) return t->ref_mut;
+        return lvalue_writable(s,n->a);
+    }
     return 0;
 }
 
@@ -440,10 +451,16 @@ FeType *check_expr_core(FeCheckerState *s, FeNode *n)
             if (strcmp(n->a->b->text,"alloc_slice")==0) {
                 FeNode *count=arg ? arg->next : 0;
                 FeType *item;
-                if(!arg || arg->kind!=FE_N_IDENT || !count || count->next)
-                    err(c,n->loc,"mem.alloc_slice requires a type and length");
-                item=arg && arg->kind==FE_N_IDENT ?
-                    fe_type_intern(&c->types,arg->text) : unknown(c);
+                {
+                    /* The element type may be an instance -- `Slot(V)` -- and
+                       not just a name. */
+                    int named=0;
+                    item=arg ? type_from_expr(s,arg,&named) : unknown(c);
+                    if(!arg || !named || !count || count->next) {
+                        err(c,n->loc,"mem.alloc_slice requires a type and length");
+                        item=unknown(c);
+                    }
+                }
                 b=count ? check_expr(s,count) : unknown(c);
                 if(known(b) && !fe_type_is_integer(b))
                     err(c,count->loc,"slice length must be an integer");
@@ -578,9 +595,23 @@ FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                 while(param && arg) {
                     a=check_expr(s,arg);
                     b=method_type(c,param->a,et);
-                    if(!compatible(b,a,arg) && a->kind!=FE_TYPE_UNKNOWN)
+                    /* A method argument gets the same call-only weakening a
+                       free function's does: an exclusive view may be handed
+                       over as a shared one for the length of the call, and an
+                       exclusive borrow is lent rather than given. */
+                    if(!compatible(b,a,arg) &&
+                       !(b && a && b->kind==FE_TYPE_SLICE &&
+                         a->kind==FE_TYPE_SLICE && !b->ref_mut && a->ref_mut &&
+                         fe_type_equal(b->elem,a->elem)) &&
+                       !(b && a && b->kind==FE_TYPE_REF && a->kind==FE_TYPE_REF &&
+                         !b->ref_mut && a->ref_mut &&
+                         fe_type_equal(b->elem,a->elem)) &&
+                       a->kind!=FE_TYPE_UNKNOWN)
                         err(c,arg->loc,"method argument type mismatch");
-                    mark_moved(s,arg,a);
+                    if(!call_reborrows(b,a) &&
+                       !(b && a && b->kind==FE_TYPE_SLICE &&
+                         a->kind==FE_TYPE_SLICE && !b->ref_mut && a->ref_mut))
+                        mark_moved(s,arg,a);
                     param=param->next;
                     arg=arg->next;
                 }

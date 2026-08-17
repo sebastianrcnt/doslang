@@ -1,0 +1,48 @@
+// EXIT:0
+// OUTPUT:count 5
+// OUTPUT:fn 2 let 3 missing 0
+// OUTPUT:grown 64
+// OUTPUT:after 40
+// OUTPUT:balanced
+unit maps;
+import std.io;
+import std.map;
+import std.fmt;
+import std.sys;
+
+fn run() -> !void {
+    var seen: map.Map(i32) = try map.Map(i32).with_capacity(4);
+    try seen.put("unit", 1);
+    try seen.put("fn", 2);
+    try seen.put("let", 3);
+    try seen.put("struct", 4);
+    try seen.put("return", 5);
+    @print("count {}\n", seen.count_of());
+    @print("fn {} let {} missing {}\n", seen.get("fn", 0), seen.get("let", 0),
+           seen.get("nope", 0));
+    // Enough keys to make it grow more than once.
+    var buf: [8]u8 = undefined;
+    var i: usize = 0;
+    while i < 40 {
+        let n: usize = fmt.fmt_i32(buf[..], i as i32);
+        try seen.put(buf[0..n], (i as i32) + 100);
+        i = i + 1;
+    }
+    @print("grown {}\n", seen.room());
+    var found: usize = 0;
+    i = 0;
+    while i < 40 {
+        let n: usize = fmt.fmt_i32(buf[..], i as i32);
+        if seen.get(buf[0..n], 0) == (i as i32) + 100 { found = found + 1; }
+        i = i + 1;
+    }
+    @print("after {}\n", found);
+    return;
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() != sys.frees() { @print("leaked\n"); return 2; }
+    @print("balanced\n");
+    return 0;
+}

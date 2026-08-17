@@ -1,4 +1,176 @@
-unit map;
-pub struct Map(K, V) {
+unit std.map;
+
+// A table from a run of bytes to a value.
+//
+// A compiler looks names up constantly and a linear scan over a list is the
+// wrong shape for that. Keys are copied into one buffer the map owns and each
+// slot records where in it the key sits -- the arena-and-handle shape R11 asks
+// for, which also means letting go of the map is two frees and not one per
+// entry.
+//
+// Open addressing with linear probing. The table is a power of two so the
+// index is a mask rather than a division, and it grows at three quarters full
+// because probing gets long well before the table gets full.
+
+pub struct Slot(V) {
+    at: usize,
     len: usize,
+    used: bool,
+    value: V,
+}
+
+pub struct Map(V) {
+    slots: ^[]mut Slot(V),
+    bytes: ^[]mut u8,
+    used_bytes: usize,
+    count: usize,
+
+    pub fn with_capacity(n: usize) -> !Self {
+        var room: usize = 8;
+        while room < n * 2 { room = room * 2; }
+        let table: ^[]mut Slot(V) = try mem.alloc_slice(Slot(V), room);
+        let text: ^[]mut u8 = try mem.alloc_slice(u8, 64);
+        var i: usize = 0;
+        while i < room {
+            table.^[i].used = false;
+            i = i + 1;
+        }
+        return Self{ slots: table, bytes: text, used_bytes: 0, count: 0 };
+    }
+
+    pub fn count_of(self: &Self) -> usize { return self.count; }
+
+    pub fn room(self: &Self) -> usize { return self.slots.^.n; }
+
+    /// Where `key` sits in the table: the slot holding it, or the first free
+    /// slot it could go in. Probing stops at a free slot, which is why a slot
+    /// is never cleared -- only ever filled.
+    fn find(self: &Self, key: []u8) -> usize {
+        let mask: usize = self.slots.^.n - 1;
+        var at: usize = hash(key) & mask;
+        while true {
+            if not self.slots.^[at].used { return at; }
+            if self.same(at, key) { return at; }
+            at = (at + 1) & mask;
+        }
+        return 0;
+    }
+
+    fn same(self: &Self, slot: usize, key: []u8) -> bool {
+        if self.slots.^[slot].len != key.n { return false; }
+        let from: usize = self.slots.^[slot].at;
+        var i: usize = 0;
+        while i < key.n {
+            if self.bytes.^[from + i] != key[i] { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    pub fn has(self: &Self, key: []u8) -> bool {
+        return self.slots.^[self.find(key)].used;
+    }
+
+    pub fn get(self: &Self, key: []u8, missing: V) -> V {
+        let at: usize = self.find(key);
+        if self.slots.^[at].used { return self.slots.^[at].value; }
+        return missing;
+    }
+
+    pub fn put(self: &mut Self, key: []u8, value: V) -> !void {
+        if self.count * 4 >= self.slots.^.n * 3 { try self.regrow(); }
+        let at: usize = self.find(key);
+        if self.slots.^[at].used {
+            self.slots.^[at].value = value;
+            return;
+        }
+        try self.keep(key, at);
+        self.slots.^[at].value = value;
+        self.slots.^[at].used = true;
+        self.count = self.count + 1;
+        return;
+    }
+
+    /// Make sure `need` bytes fit, moving to a bigger buffer if they do not.
+    ///
+    /// Kept apart from `keep` because the borrow that swaps the buffer in is
+    /// a borrow of the whole of `self` -- borrowing is tracked at the root --
+    /// and it has to be over before any field is read again.
+    fn ensure_room(self: &mut Self, need: usize) -> !void {
+        let have: usize = self.bytes.^.n;
+        if need <= have { return; }
+        var room: usize = have;
+        while room < need { room = room * 2; }
+        let bigger: ^[]mut u8 = try mem.alloc_slice(u8, room);
+        var k: usize = 0;
+        let filled: usize = self.used_bytes;
+        while k < filled {
+            bigger.^[k] = self.bytes.^[k];
+            k = k + 1;
+        }
+        let old: ^[]mut u8 = mem.replace(&mut self.bytes, bigger);
+        mem.destroy(old);
+        return;
+    }
+
+    /// Copy `key` into the byte buffer and point the slot at it.
+    fn keep(self: &mut Self, key: []u8, slot: usize) -> !void {
+        let at: usize = self.used_bytes;
+        let need: usize = at + key.n;
+        try self.ensure_room(need);
+        var i: usize = 0;
+        while i < key.n {
+            self.bytes.^[at + i] = key[i];
+            i = i + 1;
+        }
+        self.slots.^[slot].at = at;
+        self.slots.^[slot].len = key.n;
+        self.used_bytes = at + key.n;
+        return;
+    }
+
+    /// Twice the slots, everything placed again. The keys do not move: they
+    /// live in the byte buffer and the slots only point at them.
+    fn regrow(self: &mut Self) -> !void {
+        let bigger: ^[]mut Slot(V) = try mem.alloc_slice(Slot(V),
+                                                        self.slots.^.n * 2);
+        let mask: usize = bigger.^.n - 1;
+        var i: usize = 0;
+        while i < bigger.^.n {
+            bigger.^[i].used = false;
+            i = i + 1;
+        }
+        i = 0;
+        while i < self.slots.^.n {
+            if self.slots.^[i].used {
+                let from: usize = self.slots.^[i].at;
+                let len: usize = self.slots.^[i].len;
+                var at: usize = hash(self.bytes.^[from..from + len]) & mask;
+                while bigger.^[at].used { at = (at + 1) & mask; }
+                bigger.^[at] = self.slots.^[i];
+            }
+            i = i + 1;
+        }
+        let old: ^[]mut Slot(V) = mem.replace(&mut self.slots, bigger);
+        mem.destroy(old);
+        return;
+    }
+
+    pub fn drop(self: &mut Self) -> void {
+        mem.destroy(self.slots);
+        mem.destroy(self.bytes);
+    }
+}
+
+/// FNV-1a. Small, fast, and good enough for identifiers; nothing here has to
+/// resist an adversary choosing the keys.
+pub fn hash(key: []u8) -> usize {
+    var h: u32 = 2166136261;
+    var i: usize = 0;
+    while i < key.n {
+        h = h ^ (key[i] as u32);
+        h = h * 16777619;
+        i = i + 1;
+    }
+    return h as usize;
 }

@@ -226,9 +226,13 @@ FeType *build_struct_instance(FeCheck *c, FeUnit *home, FeNode *decl,
     for (f=decl->children;f;f=f->next) if (f->kind==FE_N_FIELD) ++fields;
     t->field_count=fields;
     if (fields) {
+        const char *save_unit=c->types.unit_name;
         t->fields=(FeFieldType *)fe_arena_alloc(&c->arena,
                                                 fields*sizeof(FeFieldType));
         if (!t->fields) { t->field_count=0; return t; }
+        /* Field types are written in the unit that declared the struct, not in
+           whichever unit asked for this instance. */
+        c->types.unit_name=home->name;
         push_instance_bindings(c,&save,t);
         bind_self(c,t);
         i=0;
@@ -240,6 +244,7 @@ FeType *build_struct_instance(FeCheck *c, FeUnit *home, FeNode *decl,
             ++i;
         }
         pop_bindings(c,&save);
+        c->types.unit_name=save_unit;
     }
     fe_type_layout_all(&c->types);
     /* A type that says how to let go of itself needs that method to exist for
