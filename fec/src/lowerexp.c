@@ -78,6 +78,28 @@ Slot lower_expr_core(Lower *L, FeNode *n)
         if (n->text && (!strcmp(n->text, "and") || !strcmp(n->text, "or")))
             return lower_logical(L, n, !strcmp(n->text, "and"));
         op = binary_op(n->text, &is_cmp);
+        /* Comparing an optional with `null` asks about its tag, not about the
+           bytes of the whole wrapper -- which has no value form at all. */
+        if ((op == FE_IR_EQ || op == FE_IR_NE) && n->a && n->b) {
+            FeNode *w = fe_m7_is_null(n->b) ? n->a :
+                        (fe_m7_is_null(n->a) ? n->b : 0);
+            FeType *wt = w ? w->sem_type : 0;
+            if (wt && wt->kind == FE_TYPE_OPTIONAL) {
+                Slot s = lower_expr(L, w);
+                unsigned t0;
+                unsigned z;
+                if (!s.is_place) {
+                    fail(L, "an optional with no place", w);
+                    return slot_void();
+                }
+                t0 = wrapper_tag(L, s, wt, w);
+                z = fe_ir_const(L->m, L->b,
+                                uses_niche(wt) ? FE_IR_PTR : FE_IR_I8, 0);
+                return slot_value(fe_ir_binary(L->m, L->b, op,
+                    uses_niche(wt) ? FE_IR_PTR : FE_IR_I8, t0, z, 1),
+                    FE_IR_I8);
+            }
+        }
         operand = ir_type(n->a ? n->a->sem_type : 0);
         if (operand == FE_IR_VOID || operand == FE_IR_MEM) operand = FE_IR_I32;
         a = as_value(L, lower_expr(L, n->a), n->a);

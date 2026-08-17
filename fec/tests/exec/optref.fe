@@ -1,0 +1,93 @@
+// EXIT:0
+// OUTPUT:int 5 none 0
+// OUTPUT:own 5 absent -1
+// OUTPUT:ref 5 absent yes
+// OUTPUT:cmp yes no
+// OUTPUT:unwrap 5
+// OUTPUT:balanced
+unit optref;
+
+import std.io;
+import std.sys;
+import std.mem;
+
+// An optional whose payload cannot be null keeps no separate tag: the payload's
+// own impossible value is `null`. `?i32` carries a tag; `?^T` and `?&T` do not.
+//
+// Both shapes have to answer the same questions, and the pointer-shaped ones
+// were answering with the address of the slot the pointer sits in rather than
+// with the pointer -- one level of indirection too many, in code that compiled
+// and ran.
+
+fn opt_int(on: bool) -> ?i32 {
+    if on { return 5; }
+    return null;
+}
+
+/// A niche optional over an owner. The `if let` binding is `&i32` -- the
+/// pointer itself, not where it is kept -- and `.?` moves the owner out so it
+/// can be let go of.
+fn take(o: ?^i32) -> i32 {
+    var box: ?^i32 = o;
+    var v: i32 = -1;
+    if let Some(p) = box { v = p.^; }
+    if box == null { return v; }
+    // SPEC 5 R7: a non-Copy value leaves a projection through `mem.replace`,
+    // which puts something valid back where it was.
+    let owner: ^i32 = mem.replace(&mut box, null).?;
+    mem.destroy(owner);
+    return v;
+}
+
+fn make(v: i32) -> ?^i32 {
+    let p: ^i32 = mem.create(v) catch |e| { return null; };
+    return p;
+}
+
+struct Bag {
+    items: ^[]mut i32,
+
+    /// SPEC 5 R8(a): derived from `self`, so the borrow is the caller's.
+    fn at(self: &Self, i: usize) -> ?&i32 {
+        if i >= self.items.^.n { return null; }
+        return &self.items.^[i];
+    }
+}
+
+fn run() -> !void {
+    // A tag in front of the payload.
+    var got: i32 = 0;
+    if let Some(a) = opt_int(true) { got = a; }
+    let none: i32 = opt_int(false) orelse 0;
+    @print("int {} none {}\n", got, none);
+
+    // A niche over `^i32`.
+    @print("own {} absent {}\n", take(make(5)), take(null));
+
+    // A niche over `&i32`.
+    let room: ^[]mut i32 = try mem.alloc_slice(i32, 2);
+    room.^[0] = 5;
+    let b: Bag = Bag{ items: room };
+    var seen: i32 = 0;
+    if let Some(r) = b.at(0) { seen = r.^; }
+    var past: bool = false;
+    if let Some(r) = b.at(9) { seen = seen; } else { past = true; }
+    @print("ref {} absent {}\n", seen, yesno(past));
+
+    // Comparing against null reads the tag, not the bytes of the wrapper.
+    @print("cmp {} {}\n", yesno(b.at(9) == null), yesno(b.at(0) == null));
+    @print("unwrap {}\n", b.at(0).?.^);
+    return;
+}
+
+fn yesno(b: bool) -> []u8 {
+    if b { return "yes"; }
+    return "no";
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() == sys.frees() { @print("balanced\n"); }
+    else { @print("leaked\n"); }
+    return 0;
+}

@@ -344,10 +344,20 @@ void lower_if_let(Lower *L, FeNode *n)
         FeType *bt = binding->sem_type;
         Slot payload = wrapper_payload(L, value, opt);
         unsigned local = declare_var(L, binding->cname, bt, binding->text);
-        if (bt && (bt->kind == FE_TYPE_REF || bt->kind == FE_TYPE_RAW))
-            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0),
-                        as_address(L, payload, n), FE_IR_PTR);
-        else
+        if (bt && (bt->kind == FE_TYPE_REF || bt->kind == FE_TYPE_RAW)) {
+            /* The binding is a reference either way, but for two different
+               reasons. When the payload is itself a single pointer (`^T`,
+               `&T`) the binding *is* that pointer, so it has to be read out.
+               When the payload is a value the binding points at where it sits
+               inside the wrapper, so the address is what is wanted. Taking the
+               address in the first case gives a pointer to the pointer, and
+               the program reads an address where it expects a value. */
+            FeType *pl = opt ? (opt->kind == FE_TYPE_ERROR_UNION
+                                ? opt->error_value : opt->elem) : 0;
+            unsigned p = pl && ir_type(pl) == FE_IR_PTR
+                ? as_value(L, payload, n) : as_address(L, payload, n);
+            fe_ir_store(L->m, L->b, fe_ir_at_local(local, 0), p, FE_IR_PTR);
+        } else
             store_into(L, fe_ir_at_local(local, 0), payload, n, ir_size(bt));
     }
     lower_stmt(L, n->b);
