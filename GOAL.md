@@ -1,100 +1,88 @@
 # GOAL — 부트스트랩까지 남은 작업
 
 외부 스펙 감사(v0.1.8)와, 그 항목들을 실제로 빌드해서 확인한 결과를 합친 실행
-계획이다. 감사는 문서를 읽었고 여기 적힌 것은 컴파일러에 물어본 답이다.
+계획이었다. **P0~P4 는 전부 끝났다.** 감사는 문서를 읽었고 여기 적힌 것은
+컴파일러에 물어본 답이다.
 
 ```
-uv run python tests/run.py     228/228
-uv run python tests/exec.py     32/32
+uv run python tests/run.py     245/245   + std 밖 unsafe/*T 예산 검사
+uv run python tests/exec.py     38/38
 ```
-
-**검증 게이트: 매 항목마다 두 스위트 모두.** P0-1 과 P1-1 은 `run.py` 만으로는
-잡히지 않는다 -- 조용히 틀린 값을 내는 종류라 `exec.py` fixture 로 동작을
-고정해야 한다.
-
-**순서 근거:** P0 가 P3 를 막는다 (stdlib 표면 전체가 `?&T` 위에 얹힌다).
-P1 은 P0-1 을 뺀 나머지 전부의 기준이다. P2 는 독립이라 언제 해도 된다.
 
 ---
 
-## P0 — 조용히 틀린 것
+## 끝난 것
 
-| # | 항목 | 무엇 | 왜 지금 | 규모 |
-|---|---|---|---|---|
-| 0-1 | **`?&T` lowering** | 옵셔널 참조를 니치로 표현한다 (참조는 null 이 될 수 없으므로 포인터 0 이 none). `== null`, `.?`, `if let`, `orelse` 전부 | `if let Some(r)` 이 **컴파일되고 쓰레기 값을 반환한다**. `== null` 은 `internal: cannot lower an aggregate as a value`. SPEC §5 R8 이 명시적으로 허용하는 타입인데 백엔드가 없다 | 중 |
-| 0-2 | **제네릭 인스턴스 리터럴** | `Handle(Node){ raw: 7 }` 를 파싱한다 | 지금은 `Self{...}` 나 생성자 함수로만 인스턴스를 만들 수 있다. 타입 인자를 명시한 리터럴은 `expected ';'` 로 죽는다 | 소 |
+### P0 — 조용히 틀린 것
 
-## P1 — 스펙의 빈칸
+| # | 무엇이었나 | |
+|---|---|---|
+| 0-1 | 니치 옵셔널(`?^T`, `?&T`)이 포인터가 아니라 포인터가 든 자리를 넘겼다. `if let` 이 컴파일되고 쓰레기를 반환했다 | `exec/optref.fe` |
+| 0-2 | `Handle(Node){ raw: 7 }` 이 파싱되지 않았다. 제네릭 인스턴스는 `Self{...}` 나 생성자로만 지을 수 있었다 | `exec/geninst/` |
 
-반나절짜리이고 이후 모든 결정의 기준이 된다.
+### P1 — 스펙의 빈칸
 
-| # | 항목 | 결정 | 규모 |
-|---|---|---|---|
-| 1-1 | **정수 리터럴 기본 타입** | expected type 이 있으면 그 타입, 없으면 `i32`. 값이 대상 타입 범위를 벗어나면 컴파일 에러 (`let b: u8 = 300;`). `null` 이 이미 같은 방식이라 일관된다 | 중 |
-| 1-2 | phantom 타입 파라미터 | §9 에 한 문장: "generic 타입 파라미터는 본문에서 사용되지 않아도 된다. `Handle(Node)` 와 `Handle(Type)` 은 서로 다른 nominal 인스턴스다." **구현은 이미 그렇게 동작한다** -- 미래의 구현자가 깨뜨리지 못하게 적어두는 것 | 소 |
-| 1-3 | 오버플로 정의 | §7.4 에 "`--no-checks` 에서 오버플로 결과는 랩어라운드로 정의된다". i386 `add` 의 실제 동작이다 | 소 |
-| 1-4 | 잔챙이 일곱 | 아래 표 | 중 |
+| # | 결정 | |
+|---|---|---|
+| 1-1 | 정수 리터럴은 문맥이 요구하는 타입, 없으면 `i32`. 범위를 벗어나면 거부 | `types/badlit.fe`, `types/oklit.fe` |
+| — | 그 자리에서 나온 것: **store 폭이 목적지가 아니라 값에서 왔다.** `let b: u8 = 200;` 이 4바이트를 1바이트 자리에 써서 옆 지역을 지웠다 | `exec/narrow.fe` |
+| 1-2 | 미사용 타입 파라미터는 정상. typed handle 이 그 모양이다 | `generic/okphant.fe`, `badphant.fe` |
+| 1-3 | `--no-checks` 에서 오버플로는 랩어라운드로 정의된다 | SPEC §7.4 |
+| 1-4 | 작은 규칙 일곱 (SPEC §7.9). 다섯은 이미 옳았고, `defer` 안의 `return` 과 순회 중 원본 변경 둘은 그냥 통과하고 있었다 | `own/bdefret.fe`, `own/badforwr.fe`, `own/okforrd.fe` |
 
-### 1-4 세부
+### P2 — SPEC 에서 죽은 C 백엔드 제거
 
-| 항목 | 결정 |
-|---|---|
-| 정수·char `match` arm | `_` 필수 |
-| enum payload 에 `^T`/drop 있는 타입 | 허용. drop 은 활성 배리언트만 |
-| `for x in slice` 순회 중 원본 | 순회 동안 원본 root 는 대여 상태 |
-| `defer` 안에서 `return` | 컴파일 에러 |
-| `undefined` 배열 | 슬라이스로 넘겨 채우는 것만 허용 |
-| 외부 유닛에서 private 필드가 있는 struct 리터럴 | 컴파일 에러. 생성자 함수 강제 |
-| by-value `self` 에서 부분 이동 | `mem.replace` 필요. 예외는 자기 `drop` 안뿐 (§5 R7) |
+`.fei`, `--emit-c`, `fe_errors.h`, "호스트 C 방출", "C 방출 시 static inline"
+열 군데. 감사가 그 문서를 충실히 읽고 존재하지 않는 문제(C 의 부호 있는
+오버플로 UB)를 보고했다 — 명세가 거짓말을 하면 그것을 읽는 사람이 틀린 답을
+낸다. 오류 코드 절은 실제대로 다시 썼고, `--target=`/`--model=` 은 드라이버에서
+없앴다.
 
-## P2 — SPEC 에서 죽은 백엔드 제거
+### P3 — stdlib
 
-C 백엔드는 없다. 파이프라인은 `.fe → i386 asm → wasm → wlink → .exe` 다.
-그런데 `SPEC.md` 에 그 흔적이 열 군데 남아 있어서, 감사가 문서를 충실히 읽고
-존재하지 않는 문제(C 의 부호 있는 오버플로 UB)를 보고했다.
+| # | | |
+|---|---|---|
+| 3-1 | `arena.Handle(T)` — 8바이트 고정. 세대·epoch·arena id 를 담아 놓아준 뒤, reset 뒤, 다른 아레나에 물으면 `null` | `exec/arenat.fe` |
+| 3-2 | `arena.Arena(T)` — 짧은 대여만. `get` 은 사본을 준다. `get_mut` 은 두지 않았다 | |
+| 3-3 | `list.List(T)` 에 `pop`/`take`/`swap`/`slice`/`slice_mut`/`clear` | `exec/listmor.fe` |
+| 3-4 | `intern.Interner` — `str` 을 꺼내는 API 없음. `eq`/`len_of`/`hash_of`/`find`/`copy_into` | `exec/interns.fe` |
+| 3-5 | `std.map` 이 `StrId` 를 바이트 키로 받는다. 별도 `IntMap` 불필요 | |
 
-| # | 항목 | 무엇 | 규모 |
-|---|---|---|---|
-| 2-1 | C 백엔드 잔재 | `.fei`, `--emit-c`, `fe_errors.h`, "호스트 C 방출", "C 방출 시 static inline" 열 군데 | 소 |
-| 2-2 | 오류 코드 절 재작성 | `.fei` 기반 증분 빌드 서술을 실제대로 -- 드라이버가 빌드 전체에서 모아 철자 순으로 1부터 | 소 |
+길에서 고친 것 둘:
+- 메서드 호출이 시그니처를 **호출자 유닛**에서 풀었다.
+- 제네릭 인스턴스를 필드로 담은 구조체가 **크기 0 으로 굳었다** — 짓는 중인
+  인스턴스가 배치되어 버려서. `Holder` 가 36 바이트 대신 12 였다.
 
-## P3 — stdlib
+### P4 — 측정
 
-| # | 항목 | 표면 | 규모 |
-|---|---|---|---|
-| 3-1 | `Handle(T)` | **8바이트 고정.** `index 32 / slot_gen 16 / epoch 8 / arena_id 8`. `--no-checks` 는 **비교만 생략하고 레이아웃은 그대로** 둔다. 슬롯 gen 이 넘치면 그 슬롯은 영구 폐기 -- 랩어라운드로 stale 핸들이 되살아나는 것을 막는다 | 소 |
-| 3-2 | `Arena(T)` | **짧은 대여만**: `alloc`, `get_copy`, `set`, `take`, `swap`, `free`, `reset`, `len`, `drop`. `reset` 은 슬롯별 gen 이 아니라 epoch 를 올린다 | 중 |
-| 3-3 | `List(T)` 보강 | `pop`, `take`, `swap`, `slice`, `slice_mut` | 소 |
-| 3-4 | `StringInterner` | `StrId{ raw: u32 }`. `intern`, `eq`, `eq_ids`, `hash`, `len`, `write`. **`str` 을 꺼내는 API 는 두지 않는다** -- 꺼내면 그 문자열이 사는 동안 interner 전체가 잠긴다 | 중 |
-| 3-5 | `std.map` 판정 | 이미 `[]u8` 키라 별도 `IntMap` 이 필요 없다. `StrId` 를 4바이트 키로 쓰는지 확인만 | 소 |
+`--report-unsafe`, `--report-instances`. 그리고 그 숫자를 `run.py` 가 검사한다:
+`std.mem`/`std.sys` 밖의 `unsafe` 와 `*T` 는 0 이어야 하고, 늘어나면 빌드가
+실패한다.
 
-## P4 — 측정
-
-| # | 항목 | 무엇 | 규모 |
-|---|---|---|---|
-| 4-1 | `--report-unsafe` | 유닛별 `unsafe` 블록 수, `*T` 출현 수, `*_unchecked` 호출 수. 목표는 `std.mem`/`std.sys` 밖 0 개. CI 에서 회귀 검사 -- 늘어나면 실패 | 소 |
-| 4-2 | `--report-instances` | 제네릭 인스턴스 수와 추정 크기 | 소 |
+```
+unit                   unsafe       *T  unchecked
+std.io                      6        1          0
+std.sys                    10       12          0
+total                      16       13          0
+outside std                 0        0          0
+```
 
 ---
 
-## 채택하지 않는 것
+## 채택하지 않은 것
 
 | 감사 항목 | 판정 | 근거 |
 |---|---|---|
-| 참조 튜플 `-> (&mut T, &mut T)` | **보류** | struct 는 필드 단위 대여로 이미 풀렸다 (`swap2(&mut p.a, &mut p.b)` 동작 확인). 컨테이너의 두 원소만 남는데 렉서·파서를 쓰면서 필요했던 자리가 0 번이다 |
-| `Arena.get_mut -> ?&mut T` | **거부** | 감사 자신의 "참조를 오래 들고 있지 마라" 와 모순이다. 한 arena 안에서는 여전히 전체가 잠긴다 |
-| `fmt.fmt_strid` | **거부** | `@print` 는 컴파일 단계에서 타입으로 `fmt_*` 를 고르는데, `StrId` 를 찍으려면 interner **인스턴스** 가 필요하고 R10 이 가변 전역 대여를 금지한다. `@print("{}", interner.text(id))` 로 간다 |
-| 별도 `IntMap(V)` | **불필요** | `std.map` 이 `[]u8` 키라 이미 포괄한다 |
-| C 오버플로 방출 규칙 | **대체** | C 백엔드가 없다. 결론(랩어라운드 정의)만 1-3 으로 흡수 |
-| R4 완화 | **영구 제외** | 이걸 풀면 언어의 존재 이유가 없어진다 |
+| 참조 튜플 `-> (&mut T, &mut T)` | 보류 | struct 는 필드 단위 대여로 풀렸다. 컨테이너의 두 원소만 남는데 렉서·파서에서 필요했던 자리가 0 번 |
+| `Arena.get_mut -> ?&mut T` | 거부 | 아레나 하나를 통째로 잠그는 참조를 오래 들고 있게 하는 API |
+| `fmt.fmt_strid` | 거부 | `@print` 가 interner 인스턴스에 닿을 수 없다 (R10) |
+| 별도 `IntMap(V)` | 불필요 | `std.map` 이 이미 포괄 |
+| C 오버플로 방출 규칙 | 대체 | C 백엔드가 없다. 결론만 1-3 으로 흡수 |
+| R4 완화 | 영구 제외 | |
 
-## 이미 끝난 것
+---
 
-| 감사 항목 | 상태 |
-|---|---|
-| depth-1 field-sensitive 대여 | `f7e6676`. `std.map` 의 `keep` 이 다시 함수 하나가 됐다 |
-| Copy AST 노드 | `ast.Node` 는 정수와 핸들뿐이라 자연히 Copy |
-| 같은 struct 의 두 `&mut` | 필드 단위 대여로 풀림 |
-| phantom 파라미터 동작 | 구현은 이미 지원. 문장만 P1-2 |
-| Ferro 렉서·파서를 Ferro 로 | `fec/tests/exec/lexer/` |
-| R4, R10, R9, 블록 표현식 배제, 오류 번호표, Copy handle enum | 손대지 않는다 |
+## 다음
+
+부트스트랩까지 남은 것은 `TODO.md` 에 있다. 도구는 다 갖췄다 — 아레나, 핸들,
+맵, interner, 그리고 리졸버가 쓸 `Node.bind` 와 `Map.clear`.
