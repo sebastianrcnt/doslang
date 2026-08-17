@@ -5,12 +5,14 @@
 // OUTPUT:find 1 missing yes
 // OUTPUT:hash steady yes apart yes
 // OUTPUT:copied unit 4
+// OUTPUT:scope x 10 y 20 of 2
 // OUTPUT:balanced
 unit interns;
 
 import std.io;
 import std.sys;
 import std.intern;
+import std.map;
 
 // One copy of every distinct name, and a number that stands for it. Comparing
 // two names is comparing two integers; storing one costs four bytes and no
@@ -46,6 +48,15 @@ fn run() -> !void {
     var buf: [8]u8 = undefined;
     let n: usize = t.copy_into(a, buf[..]);
     @print("copied {} {}\n", buf[0..n], n);
+
+    // A symbol table is a Map keyed on the name's number. std.map keys on
+    // bytes, so no separate integer-keyed map is needed.
+    var scope: map.Map(i32) = try map.Map(i32).with_capacity(8);
+    var key: [4]u8 = undefined;
+    try scope.put(intern.key_of(a, key[..]), 10);
+    try scope.put(intern.key_of(b, key[..]), 20);
+    @print("scope x {} y {} of {}\n", scope.get(intern.key_of(a, key[..]), -1),
+           scope.get(intern.key_of(b, key[..]), -1), scope.count_of());
     return;
 }
 

@@ -28,6 +28,17 @@ pub struct StrId {
 /// No name.
 pub const NONE: u32 = 4294967295;
 
+/// A name written out as map key bytes. `std.map` keys on bytes, so a name
+/// used as a key is just its number -- four of them, and nothing allocated.
+/// A symbol table is `Map(V)` keyed on this.
+pub fn key_of(id: StrId, out: []mut u8) -> []u8 {
+    out[0] = (id.raw % 256) as u8;
+    out[1] = ((id.raw / 256) % 256) as u8;
+    out[2] = ((id.raw / 65536) % 256) as u8;
+    out[3] = ((id.raw / 16777216) % 256) as u8;
+    return out[0..4];
+}
+
 struct Entry {
     at: usize,
     len: usize,
