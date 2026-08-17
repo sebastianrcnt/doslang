@@ -53,6 +53,9 @@ uv run python tests/exec.py     31/31    컴파일된 프로그램이 실제로 
 | `interrupt` `shared` `atomic` `critical` | 파싱만 되고 의미 없음. SPEC §11 에서 v0.2 |
 | lowering 미구현 진단 | `internal: cannot lower X`. 사용자 오류처럼 보이지 않는다 |
 | 배열·enum 페이로드의 자동 해제 | `release_at` 은 구조체 필드까지만 내려간다 |
+| `--strip-error-names` | 받아들이지만 아무것도 하지 않는다 (SPEC §4.6) |
+| `fmt.fmt_error` | 없다. SPEC §4.6 이 약속만 하고 있다 |
+| `0b` / `0o` 리터럴 | 렉서는 받지만 값 계산이 10진과 16진만 안다 |
 
 ---
 

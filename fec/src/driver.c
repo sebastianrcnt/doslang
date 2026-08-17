@@ -60,7 +60,10 @@ int main(int argc, char **argv)
         else if(strcmp(argv[i],"-o")==0 && i+1<argc) out_path=argv[++i];
         else if(strncmp(argv[i],"--std=",6)==0) std_root=argv[i]+6;
         else if(strcmp(argv[i],"--no-checks")==0) no_checks=1;
-        else if(strncmp(argv[i],"--target=",9)==0 || strncmp(argv[i],"--model=",8)==0 || strcmp(argv[i],"--strip-error-names")==0) { }
+        /* One target (SPEC 2), so --target= and --model= are gone: a flag
+           that is accepted and does nothing is worse than one that is not
+           accepted at all. */
+        else if(strcmp(argv[i],"--strip-error-names")==0) { }
         else if(argv[i][0]!='-') file=argv[i];
         else if(strcmp(argv[i],"--help")==0){usage();return 0;}
         else {fprintf(fe_diag_stream(),"fec: unknown option %s\n",argv[i]);return 2;}
