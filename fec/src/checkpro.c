@@ -131,6 +131,9 @@ void check_unit_bodies(FeCheck *c, FeCheckerState *s)
             sym=find_current(s->globals,n->text ? n->text : "");
             if (n->kind==FE_N_CONST && const_names_type(s,n)) continue;
             if (n->b) {
+                if (!const_foldable(s,n->b))
+                    err(c,n->b->loc,
+                        "a global initializer must be known at compile time");
                 iv=m7_check_expected(s,n->b,sym ? sym->type : 0);
                 if (sym && sym->type->kind==FE_TYPE_UNKNOWN) {
                     sym->type=iv;
@@ -162,6 +165,7 @@ int fe_check_program(FeCheck *c)
     s.ret=fe_type_intern(&c->types,"void");
     s.loop_depth=0;
     s.defer_depth=0;
+    s.unsafe_depth=0;
     s.fn_node=0;
     fe_own_liveness_init(&s.liveness,&c->arena);
     for (u=0;u<c->build->count;++u) { enter_unit(c,u); declare_unit(c); }

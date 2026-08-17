@@ -1,0 +1,3 @@
+// ERROR:3:only ABI
+unit badexab;
+extern "stdcall" fn f();

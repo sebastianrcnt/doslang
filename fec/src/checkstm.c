@@ -488,6 +488,10 @@ void check_stmt_core(FeCheckerState *s, FeNode *n)
                  !compatible(s->ret,b,n->a))
             err(c, n->loc, "return type mismatch");
         break;
+    case FE_N_ASM:
+        if (!s->unsafe_depth)
+            err(c,n->loc,"asm requires an unsafe block");
+        break;
     case FE_N_UNSAFE:
         check_stmt(s, n->a);
         break;
@@ -508,6 +512,7 @@ void check_fn(FeCheck *c, FeNode *fn, FeScope *globals)
     s.ret = fn->b ? node_type(c, fn->b) : fe_type_intern(&c->types, "void");
     s.loop_depth=0;
     s.defer_depth=0;
+    s.unsafe_depth=0;
     s.fn_node=fn;
     fe_own_liveness_init(&s.liveness,&c->arena);
     fe_own_collect_last_uses(&s.liveness,fn);
@@ -546,6 +551,7 @@ void check_method(FeCheck *c, FeNode *fn, FeScope *globals,
     s.ret=fn->b ? method_type(c,fn->b,owner) : fe_type_intern(&c->types,"void");
     s.loop_depth=0;
     s.defer_depth=0;
+    s.unsafe_depth=0;
     s.fn_node=fn;
     fe_own_liveness_init(&s.liveness,&c->arena);
     fe_own_collect_last_uses(&s.liveness,fn);
@@ -572,21 +578,20 @@ int m7_actual_compatible(FeType *want, FeType *got, FeNode *value)
 static unsigned long literal_magnitude(const char *s)
 {
     unsigned long v = 0;
+    unsigned long base = 10UL;
     if (!s) return 0;
-    if (s[0]=='0' && (s[1]=='x' || s[1]=='X')) {
-        for (s += 2; *s; ++s) {
-            int d = *s>='0'&&*s<='9' ? *s-'0' :
-                    *s>='a'&&*s<='f' ? *s-'a'+10 :
-                    *s>='A'&&*s<='F' ? *s-'A'+10 : -1;
-            if (d < 0) { if (*s=='_') continue; break; }
-            v = v*16UL + (unsigned long)d;
-        }
-        return v;
-    }
+    if (s[0]=='0' && (s[1]=='x' || s[1]=='X')) { base = 16UL; s += 2; }
+    else if (s[0]=='0' && (s[1]=='b' || s[1]=='B')) { base = 2UL; s += 2; }
+    else if (s[0]=='0' && (s[1]=='o' || s[1]=='O')) { base = 8UL; s += 2; }
     for (; *s; ++s) {
+        unsigned long d;
         if (*s=='_') continue;
-        if (*s<'0' || *s>'9') break;
-        v = v*10UL + (unsigned long)(*s-'0');
+        if (*s>='0' && *s<='9') d = (unsigned long)(*s-'0');
+        else if (*s>='a' && *s<='f') d = (unsigned long)(*s-'a'+10);
+        else if (*s>='A' && *s<='F') d = (unsigned long)(*s-'A'+10);
+        else break;
+        if (d >= base) break;
+        v = v*base + d;
     }
     return v;
 }

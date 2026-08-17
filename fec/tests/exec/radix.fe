@@ -1,0 +1,29 @@
+// EXIT:0
+// OUTPUT:bin 10 255 0
+// OUTPUT:oct 15 511 8
+// OUTPUT:hex 255 4095 16
+// OUTPUT:dec 1000 1000000
+// OUTPUT:same yes yes
+unit radix;
+
+import std.io;
+
+// SPEC §3 spells four radices. Reading `0b1010` as decimal stops at the `b`
+// and answers zero -- which is a number, so nothing looks wrong until the
+// program does the wrong thing.
+
+fn main() -> i32 {
+    @print("bin {} {} {}\n", 0b1010, 0b11111111, 0b0);
+    @print("oct {} {} {}\n", 0o17, 0o777, 0o10);
+    @print("hex {} {} {}\n", 0xFF, 0xfff, 0x10);
+    @print("dec {} {}\n", 1_000, 1_000_000);
+
+    // The same number four ways.
+    @print("same {} {}\n", yesno(0b1111 == 0o17), yesno(0o17 == 0xF));
+    return 0;
+}
+
+fn yesno(b: bool) -> []u8 {
+    if b { return "yes"; }
+    return "no";
+}

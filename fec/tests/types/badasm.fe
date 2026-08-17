@@ -1,0 +1,3 @@
+// ERROR:3:unsafe block
+unit badasm;
+fn f() -> void { asm { "nop" } return; }

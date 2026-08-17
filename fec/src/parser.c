@@ -71,6 +71,14 @@ static FeNode *type(FeParser *p)
     error(p,"expected type"); next(p); return fe_node(p->ast,FE_N_TYPE,t.loc,"error",5);
 }
 
+/* Is this binary node one of the six comparisons? They share a precedence
+   level and SPEC 6.2 forbids chaining them. The operator is the node's text. */
+static int is_comparison(const char *op)
+{
+    if(!op) return 0;
+    return !strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
+           !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">=");
+}
 static int precedence(FeTokKind k)
 {
     switch(k) {
@@ -107,7 +115,7 @@ static FeNode *primary(FeParser *p)
         }
         return n;
     }
-    if(eat(p,FE_TOK_LPAREN)) { int old=p->forbid_struct_literal; p->forbid_struct_literal=0; n=expr(p,0); p->forbid_struct_literal=old; want(p,FE_TOK_RPAREN,"expected ')'"); return n; }
+    if(eat(p,FE_TOK_LPAREN)) { int old=p->forbid_struct_literal; p->forbid_struct_literal=0; n=expr(p,0); p->forbid_struct_literal=old; want(p,FE_TOK_RPAREN,"expected ')'"); if(n) n->flags|=FE_NODE_PAREN; return n; }
     if(eat(p,FE_TOK_AT)) {
         FeToken name=p->current; if(!is_name(p)){error(p,"expected builtin name after '@'");return fe_node(p->ast,FE_N_ERROR_NODE,t.loc,"builtin",7);} next(p);
         n=toknode(p,FE_N_CALL,name); n->text=fe_arena_strdup(&p->ast->arena,name.begin-1,name.length+1);
@@ -167,9 +175,17 @@ static FeNode *postfix(FeParser *p)
 static FeNode *expr(FeParser *p, int minprec)
 {
     FeToken t=p->current; FeNode *left,*n; int prec;
-    if(is(p,FE_TOK_MINUS)||is(p,FE_TOK_NOT)||is(p,FE_TOK_TILDE)||is(p,FE_TOK_XOR)||is(p,FE_TOK_AND)||is(p,FE_TOK_STAR)||is(p,FE_TOK_TRY)) { next(p); n=toknode(p,FE_N_UNARY,t); if(t.kind==FE_TOK_AND && eat(p,FE_TOK_MUT)) n->text=fe_arena_strdup(&p->ast->arena,"&mut",4); n->a=expr(p,11); left=n; }
+    if(is(p,FE_TOK_MINUS)||is(p,FE_TOK_NOT)||is(p,FE_TOK_TILDE)||is(p,FE_TOK_XOR)||is(p,FE_TOK_AND)||is(p,FE_TOK_STAR)||is(p,FE_TOK_TRY)) { next(p); n=toknode(p,FE_N_UNARY,t); if(t.kind==FE_TOK_AND && eat(p,FE_TOK_MUT)) n->text=fe_arena_strdup(&p->ast->arena,"&mut",4); n->a=expr(p,11);
+        if(n->a && n->a->kind==FE_N_TYPE && n->a->b &&
+           !(n->a->flags & FE_NODE_PAREN))
+            error(p,"parenthesise: '-x as T' is read as -(x as T)");
+        left=n; }
     else left=postfix(p);
-    for(;;) { t=p->current;prec=precedence(t.kind);if(prec<=minprec)break;next(p);n=toknode(p,FE_N_BINARY,t);n->a=left;if(t.kind==FE_TOK_CATCH && eat(p,FE_TOK_OR)){if(is_name(p))n->b=toknode(p,FE_N_IDENT,p->current),next(p);else error(p,"expected catch binding");want(p,FE_TOK_OR,"expected '|' after catch binding");n->c=block(p);}else n->b=expr(p,prec);left=n; }
+    for(;;) { t=p->current;prec=precedence(t.kind);if(prec<=minprec)break;
+        if(prec==4 && left && left->kind==FE_N_BINARY &&
+           !(left->flags & FE_NODE_PAREN) && is_comparison(left->text))
+            error(p,"comparisons do not chain; write 'a < b and b < c'");
+        next(p);n=toknode(p,FE_N_BINARY,t);n->a=left;if(t.kind==FE_TOK_CATCH && eat(p,FE_TOK_OR)){if(is_name(p))n->b=toknode(p,FE_N_IDENT,p->current),next(p);else error(p,"expected catch binding");want(p,FE_TOK_OR,"expected '|' after catch binding");n->c=block(p);}else n->b=expr(p,prec);left=n; }
     return left;
 }
 
@@ -208,7 +224,16 @@ static FeNode *fn_decl(FeParser *p, int pub, int external, int interrupt, int in
     FeToken t=p->current, name; FeNode *n;
     (void)interrupt; (void)interrupt_safe;
     want(p,FE_TOK_FN,"expected 'fn'"); if(!is_name(p)){error(p,"expected function name");return fe_node(p->ast,FE_N_ERROR_NODE,t.loc,"fn",2);}
-    name=p->current; n=toknode(p,FE_N_FN,t); if(pub) n->flags|=FE_NODE_PUB; if(external) n->flags|=FE_NODE_EXTERN; n->text=fe_arena_strdup(&p->ast->arena,name.begin,name.length); next(p); n->a=params(p); if(eat(p,FE_TOK_ARROW)) n->b=type(p); if(eat(p,FE_TOK_SEMI)) return n; n->c=block(p); return n;
+    name=p->current; n=toknode(p,FE_N_FN,t); if(pub) n->flags|=FE_NODE_PUB; if(external) n->flags|=FE_NODE_EXTERN; n->text=fe_arena_strdup(&p->ast->arena,name.begin,name.length); next(p); n->a=params(p); if(eat(p,FE_TOK_ARROW)) n->b=type(p);
+    if(eat(p,FE_TOK_SEMI)) {
+        /* A body-less function is a promise that someone else defines it, and
+           `extern` is how that promise is made. Without it the name is
+           mangled into this unit and nothing anywhere defines it. */
+        if(!external) error(p,"a function without a body must be extern");
+        return n;
+    }
+    if(external) error(p,"an extern function has no body");
+    n->c=block(p); return n;
 }
 static FeNode *field(FeParser *p, int pub)
 {
@@ -220,15 +245,25 @@ static FeNode *decl(FeParser *p)
     int pub=0, external=0, interrupt=0, interrupt_safe=0, shared=0, atomic=0; FeToken t=p->current; FeNode *n; FeTokKind before;
     (void)shared; (void)atomic;
     if(eat(p,FE_TOK_PUB)) pub=1;
-    if(eat(p,FE_TOK_EXTERN)) { external=1; if(is(p,FE_TOK_STRING)) next(p); }
+    if(eat(p,FE_TOK_EXTERN)) {
+        external=1;
+        if(!is(p,FE_TOK_STRING)) error(p,"extern requires an ABI string");
+        else {
+            /* The token keeps its quotes, so "c" is four characters. */
+            FeToken abi=p->current;
+            if(abi.length!=3 || abi.begin[1]!='c')
+                error(p,"the only ABI is \"c\"");
+            next(p);
+        }
+    }
     if(eat(p,FE_TOK_INTERRUPT)) interrupt=1;
     if(eat(p,FE_TOK_INTERRUPT_SAFE)) interrupt_safe=1;
     if(!is(p,FE_TOK_PACKED)) t=p->current;
     if(is(p,FE_TOK_FN)) return fn_decl(p,pub,external,interrupt,interrupt_safe);
     if(eat(p,FE_TOK_PACKED)) t=p->previous;
     if(eat(p,FE_TOK_STRUCT)) { n=toknode(p,FE_N_STRUCT,t);if(pub)n->flags|=FE_NODE_PUB;if(t.kind==FE_TOK_PACKED)n->flags|=FE_NODE_PACKED;if(!is_name(p)){error(p,"expected struct name");return n;}next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);if(eat(p,FE_TOK_LPAREN)){n->a=fe_node(p->ast,FE_N_BLOCK,p->current.loc,"generics",8);while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n->a,type(p));if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RPAREN,"expected ')' after generic parameters");}want(p,FE_TOK_LBRACE,"expected '{' in struct");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){int mpub=eat(p,FE_TOK_PUB);if(is(p,FE_TOK_FN))fe_node_add(n,fn_decl(p,mpub,0,0,0));else fe_node_add(n,field(p,mpub));}want(p,FE_TOK_RBRACE,"expected '}' after struct");return n; }
-    if(eat(p,FE_TOK_ENUM)) { n=toknode(p,FE_N_ENUM,t);if(pub)n->flags|=FE_NODE_PUB;if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected enum name");if(eat(p,FE_TOK_LPAREN)){n->a=fe_node(p->ast,FE_N_BLOCK,p->current.loc,"generics",8);while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n->a,type(p));if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RPAREN,"expected ')' after generic parameters");}want(p,FE_TOK_LBRACE,"expected '{' in enum");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){FeNode *v=toknode(p,FE_N_VARIANT,p->current);if(is_name(p))next(p);else{error(p,"expected variant name");recover(p);break;}if(eat(p,FE_TOK_LPAREN)){v->a=type(p);want(p,FE_TOK_RPAREN,"expected ')' in variant");}else if(eat(p,FE_TOK_LBRACE)){while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF))fe_node_add(v,field(p,1));want(p,FE_TOK_RBRACE,"expected '}' in variant");}fe_node_add(n,v);if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RBRACE,"expected '}' after enum");return n; }
-    if(eat(p,FE_TOK_ERROR_KW)) { n=toknode(p,FE_N_ERROR_DECL,t);if(pub)n->flags|=FE_NODE_PUB;if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected error name");want(p,FE_TOK_LBRACE,"expected '{' in error declaration");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){FeNode *v=toknode(p,FE_N_VARIANT,p->current);if(is_name(p))next(p);else{error(p,"expected error member");recover(p);break;}want(p,FE_TOK_EQ,"expected '=' in error member");if(is(p,FE_TOK_INT)){v->a=toknode(p,FE_N_LITERAL,p->current);next(p);}else error(p,"an error code must be an integer literal");if(!is(p,FE_TOK_COMMA)&&!is(p,FE_TOK_RBRACE)){error(p,"an error code must be an integer literal");recover(p);break;}want(p,FE_TOK_COMMA,"expected ',' in error declaration");fe_node_add(n,v);}want(p,FE_TOK_RBRACE,"expected '}' after error");return n; }
+    if(eat(p,FE_TOK_ENUM)) { n=toknode(p,FE_N_ENUM,t);if(pub)n->flags|=FE_NODE_PUB;if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected enum name");if(eat(p,FE_TOK_LPAREN)){n->a=fe_node(p->ast,FE_N_BLOCK,p->current.loc,"generics",8);while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(n->a,type(p));if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RPAREN,"expected ')' after generic parameters");}want(p,FE_TOK_LBRACE,"expected '{' in enum");if(is(p,FE_TOK_RBRACE))error(p,"an enum needs at least one variant");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){FeNode *v=toknode(p,FE_N_VARIANT,p->current);if(is_name(p))next(p);else{error(p,"expected variant name");recover(p);break;}if(eat(p,FE_TOK_LPAREN)){v->a=type(p);want(p,FE_TOK_RPAREN,"expected ')' in variant");}else if(eat(p,FE_TOK_LBRACE)){while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF))fe_node_add(v,field(p,1));want(p,FE_TOK_RBRACE,"expected '}' in variant");}fe_node_add(n,v);if(!eat(p,FE_TOK_COMMA))break;}want(p,FE_TOK_RBRACE,"expected '}' after enum");return n; }
+    if(eat(p,FE_TOK_ERROR_KW)) { n=toknode(p,FE_N_ERROR_DECL,t);if(pub)n->flags|=FE_NODE_PUB;if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected error name");want(p,FE_TOK_LBRACE,"expected '{' in error declaration");if(is(p,FE_TOK_RBRACE))error(p,"an error declaration needs at least one member");while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)){FeNode *v=toknode(p,FE_N_VARIANT,p->current);if(is_name(p))next(p);else{error(p,"expected error member");recover(p);break;}want(p,FE_TOK_EQ,"expected '=' in error member");if(is(p,FE_TOK_INT)){v->a=toknode(p,FE_N_LITERAL,p->current);next(p);}else error(p,"an error code must be an integer literal");if(!is(p,FE_TOK_COMMA)&&!is(p,FE_TOK_RBRACE)){error(p,"an error code must be an integer literal");recover(p);break;}want(p,FE_TOK_COMMA,"expected ',' in error declaration");fe_node_add(n,v);}want(p,FE_TOK_RBRACE,"expected '}' after error");return n; }
     if(eat(p,FE_TOK_SHARED)) { shared=1; if(eat(p,FE_TOK_ATOMIC)) atomic=1; if(!is(p,FE_TOK_VAR)) error(p,"expected 'var' after shared"); }
     if(is(p,FE_TOK_CONST)||is(p,FE_TOK_STATIC)||is(p,FE_TOK_VAR)) { FeTokKind kk=p->current.kind;next(p);n=toknode(p,kk==FE_TOK_CONST?FE_N_CONST:FE_N_GLOBAL,t);if(pub)n->flags|=FE_NODE_PUB;if(kk==FE_TOK_STATIC)n->flags|=FE_NODE_STATIC;if(shared)n->flags|=FE_NODE_SHARED;if(is_name(p)){next(p);n->text=fe_arena_strdup(&p->ast->arena,p->previous.begin,p->previous.length);}else error(p,"expected declaration name");if(eat(p,FE_TOK_COLON))n->a=type(p);else if(kk!=FE_TOK_CONST)error(p,"a global declaration requires an explicit type");want(p,FE_TOK_EQ,"expected '=' in declaration");n->b=expr(p,0);want(p,FE_TOK_SEMI,"expected ';' after declaration");return n; }
     error(p,"expected declaration"); before=p->current.kind; recover(p);

@@ -1,0 +1,3 @@
+// ERROR:3:ABI string
+unit badexns;
+extern fn f();

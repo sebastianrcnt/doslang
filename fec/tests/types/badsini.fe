@@ -1,0 +1,4 @@
+// ERROR:4:known at compile time
+unit badsini;
+fn r() -> i32 { return 1; }
+static A: i32 = r();

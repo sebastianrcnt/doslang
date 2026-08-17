@@ -52,6 +52,8 @@ typedef struct FeCheckerState {
     FeType *ret;
     unsigned loop_depth;
     unsigned defer_depth;
+    /* SPEC 5 R9 lists what only `unsafe` allows; `asm` is on it. */
+    unsigned unsafe_depth;
     FeOwnLiveness liveness;
     FeNode *fn_node;
     /* While a projection is being checked, which field of which base it
@@ -212,6 +214,7 @@ FeType *instantiate_struct(FeCheck *c, FeUnit *home, const char *name,
 FeType *instantiate_type_node(void *owner, const FeNode *node);
 FeType *type_from_expr(FeCheckerState *s, FeNode *n, int *ok);
 int comptime_condition(FeCheckerState *s, FeNode *n, int *out);
+int const_foldable(FeCheckerState *s, FeNode *n);
 void instantiate_body(FeCheck *c, FeUnit *home, FeNode *decl,
                              FeType *owner, FeBindSave *bindings, FeLoc site);
 FeType *check_generic_call(FeCheckerState *s, FeNode *n, FeSym *sym,

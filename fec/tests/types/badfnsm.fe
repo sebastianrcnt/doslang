@@ -1,0 +1,3 @@
+// ERROR:4:must be extern
+unit badfnsm;
+fn f() -> i32;

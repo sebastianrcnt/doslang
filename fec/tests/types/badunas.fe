@@ -1,0 +1,3 @@
+// ERROR:3:parenthesise
+unit badunas;
+fn f(x: i32) -> u32 { return -x as u32; }

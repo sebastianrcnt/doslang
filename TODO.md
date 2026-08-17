@@ -56,7 +56,6 @@ uv run python tests/exec.py     38/38    컴파일된 프로그램이 실제로 
 | 컨테이너 두 원소의 동시 `&mut` | 인덱스는 갈라지지 않는다. `swap` 같은 것은 stdlib 안에서 해결한다 |
 | `--strip-error-names` | 받아들이지만 아무것도 하지 않는다 (SPEC §4.6) |
 | `fmt.fmt_error` | 없다. SPEC §4.6 이 약속만 하고 있다 |
-| `0b` / `0o` 리터럴 | 렉서는 받지만 값 계산이 10진과 16진만 안다 |
 
 ---
 

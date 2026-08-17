@@ -3,6 +3,8 @@
 - 날짜: 2026-08-17
 - 기준 커밋: `6dc298d828872409fdf6b7d2e85830f18a118d9f`
 - 범위: parser, checker, 전역 lowering의 경계
+- **해결: 11 건 전부와 `0b`/`0o` 리터럴까지. 모두 구현 쪽이었다.**
+  fixture 는 아래 표에 적었다. 본문은 조사 시점 그대로다.
 
 ## 재현된 문제
 
@@ -24,6 +26,35 @@
 
 중복 struct field와 중복 enum variant 선언도 통과했지만, 중복 선언 규칙을 SPEC에서 먼저
 확정해야 하므로 위 목록에는 넣지 않았다.
+
+## 해결
+
+SPEC 은 FRONT-03·04(§6.2), 05(§5 R9), 06~09(§6.1·§7.3), 10·11(§6.1)을 이미
+옳게 적고 있었다. 구현만 따라가지 않았다. FRONT-01·02 는 SPEC 에도 규칙이
+없어서 §7.1 에 문장을 넣었다 -- 전역 초기값은 컴파일 시점에 알 수 있어야 한다.
+
+| ID | fixture |
+|---|---|
+| FRONT-01 | `types/badcini.fe` |
+| FRONT-02 | `types/badsini.fe` |
+| FRONT-03 | `types/badchain.fe` |
+| FRONT-04 | `types/badunas.fe` |
+| FRONT-05 | `types/badasm.fe` |
+| FRONT-06 | `types/badexns.fe` |
+| FRONT-07 | `types/badexab.fe` |
+| FRONT-08 | `types/badexbd.fe` |
+| FRONT-09 | `types/badfnsm.fe` |
+| FRONT-10 | `parse/bademen.fe` |
+| FRONT-11 | `parse/bademer.fe` |
+| 허용되는 짝 | `types/okglobin.fe` |
+| `0b`/`0o` | `exec/radix.fe` |
+
+`-x as T` 와 비교 체이닝을 구별하려면 괄호가 트리에 남아야 해서 노드에
+`FE_NODE_PAREN` 을 두었다. 파싱 뒤에는 `-x as T` 와 `-(x as T)` 가 같은
+트리다.
+
+남은 것: `parse/` fixture 가 트리 내용을 비교하지 않는다는 지적은 그대로
+유효하다. 우선순위는 지금 `exec/bitnot.fe` 처럼 실행 결과로 구별한다.
 
 ## 이미 알려진 실행 문제
 

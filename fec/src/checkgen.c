@@ -413,6 +413,50 @@ FeType *type_from_expr(FeCheckerState *s, FeNode *n, int *ok)
     return unknown(c);
 }
 
+/* Can this initializer be worked out before the program runs?
+
+   A global's bytes go into the image, so there is no moment at which a call in
+   its initializer could happen -- the emitter had been quietly dropping the
+   work and leaving zeros. Anything that is a name for a value already known is
+   fine; anything that is work is not. */
+int const_foldable(FeCheckerState *s, FeNode *n)
+{
+    FeNode *x;
+    if (!n) return 1;
+    switch (n->kind) {
+    case FE_N_LITERAL:
+        return 1;
+    case FE_N_IDENT: {
+        /* Another `const` is a name for a value; a `static`/`var` is storage
+           that does not exist yet. */
+        FeSym *sym=find_symbol(s->scope,n->text ? n->text : "");
+        return sym && sym->decl && sym->decl->kind==FE_N_CONST;
+    }
+    case FE_N_MEMBER:
+        /* `E.Variant`, `error.Name`, `unit.CONST` -- a name, not work. */
+        if (n->a && n->a->kind==FE_N_IDENT) return 1;
+        return const_foldable(s,n->a);
+    case FE_N_UNARY:
+        if (n->text && strcmp(n->text,"try")==0) return 0;
+        return const_foldable(s,n->a);
+    case FE_N_BINARY:
+        if (n->text && (strcmp(n->text,"catch")==0 ||
+                        strcmp(n->text,"orelse")==0)) return 0;
+        return const_foldable(s,n->a) && const_foldable(s,n->b);
+    case FE_N_TYPE:
+        return const_foldable(s,n->a);
+    case FE_N_EXPR:
+        return const_foldable(s,n->a);
+    case FE_N_STRUCT_INIT:
+    case FE_N_ARRAY_INIT:
+        for (x=n->children;x;x=x->next)
+            if (!const_foldable(s,x->kind==FE_N_FIELD ? x->a : x)) return 0;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* A `comptime if` condition. Only the forms SPEC 9 allows: type equality and
    the type predicates. Anything else is not decidable here. */
 int comptime_condition(FeCheckerState *s, FeNode *n, int *out)

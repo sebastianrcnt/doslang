@@ -1,0 +1,23 @@
+unit okglobin;
+
+// 거부되는 것들의 짝. 전역 초기값은 컴파일 시점에 알 수 있어야 하고,
+// extern 은 ABI 를 대고 본문이 없으며, 비교는 괄호로 묶으면 이어 쓸 수 있고,
+// 단항 뒤의 as 는 괄호가 어느 쪽인지 말해주면 되고, asm 은 unsafe 안이면 된다.
+import std.sys;
+
+const A: i32 = 1;
+const B: i32 = A + 2;
+const S: str = "hi";
+static C: i32 = -A;
+var D: u32 = 0xFF;
+
+enum E { One, Two, }
+error Er { Bad = 1, }
+
+extern "c" fn fe_rt_allocs() -> i32;
+
+fn f(x: i32) -> u32 { return (-x) as u32; }
+fn g(x: i32) -> u32 { return -(x as u32); }
+fn h(a: i32, b: i32, c: i32) -> bool { return a < b and b < c; }
+fn i(a: i32, b: i32) -> bool { return (a == b) == true; }
+fn j() -> void { unsafe { asm { "nop" } } return; }

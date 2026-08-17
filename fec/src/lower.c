@@ -360,20 +360,22 @@ long literal_value(FeNode *n)
         return (long)(unsigned char)s[1];
     }
     if (*s == '-') { neg = 1; ++s; }
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
+    {
+        /* SPEC 3 spells four radices. Reading `0b1010` as decimal stops at the
+           `b` and answers zero, which is a number and so goes unnoticed. */
+        int base = 10;
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (s[0] == '0' && (s[1] == 'b' || s[1] == 'B')) { base = 2; s += 2; }
+        else if (s[0] == '0' && (s[1] == 'o' || s[1] == 'O')) { base = 8; s += 2; }
         for (; *s; ++s) {
-            int d = *s >= '0' && *s <= '9' ? *s - '0' :
-                    *s >= 'a' && *s <= 'f' ? *s - 'a' + 10 :
-                    *s >= 'A' && *s <= 'F' ? *s - 'A' + 10 : -1;
-            if (d < 0) { if (*s == '_') continue; break; }
-            v = v * 16 + d;
-        }
-    } else {
-        for (; *s; ++s) {
+            int d;
             if (*s == '_') continue;
-            if (*s < '0' || *s > '9') break;
-            v = v * 10 + (*s - '0');
+            if (*s >= '0' && *s <= '9') d = *s - '0';
+            else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
+            else if (*s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
+            else break;
+            if (d >= base) break;
+            v = v * base + d;
         }
     }
     return neg ? -v : v;

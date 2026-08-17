@@ -1035,7 +1035,13 @@ void check_stmt(FeCheckerState *s, FeNode *n)
             err(s->c,n->loc,"break or continue outside loop");
         break;
     case FE_N_UNSAFE:
+        ++s->unsafe_depth;
         check_stmt(s,n->a);
+        --s->unsafe_depth;
+        break;
+    case FE_N_ASM:
+        if (!s->unsafe_depth)
+            err(s->c,n->loc,"asm requires an unsafe block");
         break;
     default:
         check_stmt_core(s,n);

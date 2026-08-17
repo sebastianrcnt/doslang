@@ -1,0 +1,3 @@
+// ERROR:3:no body
+unit badexbd;
+extern "c" fn f() -> i32 { return 1; }

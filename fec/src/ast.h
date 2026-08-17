@@ -47,6 +47,9 @@ struct FeNode {
 /* An index expression that had `..` in it, so it makes a slice rather than
    reaching an element. `x[a]` and `x[a..]` are otherwise the same shape. */
 #define FE_NODE_SLICE    0x40U
+/* This expression was written inside parentheses. `-x as T` is a mistake
+   and `-(x as T)` is not, and after parsing they are the same tree. */
+#define FE_NODE_PAREN    0x80U
 
 typedef struct FeAst {
     FeArena arena;
