@@ -41,6 +41,20 @@ pub struct Map(V) {
 
     pub fn count_of(self: &Self) -> usize { return self.count; }
 
+    /// Forget every key but keep the storage. A scope that ends can hand its
+    /// table to the next one without going back to the allocator, which is
+    /// what a resolver wants: one table per nesting level, not per function.
+    pub fn clear(self: &mut Self) -> void {
+        var i: usize = 0;
+        while i < self.slots.^.n {
+            self.slots.^[i].used = false;
+            i = i + 1;
+        }
+        self.used_bytes = 0;
+        self.count = 0;
+        return;
+    }
+
     pub fn room(self: &Self) -> usize { return self.slots.^.n; }
 
     /// Where `key` sits in the table: the slot holding it, or the first free

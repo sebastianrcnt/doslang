@@ -31,6 +31,10 @@ pub struct Node {
     pub a: usize,           // handles into the same tree
     pub b: usize,
     pub next: usize,        // the following statement, when there is one
+    /// What a `Name` resolved to: the handle of the `Let` or `Fn` that
+    /// declared it. The resolver writes this back so the tree carries its own
+    /// answers and nothing has to look the name up a second time.
+    pub bind: usize,
 }
 
 pub fn name_of(s: Shape) -> []u8 {

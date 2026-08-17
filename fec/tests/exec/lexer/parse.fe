@@ -66,6 +66,8 @@ pub struct Parser {
         let n: ast.Node = ast.Node{
             shape: s, from: t.from, len: t.len, line: t.line,
             a: a, b: b, next: ast.NONE,
+            // The parser does not resolve names; the resolver writes this.
+            bind: ast.NONE,
         };
         let i: usize = self.nodes.count();
         try self.nodes.push(n);

@@ -3,6 +3,8 @@
 // OUTPUT:fn 2 let 3 missing 0
 // OUTPUT:grown 64
 // OUTPUT:after 40
+// OUTPUT:cleared 0 room 64 gone 0
+// OUTPUT:refilled 3
 // OUTPUT:balanced
 unit maps;
 import std.io;
@@ -37,6 +39,26 @@ fn run() -> !void {
         i = i + 1;
     }
     @print("after {}\n", found);
+
+    // `clear` forgets every key and keeps the storage, which is what a scope
+    // that ends wants: hand the table to the next one without going back to
+    // the allocator. The room has to survive and the keys have to not.
+    let room: usize = seen.room();
+    seen.clear();
+    var gone: usize = 0;
+    i = 0;
+    while i < 40 {
+        let n: usize = fmt.fmt_i32(buf[..], i as i32);
+        if seen.has(buf[0..n]) { gone = gone + 1; }
+        i = i + 1;
+    }
+    @print("cleared {} room {} gone {}\n", seen.count_of(), room, gone);
+
+    // And it is usable again afterwards, reusing the same buffers.
+    try seen.put("a", 1);
+    try seen.put("b", 2);
+    try seen.put("c", 3);
+    @print("refilled {}\n", seen.count_of());
     return;
 }
 
