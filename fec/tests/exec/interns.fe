@@ -1,0 +1,62 @@
+// EXIT:0
+// OUTPUT:ids 0 1 2 count 3
+// OUTPUT:again 0 same yes count 3
+// OUTPUT:eq yes no len 4
+// OUTPUT:find 1 missing yes
+// OUTPUT:hash steady yes apart yes
+// OUTPUT:copied unit 4
+// OUTPUT:balanced
+unit interns;
+
+import std.io;
+import std.sys;
+import std.intern;
+
+// One copy of every distinct name, and a number that stands for it. Comparing
+// two names is comparing two integers; storing one costs four bytes and no
+// ownership.
+//
+// There is deliberately no way to get a `str` back out: a borrow of the text
+// would be a borrow of the interner, and the interner is exactly what a parser
+// wants to keep adding to while it holds names.
+
+fn run() -> !void {
+    var t: intern.Interner = try intern.Interner.with_capacity(8);
+    let a: intern.StrId = try t.intern("unit");
+    let b: intern.StrId = try t.intern("fn");
+    let c: intern.StrId = try t.intern("struct");
+    @print("ids {} {} {} count {}\n", a.raw, b.raw, c.raw, t.count_of());
+
+    // The same name twice is the same number, and costs nothing new.
+    let again: intern.StrId = try t.intern("unit");
+    @print("again {} same {} count {}\n", again.raw, yesno(a.same(again)),
+           t.count_of());
+
+    @print("eq {} {} len {}\n", yesno(t.eq(a, "unit")), yesno(t.eq(a, "fn")),
+           t.len_of(a));
+
+    @print("find {} missing {}\n", t.find("fn"),
+           yesno(t.find("nope") == intern.NONE));
+
+    // A name hashes the same every time, and two names do not collide here.
+    @print("hash steady {} apart {}\n", yesno(t.hash_of(a) == t.hash_of(again)),
+           yesno(t.hash_of(a) != t.hash_of(b)));
+
+    // The only way to see the text: copy it somewhere you own.
+    var buf: [8]u8 = undefined;
+    let n: usize = t.copy_into(a, buf[..]);
+    @print("copied {} {}\n", buf[0..n], n);
+    return;
+}
+
+fn yesno(b: bool) -> []u8 {
+    if b { return "yes"; }
+    return "no";
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() == sys.frees() { @print("balanced\n"); }
+    else { @print("leaked\n"); }
+    return 0;
+}

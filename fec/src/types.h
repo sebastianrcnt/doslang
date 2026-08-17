@@ -103,6 +103,10 @@ struct FeType {
        marker made a struct in the middle of the first look complete to the
        second -- one byte wide, with every field on top of the next. */
     int layout_state;
+    /* Set while a generic instance is being filled in. Its field array
+       exists but says nothing yet, and a size taken from it would be
+       wrong and would then be frozen. */
+    int building;
 };
 
 typedef struct FeTypeCtx {

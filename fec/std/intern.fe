@@ -1,0 +1,131 @@
+unit std.intern;
+
+import std.map;
+import std.mem;
+
+// One copy of every distinct name, and a number that stands for it.
+//
+// A compiler compares names constantly and stores them everywhere. Comparing
+// two `StrId` is comparing two integers; storing one costs four bytes and no
+// ownership. That is the whole point.
+//
+// There is deliberately no way to get a `str` back out. A borrow of the text
+// would be a borrow of the interner, and the interner is exactly the thing you
+// want to keep adding to while holding names -- the parser reads an identifier
+// and registers the next one in the same breath. Everything you would open the
+// text for is here instead: compare it, measure it, hash it, write it.
+
+/// A name, as a number. Copy, four bytes, and meaningless to any other
+/// interner -- which is fine, because a program has one.
+pub struct StrId {
+    pub raw: u32,
+
+    pub fn same(self: &Self, other: StrId) -> bool {
+        return self.raw == other.raw;
+    }
+}
+
+/// No name.
+pub const NONE: u32 = 4294967295;
+
+struct Entry {
+    at: usize,
+    len: usize,
+}
+
+pub struct Interner {
+    /// Every name end to end. Nothing is ever removed, so an offset stays
+    /// good for as long as the interner does.
+    bytes: ^[]mut u8,
+    used: usize,
+    names: ^[]mut Entry,
+    count: usize,
+    /// Text to id, so interning the same name twice gives the same number.
+    seen: map.Map(u32),
+
+    pub fn with_capacity(n: usize) -> !Self {
+        let text: ^[]mut u8 = try mem.alloc_slice(u8, n * 8);
+        let table: ^[]mut Entry = try mem.alloc_slice(Entry, n);
+        let index: map.Map(u32) = try map.Map(u32).with_capacity(n);
+        return Self{ bytes: text, used: 0, names: table, count: 0,
+                     seen: index };
+    }
+
+    pub fn count_of(self: &Self) -> usize { return self.count; }
+
+    /// The number for this name, making one if it is new.
+    pub fn intern(self: &mut Self, text: []u8) -> !StrId {
+        let found: u32 = self.seen.get(text, NONE);
+        if found != NONE { return StrId{ raw: found }; }
+        if self.count == self.names.^.n { return error.OutOfMemory; }
+        let at: usize = self.used;
+        if at + text.n > self.bytes.^.n { return error.OutOfMemory; }
+        var i: usize = 0;
+        while i < text.n {
+            self.bytes.^[at + i] = text[i];
+            i = i + 1;
+        }
+        let id: usize = self.count;
+        self.names.^[id].at = at;
+        self.names.^[id].len = text.n;
+        self.used = at + text.n;
+        self.count = id + 1;
+        try self.seen.put(text, id as u32);
+        return StrId{ raw: id as u32 };
+    }
+
+    /// Is this a name it has seen? `NONE` when not.
+    pub fn find(self: &Self, text: []u8) -> u32 {
+        return self.seen.get(text, NONE);
+    }
+
+    pub fn len_of(self: &Self, id: StrId) -> usize {
+        if (id.raw as usize) >= self.count { return 0; }
+        return self.names.^[id.raw as usize].len;
+    }
+
+    /// Does this id spell this text? The comparison every `if name == "fn"`
+    /// in a parser turns into.
+    pub fn eq(self: &Self, id: StrId, text: []u8) -> bool {
+        if (id.raw as usize) >= self.count { return false; }
+        let e: usize = id.raw as usize;
+        if self.names.^[e].len != text.n { return false; }
+        var i: usize = 0;
+        while i < text.n {
+            if self.bytes.^[self.names.^[e].at + i] != text[i] { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    /// FNV-1a over the stored bytes, for anything that wants to bucket names
+    /// without opening them.
+    pub fn hash_of(self: &Self, id: StrId) -> u32 {
+        if (id.raw as usize) >= self.count { return 0; }
+        let e: usize = id.raw as usize;
+        var h: u32 = 2166136261;
+        var i: usize = 0;
+        while i < self.names.^[e].len {
+            h = h ^ (self.bytes.^[self.names.^[e].at + i] as u32);
+            h = h * 16777619;
+            i = i + 1;
+        }
+        return h;
+    }
+
+    /// Copy the name into `out` and say how many bytes it took. This is how a
+    /// name reaches a diagnostic without the interner being borrowed past the
+    /// statement.
+    pub fn copy_into(self: &Self, id: StrId, out: []mut u8) -> usize {
+        if (id.raw as usize) >= self.count { return 0; }
+        let e: usize = id.raw as usize;
+        var n: usize = self.names.^[e].len;
+        if n > out.n { n = out.n; }
+        var i: usize = 0;
+        while i < n {
+            out[i] = self.bytes.^[self.names.^[e].at + i];
+            i = i + 1;
+        }
+        return n;
+    }
+}

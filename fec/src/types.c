@@ -48,6 +48,7 @@ static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
     t->emit_state = 0;
     t->cycle_state = 0;
     t->layout_state = 0;
+    t->building = 0;
     ctx->types = t;
     return t;
 }
@@ -475,6 +476,28 @@ static void leave_decl_unit(FeTypeCtx *ctx, int back, const char *was)
     ctx->unit_name = was;
 }
 
+/* Did every field end up with a size? A struct whose members are not settled
+   cannot be settled either -- and freezing it here is worse than leaving it,
+   because nothing recomputes a type that already has a size. */
+static int members_ready(const FeType *t)
+{
+    unsigned i;
+    unsigned j;
+    if (t->kind == FE_TYPE_STRUCT) {
+        for (i = 0; i < t->field_count; ++i) {
+            if (!t->fields[i].type) return 0;
+            if (t->fields[i].type->layout_state != 2) return 0;
+        }
+        return 1;
+    }
+    for (i = 0; i < t->variant_count; ++i)
+        for (j = 0; j < t->variants[i].field_count; ++j) {
+            if (!t->variants[i].fields[j].type) return 0;
+            if (t->variants[i].fields[j].type->layout_state != 2) return 0;
+        }
+    return 1;
+}
+
 static void layout_type(FeTypeCtx *ctx, FeType *t)
 {
     unsigned i;
@@ -483,6 +506,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
     unsigned long max_size;
     unsigned max_align;
     if (!t || t->size) return;
+    if (t->building) return;
     if (t->layout_state == 1) {
         t->size = 1;
         t->align = 1;
@@ -562,6 +586,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             t->fields[i].offset = off;
             off += fe_type_size(t->fields[i].type);
         }
+        if (!members_ready(t)) { t->layout_state = 0; return; }
         t->align = max_align;
         t->size = round_up(off, max_align);
         t->layout_state = 2;
@@ -594,6 +619,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             }
             if (off > max_size) max_size = off;
         }
+        if (!members_ready(t)) { t->layout_state = 0; return; }
         t->bits = t->variant_count > 256U ? 16U : 8U;
         off = round_up(t->bits / 8U, max_align);
         t->size = round_up(off + max_size, max_align);
@@ -605,7 +631,20 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
 void fe_type_layout_all(FeTypeCtx *ctx)
 {
     FeType *t;
-    for (t = ctx->types; t; t = t->next) layout_type(ctx, t);
+    int again = 1;
+    unsigned rounds = 0;
+    /* One pass settles a type only if everything under it is already settled,
+       so a type that had to wait is picked up by the next round. Sixteen is
+       far past any real nesting; it is here so a cycle cannot spin. */
+    while (again && rounds < 16U) {
+        again = 0;
+        for (t = ctx->types; t; t = t->next) {
+            if (t->size || t->layout_state == 2) continue;
+            layout_type(ctx, t);
+            if (t->layout_state == 2) again = 1;
+        }
+        ++rounds;
+    }
 }
 
 FeFieldType *fe_type_field(FeType *t, const char *name)

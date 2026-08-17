@@ -210,6 +210,7 @@ FeType *build_struct_instance(FeCheck *c, FeUnit *home, FeNode *decl,
     t=fe_type_intern_unit(&c->types,home->name,key);
     if (!t || t->kind!=FE_TYPE_UNKNOWN) return t;
     t->kind=FE_TYPE_STRUCT;
+    t->building=1;
     t->packed=(decl->flags & FE_NODE_PACKED)!=0;
     t->decl_node=decl;
     t->bind_count=0;
@@ -246,6 +247,7 @@ FeType *build_struct_instance(FeCheck *c, FeUnit *home, FeNode *decl,
         pop_bindings(c,&save);
         c->types.unit_name=save_unit;
     }
+    t->building=0;
     fe_type_layout_all(&c->types);
     /* A type that says how to let go of itself needs that method to exist for
        every instance, whether or not anyone calls it by name: scope cleanup
