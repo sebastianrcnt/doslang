@@ -371,6 +371,11 @@ FeType *check_expr_core(FeCheckerState *s, FeNode *n)
         } else if (strcmp(op, "-") == 0) {
             if (known(a) && !fe_type_is_integer(a))
                 err(c, n->loc, "unary '-' requires integer");
+        } else if (strcmp(op, "~") == 0) {
+            /* Flipping every bit only means something where the bits are the
+               value (SPEC 6.2). */
+            if (known(a) && !fe_type_is_integer(a))
+                err(c, n->loc, "unary '~' requires integer");
         } else if (strcmp(op, "try") == 0) {
             /* SPEC 6.4: try is only allowed inside a function returning an error
                union.  Checked on the expression rather than on the statement so

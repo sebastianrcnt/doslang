@@ -145,6 +145,7 @@ FeToken fe_lexer_next(FeLexer *l)
     case '&': if(cur(l)=='&'){advance(l);fe_diag_error(l->diags,here(l,line,col),"&& is not a Ferro logical operator; use 'and'");return tok(l,FE_TOK_UNKNOWN,start,line,col);} if(cur(l)=='='){advance(l);return tok(l,FE_TOK_AND_EQ,start,line,col);} return tok(l,FE_TOK_AND,start,line,col);
     case '|': if(cur(l)=='|'){advance(l);fe_diag_error(l->diags,here(l,line,col),"|| is not a Ferro logical operator; use 'or'");return tok(l,FE_TOK_UNKNOWN,start,line,col);} if(cur(l)=='='){advance(l);return tok(l,FE_TOK_OR_EQ,start,line,col);} return tok(l,FE_TOK_OR,start,line,col);
     case '^': if(cur(l)=='='){advance(l);return tok(l,FE_TOK_XOR_EQ,start,line,col);} return tok(l,FE_TOK_XOR,start,line,col);
+    case '~': return tok(l,FE_TOK_TILDE,start,line,col);
     default: fe_diag_error(l->diags,here(l,line,col),"unknown character"); return tok(l,FE_TOK_UNKNOWN,start,line,col);
     }
 }
@@ -162,6 +163,7 @@ const char *fe_token_name(FeTokKind k)
     case FE_TOK_TRUE:return "true"; case FE_TOK_FALSE:return "false"; case FE_TOK_NULL:return "null";
     case FE_TOK_UNDEFINED:return "undefined"; case FE_TOK_AND_KW:return "and"; case FE_TOK_OR_KW:return "or";
     case FE_TOK_NOT:return "not"; case FE_TOK_BANG:return "!";
+    case FE_TOK_TILDE:return "~";
     case FE_TOK_LBRACE:return "{"; case FE_TOK_RBRACE:return "}"; case FE_TOK_LPAREN:return "("; case FE_TOK_RPAREN:return ")";
     case FE_TOK_SEMI:return ";"; case FE_TOK_COLON:return ":"; case FE_TOK_COMMA:return ",";
     case FE_TOK_EQ:return "="; case FE_TOK_ARROW:return "->"; case FE_TOK_FATARROW:return "=>";

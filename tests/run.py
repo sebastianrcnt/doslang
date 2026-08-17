@@ -82,6 +82,10 @@ def run_case(fec: Path, path: Path) -> tuple[bool, str]:
                            f"--std={ROOT / 'fec'}"],
                           capture_output=True, text=True, timeout=30)
     output = (done.stdout + done.stderr).strip()
+    # Diagnostics go to the diag stream. `--dump-ast` also writes the tree to
+    # stdout, so a marker matched against the two together would read the tree
+    # and never reach the error.
+    diags = done.stderr.strip() or output
     rejected = done.returncode != 0
 
     if want.rejected != rejected:
@@ -96,13 +100,13 @@ def run_case(fec: Path, path: Path) -> tuple[bool, str]:
         return True, ""
     # The marker pins where and roughly what, so a rule can be moved or reworded
     # only deliberately.
-    first = output.split("\n", 1)[0] if output else ""
+    first = diags.split("\n", 1)[0] if diags else ""
     at = re.search(r":(\d+):\d+: error:", first)
     if not at:
         return False, f"no diagnostic to match marker\n  got: {first or '(silent)'}"
     if int(at.group(1)) != want.line:
         return False, f"marker says line {want.line}, diagnostic is line {at.group(1)}\n  {first}"
-    if want.text and want.text.lower() not in output.lower():
+    if want.text and want.text.lower() not in diags.lower():
         return False, f"marker wants {want.text!r}\n  {first}"
     return True, ""
 

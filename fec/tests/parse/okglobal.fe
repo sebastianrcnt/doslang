@@ -1,0 +1,8 @@
+unit okglobal;
+
+// `const` 는 여전히 추론한다 -- SPEC §6.1 이 타입을 요구하는 것은 전역 둘뿐이다.
+const A = 1;
+static B: i32 = 2;
+var C: i32 = 3;
+
+error E { Bad = 1, Worse = 0x10, }

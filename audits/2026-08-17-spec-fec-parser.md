@@ -3,6 +3,8 @@
 - 날짜: 2026-08-17
 - 기준 커밋: `52aaff62e490e37a0995aaaf7cbda47cf98e54a7`
 - 범위: `SPEC.md` §6과 `fec/src/lexer.c`, `fec/src/parser.c`
+- **해결: 일곱 전부. 구현 셋(PARSE-04a·05·06), SPEC 다섯(01·02·03·04b·07).**
+  판정과 근거는 아래 표에 덧붙였다. 본문은 조사 시점 그대로다.
 
 ## 현재 문제
 
@@ -15,6 +17,23 @@
 | PARSE-05 | 전역 `static`과 `var`의 타입 필수 | 타입 표기를 선택적으로 처리하고 초기값에서 추론 | `static A = 1;`, `var B = 2;` 모두 검사 통과 |
 | PARSE-06 | error code는 정수 literal | 일반 expression을 파싱하며 literal이 아니면 code 검증을 건너뜀 | `error E { Bad = 1 + 2, }`가 검사 통과 |
 | PARSE-07 | struct field와 enum vfield의 쉼표 필수 | 닫는 `}` 바로 앞에서는 쉼표 생략 허용 | `struct S { x: i32 }`가 검사 통과 |
+
+## 해결
+
+| ID | 어느 쪽이 틀렸나 | 무엇을 했나 |
+|---|---|---|
+| PARSE-01 | SPEC | comptime 조건은 타입 술어뿐이라(§7.5) 유닛 바깥에는 물어볼 것이 없다. `comptime_decl` 을 `decl` 에서 빼고 §11 v0.2 로 |
+| PARSE-02 | SPEC | `import` 는 unit path 의 마지막 segment 를 바인딩하므로 점 둘 이상인 타입 이름은 만들어질 수 없다. 문법을 `type_name := [ident '.'] ident` 로 |
+| PARSE-03 | SPEC | §4.6 과 §11(블록 표현식 배제)이 실제 규칙이고 EBNF 가 넓었다. 두 형태로 나눠 적었다 |
+| PARSE-04a | 구현 | `~` 를 넣었다. 렉서·파서·검사·lowering(`xor` with all ones) |
+| PARSE-04b | SPEC | `\|` 와 `^` 를 한 단계로 두면 `a \| b ^ c` 가 `(a\|b)^c` 가 되어 C 에서 온 사람을 속인다. 구현(C 순서)이 옳아서 표를 쪼갰다 |
+| PARSE-05 | 구현 | 전역 `static`/`var` 는 타입 필수. `const` 는 그대로 추론 |
+| PARSE-06 | 구현 | error code 는 정수 리터럴 하나만 받는다 |
+| PARSE-07 | SPEC | 마지막 쉼표 생략은 흔하고 `enum` 은 이미 허용하고 있었다. 명세에 적었다 |
+
+fixture: `parse/badgtype.fe`, `parse/badecode.fe`, `parse/okglobal.fe`,
+`exec/bitnot.fe`. 그리고 `tests/run.py` 가 마커를 진단 스트림에만 맞춘다 --
+`--dump-ast` 모드에서 AST 덤프가 먼저 나와 마커가 못 쓰이고 있었다.
 
 ## 검증
 

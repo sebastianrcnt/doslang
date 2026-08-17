@@ -1,0 +1,6 @@
+// ERROR:6:requires an explicit type
+unit badgtype;
+
+// SPEC §6.1: 전역은 타입을 적는다. 다른 유닛이 읽는 링커 심볼이라
+// 초기값의 생김새에 타입을 맡기면 그쪽이 보는 것이 달라진다.
+static A = 1;

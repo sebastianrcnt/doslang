@@ -117,6 +117,13 @@ Slot lower_expr_core(Lower *L, FeNode *n)
             return slot_value(fe_ir_binary(L->m, L->b, FE_IR_SUB, it, zero, v,
                                            0), it);
         }
+        if (n->text && !strcmp(n->text, "~")) {
+            /* Every bit flipped is every bit exchanged with a one. */
+            unsigned ones = fe_ir_const(L->m, L->b, it, -1L);
+            unsigned v = as_value(L, lower_expr(L, n->a), n->a);
+            return slot_value(fe_ir_binary(L->m, L->b, FE_IR_XOR, it, v, ones,
+                                           0), it);
+        }
         if (n->text && !strcmp(n->text, "not")) {
             unsigned zero = fe_ir_const(L->m, L->b, FE_IR_I8, 0);
             unsigned v = as_value(L, lower_expr(L, n->a), n->a);

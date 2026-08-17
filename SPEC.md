@@ -333,20 +333,21 @@ unit_path   := ident ('.' ident)*
 import      := 'import' unit_path ['as' ident] ';'
 
 decl        := ['pub'] (fn_decl | struct_decl | enum_decl | error_decl
-                       | const_decl | global_decl) | comptime_decl
-comptime_decl := 'comptime' 'if' expr '{' decl* '}' ['else' ('{' decl* '}' | comptime_decl)]
+                       | const_decl | global_decl)
 
 fn_decl     := ['extern' string] 'fn' ident
                '(' [param (',' param)*] ')' ['->' type] (block | ';')
 param       := ['comptime'] ident ':' type
 generic_params := '(' ident (',' ident)* ')'
 struct_decl := ['packed'] 'struct' ident [generic_params] '{' member* '}'
+             // field의 마지막 쉼표는 '}' 바로 앞에서 생략할 수 있다
 member      := ['pub'] (field | fn_decl)
 field       := ident ':' type ','
 enum_decl   := 'enum' ident [generic_params] '{' variant (',' variant)* [','] '}'
 variant     := ident | ident '(' type ')' | ident '{' vfield* '}'
 vfield      := ident ':' type ','
-error_decl  := 'error' ident '{' ident '=' int (',' ident '=' int)* [','] '}'
+error_decl  := 'error' ident '{' ident '=' int_literal
+                              (',' ident '=' int_literal)* [','] '}'
 const_decl  := 'const' ident [':' type] '=' expr ';'
 global_decl := 'static' ident ':' type '=' expr ';'
              | 'var' ident ':' type '=' expr ';'
@@ -378,21 +379,30 @@ pattern     := ident                      // 배리언트, 페이로드 없음
              | 'Some' '(' ident ')' | 'None'
              | int_literal | char_literal | 'true' | 'false' | '_'
 
-qualified_name := ident ('.' ident)*
-type        := qualified_name
-             | '?' type | '!' type | qualified_name '!' type
+type_name   := [ident '.'] ident   // [binding '.'] Name
+type        := type_name
+             | '?' type | '!' type | type_name '!' type
              | '^' type | '&' ['mut'] type | '*' type
              | '[' expr ']' type | '[' ']' ['mut'] type
              | 'fn' '(' [type (',' type)*] ')' ['->' type]
-             | qualified_name '(' type (',' type)* ')' // 제네릭 인스턴스
+             | type_name '(' type (',' type)* ')' // 제네릭 인스턴스
 
-catch_expr  := expr 'catch' ['|' ident '|'] (expr | block)
+catch_expr  := expr 'catch' expr | expr 'catch' '|' ident '|' block
 orelse_expr := expr 'orelse' expr
 ```
 
 `member`의 `pub`은 필드와 메서드 모두에 개별로 붙는다(§8). 필드와 메서드는 순서를
-섞어 쓸 수 있다. `catch`의 블록 형태는 값을 만들지 않으며 §4.6의 규칙을 따른다.
-`unit_path` segment의 lexical 제한과 source path 대응은 §8.1이 규정한다.
+섞어 쓸 수 있다. `catch`의 두 형태는 서로 다른 일을 한다: 값을 주는 짧은 형태와,
+에러를 받아 빠져나가는 블록 형태다. 블록은 값을 만들지 않으므로(§11) 바인딩이
+있는 쪽만 블록을 받는다(§4.6). `unit_path` segment의 lexical 제한과 source path
+대응은 §8.1이 규정한다.
+
+타입 이름은 `[binding '.'] Name`이다. `import`는 unit path의 **마지막 segment**를
+바인딩하므로(§8.2) 점이 둘 이상인 타입 이름은 만들어질 수 없다. `unit_path`
+자체는 `import`와 `unit` 선언에서만 쓴다.
+
+전역 `static`/`var`는 타입을 적는다. 다른 유닛이 읽는 링커 심볼이라 초기값의
+생김새에 타입을 맡기면 그쪽이 보는 것이 달라진다. `const`는 추론한다.
 
 ### 6.2 표현식 우선순위 (낮음 → 높음)
 
@@ -405,20 +415,23 @@ orelse_expr := expr 'orelse' expr
 2  or
 3  and
 4  == != < <= > >=
-5  | ^
-6  &
-7  << >>
-8  + - +% -%
-9  * / % *%
-10 단항: - not ~ & &mut try
-11 후위: .field  .?  .^  [i]  [a..b]  (args)  as T
-12 기본: literal, ident, '(' expr ')', struct_literal, @builtin(...)
+5  |
+6  ^
+7  &
+8  << >>
+9  + - +% -%
+10 * / % *%
+11 단항: - not ~ & &mut try
+12 후위: .field  .?  .^  [i]  [a..b]  (args)  as T
+13 기본: literal, ident, '(' expr ')', struct_literal, @builtin(...)
 ```
 
 - `and`, `or`는 단축 평가한다. 좌변이 답을 정하면 우변을 평가하지 않는다.
 - `orelse`와 `catch`도 lazy다. 좌변이 각각 `Some`/success이면 우변 또는 handler를
   평가하지 않는다(§4.5·§4.6).
 - `as`는 후위 우선순위(단항보다 강함)지만 단항 연산자 바로 뒤에 `as`가 나타나면 모호한 비용을 숨기지 않도록 괄호를 강제한다. `(-x) as u32`와 `-(x as u32)`는 허용하고 `-x as u32`는 컴파일 에러다.
+- `|`, `^`, `&`는 서로 다른 단계다. C와 같은 순서이며, 한 단계로 합치면
+  `a | b ^ c`가 좌결합으로 `(a | b) ^ c`가 되어 C에서 온 사람을 속인다.
 - `..`는 일반 표현식 연산자가 아니며 `for` 헤더에서만 쓸 수 있다.
 - 비교 연산 체이닝 금지(`a < b < c`는 에러).
 - `.field`, `[i]`, `[a..b]`, 메서드 호출은 `&`, `&mut`, `^`를 필요한 만큼 자동 projection한다. 값 자체의 역참조는 `.^`가 필요하며 raw `*T`와 optional `?T`는 자동 역참조하지 않는다.
@@ -791,6 +804,7 @@ binding은 마지막 segment라 `io.write`, `mem.replace` 형태로 사용한다
 | GC | 영구 | 결정적 비용 원칙 위반 | 소유권 + RAII + 아레나 |
 | 암묵 형변환 | 영구 | 버그 원인 1위 | `as` |
 | 상속 | 영구 | 숨은 vtable, 취약한 기반 클래스 | 합성 |
+| 최상위 `comptime if` | v0.2 | 타깃이 하나이고 comptime 조건은 타입 술어뿐이라(§7.5) 유닛 바깥에는 물어볼 것이 없다 | 함수 안의 `comptime if`, 또는 유닛을 나눈다 |
 
 ### 11.1 인터페이스 설계 스케치 (v0.2 예정)
 

@@ -1,0 +1,37 @@
+// EXIT:0
+// OUTPUT:i32 -1 -6 4
+// OUTPUT:u8 255 250
+// OUTPUT:mask 240 15
+// OUTPUT:prec 7 3
+unit bitnot;
+
+import std.io;
+
+// `~` flips every bit (SPEC §6.2, 단항). `^` is taken by xor and by `.^`, so
+// bitwise NOT needs its own spelling.
+//
+// `|`, `^` and `&` are three different levels, in C's order. Merging `|` and
+// `^` would make `a | b ^ c` bind as `(a | b) ^ c`, which is not what anyone
+// coming from C reads it as.
+
+fn main() -> i32 {
+    let a: i32 = 0;
+    let b: i32 = 5;
+    let c: i32 = -5;
+    @print("i32 {} {} {}\n", ~a, ~b, ~c);
+
+    let u: u8 = 0;
+    let v: u8 = 5;
+    @print("u8 {} {}\n", (~u) as i32, (~v) as i32);
+
+    // Clearing bits is what the operator is for.
+    let bits: u8 = 255;
+    let low: u8 = 15;
+    @print("mask {} {}\n", (bits & ~low) as i32, (bits & low) as i32);
+
+    // 1 | 2 ^ 4  is  1 | (2 ^ 4) = 1 | 6 = 7, not (1 | 2) ^ 4 = 3 ^ 4 = 7.
+    // Those agree, so pick operands that do not: 3 | 1 ^ 2 is 3 | 3 = 3,
+    // while (3 | 1) ^ 2 would be 3 ^ 2 = 1. The 3 is the proof.
+    @print("prec {} {}\n", 1 | 2 ^ 4, 3 | 1 ^ 2);
+    return 0;
+}

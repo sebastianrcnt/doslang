@@ -1,0 +1,5 @@
+// ERROR:5:integer literal
+unit badecode;
+
+// SPEC §6.1: error code 는 정수 리터럴이다. 식이면 중복도 예약된 0 도 검사할 수 없다.
+error E { Bad = 1 + 2, }
