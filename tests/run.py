@@ -34,7 +34,7 @@ FIXTURES = ROOT / "fec" / "tests"
 WATCOM = ROOT / ".dosboxx" / "watcom"
 SOURCES = ("arena", "diag", "lexer", "ast", "parser", "types", "m7", "own",
            "check", "checkexp", "checkstm", "checkgen", "checkcal", "checkpro",
-           "resolve", "ir", "lower", "lowerprn", "lowerexp", "lowerstm", "x86", "driver")
+           "resolve", "ir", "lower", "lowerprn", "lowerexp", "lowerstm", "x86", "report", "driver")
 
 MARKER = re.compile(r"^//\s*ERROR:(?:(\d+):)?(.*)$")
 
@@ -132,7 +132,40 @@ def main() -> int:
     marked = sum(1 for p in cases if expectation(p).line is not None)
     print(f"\n{len(cases) - len(failed)}/{len(cases)} passed "
           f"({marked} pin a line and message)")
+    if not args.select:
+        leak = unsafe_budget(fec)
+        if leak:
+            print(leak)
+            return 1
     return 1 if failed else 0
+
+
+# The programs the budget is measured on: the Ferro front end, and the ones
+# that lean hardest on the standard library.
+BUDGETED = ("exec/lexer/tree.fe", "exec/interns.fe", "exec/arenat.fe",
+            "exec/maps.fe", "exec/wordfreq.fe")
+
+
+def unsafe_budget(fec: Path) -> str:
+    """`unsafe` and `*T` belong to std.mem and std.sys. Anywhere else they are
+    a hole in what the checker promises, so the count outside std has to stay
+    at zero and a regression has to fail the build rather than be noticed."""
+    for rel in BUDGETED:
+        path = FIXTURES / rel
+        if not path.is_file():
+            return f"budget: {rel} is gone"
+        done = subprocess.run([str(fec), "--report-unsafe", str(path),
+                               f"--std={ROOT / 'fec'}"],
+                              capture_output=True, text=True)
+        line = [l for l in done.stdout.splitlines()
+                if l.startswith("outside std")]
+        if not line:
+            return f"budget: no report for {rel}\n{done.stdout}{done.stderr}"
+        counts = line[0].split()[2:]
+        if any(c != "0" for c in counts):
+            return (f"budget: {rel} has unsafe/raw pointers outside std: "
+                    f"{line[0]}")
+    return ""
 
 
 if __name__ == "__main__":

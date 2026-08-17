@@ -3,6 +3,7 @@
 #include "resolve.h"
 #include "lower.h"
 #include "x86.h"
+#include "report.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@ static char *read_file(const char *name, unsigned long *size)
 static void usage(void)
 {
     puts("usage: fec [--dump-tokens|--dump-ast|--check|--dump-ir|--emit-asm] file.fe [-o out.asm] [--std=dir] [--no-checks]");
+    puts("       fec [--report-unsafe|--report-instances] file.fe [--std=dir]");
 }
 
 static void dump_tokens(const char *src, unsigned long n, const char *file,
@@ -40,6 +42,7 @@ static void dump_tokens(const char *src, unsigned long n, const char *file,
 int main(int argc, char **argv)
 {
     int i,dump=0,dump_tok=0,check_only=0,no_checks=0,dump_ir=0,emit_asm=0;
+    int rep_unsafe=0,rep_inst=0;
     const char *file=0;
     const char *out_path=0;
     const char *std_root=0;
@@ -63,6 +66,8 @@ int main(int argc, char **argv)
         /* One target (SPEC 2), so --target= and --model= are gone: a flag
            that is accepted and does nothing is worse than one that is not
            accepted at all. */
+        else if(strcmp(argv[i],"--report-unsafe")==0) rep_unsafe=1;
+        else if(strcmp(argv[i],"--report-instances")==0) rep_inst=1;
         else if(strcmp(argv[i],"--strip-error-names")==0) { }
         else if(argv[i][0]!='-') file=argv[i];
         else if(strcmp(argv[i],"--help")==0){usage();return 0;}
@@ -103,6 +108,11 @@ int main(int argc, char **argv)
         if(ok){
             fe_check_init(&check,&build,&d,pointer_bits,no_checks);
             if(!fe_check_program(&check)) ok=0;
+            /* Reports describe the program that was checked, so they come
+               after checking and instead of code generation. */
+            if(rep_unsafe) fe_report_unsafe(&build,stdout);
+            if(rep_inst) fe_report_instances(&check,stdout);
+            if(rep_unsafe||rep_inst) { dump_ir=0; emit_asm=0; }
             if(ok && (dump_ir||emit_asm)){
                 FeIrModule ir;
                 fe_ir_module_init(&ir);
