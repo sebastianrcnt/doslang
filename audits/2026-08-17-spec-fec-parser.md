@@ -1,10 +1,14 @@
 # SPEC–fec parser audit
 
+Status: resolved
+Resolved-By: 730bcac
+
+일곱 전부. 구현 셋(PARSE-04a·05·06), SPEC 다섯(01·02·03·04b·07). 판정과 근거는
+아래 표에 덧붙였다. 본문은 조사 시점 그대로다.
+
 - 날짜: 2026-08-17
 - 기준 커밋: `52aaff62e490e37a0995aaaf7cbda47cf98e54a7`
 - 범위: `SPEC.md` §6과 `fec/src/lexer.c`, `fec/src/parser.c`
-- **해결: 일곱 전부. 구현 셋(PARSE-04a·05·06), SPEC 다섯(01·02·03·04b·07).**
-  판정과 근거는 아래 표에 덧붙였다. 본문은 조사 시점 그대로다.
 
 ## 현재 문제
 

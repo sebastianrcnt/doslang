@@ -1,10 +1,14 @@
 # Frontend gap audit
 
+Status: resolved
+Resolved-By: b4f947b
+
+11 건 전부와 `0b`/`0o` 리터럴까지. 모두 구현 쪽이었다. fixture 는 아래 표에
+적었다. 본문은 조사 시점 그대로다.
+
 - 날짜: 2026-08-17
 - 기준 커밋: `6dc298d828872409fdf6b7d2e85830f18a118d9f`
 - 범위: parser, checker, 전역 lowering의 경계
-- **해결: 11 건 전부와 `0b`/`0o` 리터럴까지. 모두 구현 쪽이었다.**
-  fixture 는 아래 표에 적었다. 본문은 조사 시점 그대로다.
 
 ## 재현된 문제
 
