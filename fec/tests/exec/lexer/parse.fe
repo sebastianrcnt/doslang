@@ -23,10 +23,8 @@ pub struct Parser {
     pub errors: usize,
 
     pub fn on(src: []u8) -> !Self {
-        let nodes: list.List(ast.Node) =
-            try list.List(ast.Node).with_capacity(16);
         var p: Self = Self{
-            nodes: nodes,
+            nodes: try list.List(ast.Node).with_capacity(16),
             at: 0,
             line: 1,
             cur: tok.Token{ kind: tok.Kind.End, from: 0, len: 0, line: 1 },

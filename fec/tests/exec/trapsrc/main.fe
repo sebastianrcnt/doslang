@@ -1,0 +1,20 @@
+// EXIT:3
+// OUTPUT:index out of bounds
+// OUTPUT:pick.fe:6
+// NOCHECKS:0
+unit main;
+
+import pick;
+
+// A build is many units in one module. A trap has to name the file the check
+// was written in, not the file the program was started from.
+
+const S: str = "abc";
+
+fn main() -> i32 {
+    let c: u8 = pick.at(S, 9);
+    // Without the checks the read runs off the end and `c` is whatever
+    // was there, so nothing is decided by its value.
+    if c == 0 { return 0; }
+    return 0;
+}

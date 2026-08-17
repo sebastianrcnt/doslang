@@ -4,6 +4,9 @@
 #include "arena.h"
 #include <stdio.h>
 
+/* How many source files one build can trap from. */
+#define FE_IR_FILE_MAX 64
+
 /* The intermediate representation. `IR.md` is the description; this is the
    shape it takes in memory.
 
@@ -88,6 +91,7 @@ typedef struct FeIrBlock {
     int has_ret_value;
     FeIrTrap trap;
     unsigned long trap_line;
+    unsigned trap_file;      /* index into the module's file table */
     /* Set once a terminator is chosen. Lowering asks before appending a
        jump, so a `return` inside a branch is not overwritten by the jump
        to the join block. */
@@ -142,7 +146,10 @@ typedef struct FeIrGlobal {
 
 typedef struct FeIrModule {
     FeArena arena;
-    const char *unit_file;   /* the one file-name string a unit's traps share */
+    /* Every unit in the build lands in one module, so a trap has to say which
+       file it came from rather than share one name with the whole program. */
+    const char *files[FE_IR_FILE_MAX];
+    unsigned file_count;
     /* The entry unit's `main`, if it has one. The runtime's start stub
        calls a fixed name, so the generator emits a jump to this one. */
     const char *entry_main;
@@ -152,6 +159,7 @@ typedef struct FeIrModule {
     FeIrGlobal *last_global;
 } FeIrModule;
 
+unsigned fe_ir_file(FeIrModule *m, const char *path);
 void fe_ir_module_init(FeIrModule *m);
 void fe_ir_module_destroy(FeIrModule *m);
 
@@ -198,7 +206,8 @@ void     fe_ir_copy(FeIrModule *m, FeIrBlock *b, FeIrPlace dst, FeIrPlace src,
 void fe_ir_jmp(FeIrBlock *b, unsigned target);
 void fe_ir_br(FeIrBlock *b, unsigned cond, unsigned t, unsigned f);
 void fe_ir_ret(FeIrBlock *b, unsigned value, int has_value);
-void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, unsigned long line);
+void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, unsigned long line,
+                unsigned file);
 
 void fe_ir_dump(const FeIrModule *m, FILE *out);
 const char *fe_ir_type_name(FeIrType t);

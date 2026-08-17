@@ -199,6 +199,13 @@ FeIrBlock *new_block(Lower *L)
     return fe_ir_block(L->m, L->fn);
 }
 
+/* Which file a trap raised right now came from. The whole build lowers into
+   one module, so the unit being lowered is the only thing that knows. */
+unsigned trap_file(Lower *L)
+{
+    return fe_ir_file(L->m, L->c->unit ? L->c->unit->path : "");
+}
+
 /* A check that must hold. `ok` is a condition; when it is false the program
    stops where it is. `--no-checks` removes the comparison and the branch, not
    just the message, which is the whole point of the flag. */
@@ -208,7 +215,7 @@ void guard(Lower *L, unsigned ok, FeIrTrap reason, unsigned long line)
     FeIrBlock *cont = new_block(L);
     fe_ir_br(L->b, ok, cont->id, bad->id);
     L->b = bad;
-    fe_ir_trap(L->b, reason, line);
+    fe_ir_trap(L->b, reason, line, trap_file(L));
     L->b = cont;
 }
 
@@ -403,13 +410,13 @@ int lower_builtin(Lower *L, FeNode *n, Slot *out)
     const char *name = n->text;
     if (!name || name[0] != '@') return 0;
     if (!strcmp(name, "@trap")) {
-        fe_ir_trap(L->b, FE_TRAP_EXPLICIT, n->loc.line);
+        fe_ir_trap(L->b, FE_TRAP_EXPLICIT, n->loc.line, trap_file(L));
         L->b = new_block(L);
         *out = slot_void();
         return 1;
     }
     if (!strcmp(name, "@unreachable")) {
-        fe_ir_trap(L->b, FE_TRAP_UNREACHABLE, n->loc.line);
+        fe_ir_trap(L->b, FE_TRAP_UNREACHABLE, n->loc.line, trap_file(L));
         L->b = new_block(L);
         *out = slot_void();
         return 1;

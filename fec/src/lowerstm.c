@@ -631,7 +631,6 @@ int fe_lower_program(FeCheck *c, FeIrModule *out)
         c->ast = &unit->ast;
         c->unit = unit;
         c->types.unit_name = unit->name[0] ? unit->name : "unit";
-        if (!out->unit_file || !out->unit_file[0]) out->unit_file = unit->path;
         for (n = unit->ast.root ? unit->ast.root->children : 0; n; n = n->next)
             if (n->kind == FE_N_GLOBAL || n->kind == FE_N_CONST)
                 lower_global(&L, n);

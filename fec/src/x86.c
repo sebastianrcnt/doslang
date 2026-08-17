@@ -548,7 +548,8 @@ static void emit_func(const FeIrModule *m, const FeIrFunc *f, FILE *out)
             break;
         case FE_IR_TRAP:
             fprintf(out, "        push    %lu\n", b->trap_line);
-            fprintf(out, "        push    offset FE_UNIT_FILE\n");
+            fprintf(out, "        push    offset FE_FILE_%u\n",
+                    b->trap_file);
             fprintf(out, "        push    %u\n", (unsigned)b->trap);
             fprintf(out, "        call    fe_trap\n");
             fprintf(out, "        add     esp, 12\n");
@@ -587,6 +588,7 @@ void fe_x86_emit(const FeIrModule *m, FILE *out)
     const FeIrGlobal *g;
     int any_trap = 0;
     const FeIrBlock *b;
+    unsigned i;
 
     for (f = m->funcs; f && !any_trap; f = f->next)
         for (b = f->first; b; b = b->next)
@@ -623,9 +625,12 @@ void fe_x86_emit(const FeIrModule *m, FILE *out)
     if (any_trap) fputs("extern fe_trap : near\n", out);
 
     fputs("\n_DATA segment dword public 'DATA'\n", out);
-    if (any_trap) {
-        fputs("public FE_UNIT_FILE\nFE_UNIT_FILE label byte\n", out);
-        emit_string(m->unit_file, out);
+    /* One name per file a trap can come from. A build is many units in
+       one module, and a trap that names the wrong file is worse than
+       one that names none. */
+    for (i = 0; i < m->file_count; ++i) {
+        fprintf(out, "public FE_FILE_%u\nFE_FILE_%u label byte\n", i, i);
+        emit_string(m->files[i], out);
     }
     for (g = m->globals; g; g = g->next) {
         unsigned long i;

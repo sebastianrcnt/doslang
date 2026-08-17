@@ -1,0 +1,7 @@
+unit pick;
+
+// The failing index is here, two units away from the program that runs it.
+
+pub fn at(s: []u8, i: usize) -> u8 {
+    return s[i];
+}

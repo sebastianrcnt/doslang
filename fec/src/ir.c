@@ -5,12 +5,26 @@
 void fe_ir_module_init(FeIrModule *m)
 {
     fe_arena_init(&m->arena, 16384);
-    m->unit_file = "";
+    m->file_count = 0;
     m->entry_main = 0;
     m->funcs = 0;
     m->last_func = 0;
     m->globals = 0;
     m->last_global = 0;
+}
+
+/* The index of this path in the module's file table, adding it if it is new.
+   Traps carry the index rather than the string so the generator emits each
+   name once. */
+unsigned fe_ir_file(FeIrModule *m, const char *path)
+{
+    unsigned i;
+    if (!path) path = "";
+    for (i = 0; i < m->file_count; ++i)
+        if (!strcmp(m->files[i], path)) return i;
+    if (m->file_count >= FE_IR_FILE_MAX) return 0;
+    m->files[m->file_count] = path;
+    return m->file_count++;
 }
 
 void fe_ir_module_destroy(FeIrModule *m)
@@ -301,13 +315,15 @@ void fe_ir_ret(FeIrBlock *b, unsigned value, int has_value)
     b->has_ret_value = has_value;
 }
 
-void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, unsigned long line)
+void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, unsigned long line,
+                unsigned file)
 {
     if (b->terminated) return;
     b->terminated = 1;
     b->term = FE_IR_TRAP;
     b->trap = reason;
     b->trap_line = line;
+    b->trap_file = file;
 }
 
 const char *fe_ir_type_name(FeIrType t)
@@ -432,8 +448,8 @@ void fe_ir_dump(const FeIrModule *m, FILE *out)
     const FeIrValue *v;
     const FeIrGlobal *g;
     unsigned i;
-    if (m->unit_file && m->unit_file[0])
-        fprintf(out, "; unit file %s\n", m->unit_file);
+    for (i = 0; i < m->file_count; ++i)
+        fprintf(out, "; file %u %s\n", i, m->files[i]);
     for (g = m->globals; g; g = g->next)
         fprintf(out, "global @%s : %s %lu\n", g->name,
                 fe_ir_type_name(g->type), g->size);

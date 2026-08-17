@@ -121,6 +121,7 @@ unsigned declare_var(Lower *L, const char *cname, const FeType *t,
 int release_flag(Lower *L, unsigned local, unsigned *flag);
 LowerVar *find_var(Lower *L, const char *cname);
 FeIrBlock *new_block(Lower *L);
+unsigned trap_file(Lower *L);
 void guard(Lower *L, unsigned ok, FeIrTrap reason, unsigned long line);
 FeIrType tag_type(const FeType *t);
 int uses_niche(const FeType *t);
