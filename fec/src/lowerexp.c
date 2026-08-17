@@ -151,9 +151,15 @@ Slot lower_expr_core(Lower *L, FeNode *n)
             return slot_place(fe_ir_at_temp(p, 0), it, ir_size(t));
         }
         /* `.n` is how many elements there are, which an array knows at
-           compile time and a slice carries beside its pointer. */
-        if (n->b && n->b->text && !strcmp(n->b->text, "n")) {
-            FeType *bt = n->a ? n->a->sem_type : 0;
+           compile time and a slice carries beside its pointer. Only for those:
+           a struct is free to have a field called `n`, and reading it as a
+           length would quietly hand back the wrong four bytes. */
+        if (n->b && n->b->text && !strcmp(n->b->text, "n") &&
+            n->a && n->a->sem_type &&
+            (n->a->sem_type->kind == FE_TYPE_ARRAY ||
+             n->a->sem_type->kind == FE_TYPE_SLICE ||
+             n->a->sem_type->kind == FE_TYPE_STR)) {
+            FeType *bt = n->a->sem_type;
             Slot base;
             if (bt && bt->kind == FE_TYPE_ARRAY)
                 return slot_value(fe_ir_const(L->m, L->b, FE_IR_I32,

@@ -1,0 +1,49 @@
+// EXIT:0
+// OUTPUT:n 777 m 999
+// OUTPUT:len 12 first 7
+// OUTPUT:count 3
+// OUTPUT:balanced
+unit fieldn;
+
+import std.io;
+import std.sys;
+import std.mem;
+
+// `.n` on a slice is its length. On a struct it is whatever field is called
+// `n` -- and a struct is allowed to call a field that. Reading one as the
+// other hands back the four bytes beside the pointer, which is a plausible
+// number and so goes unnoticed.
+
+struct Box {
+    room: ^[]mut u8,
+    n: usize,
+    m: usize,
+}
+
+struct Counter {
+    n: usize,
+
+    fn bump(self: &mut Self) -> void { self.n = self.n + 1; return; }
+}
+
+fn run() -> !void {
+    let r: ^[]mut u8 = try mem.alloc_slice(u8, 12);
+    r.^[0] = 7;
+    let b: Box = Box{ room: r, n: 777, m: 999 };
+    @print("n {} m {}\n", b.n, b.m);
+    // The slice beside it still answers with its length.
+    @print("len {} first {}\n", b.room.^.n, b.room.^[0]);
+    var c: Counter = Counter{ n: 0 };
+    c.bump();
+    c.bump();
+    c.bump();
+    @print("count {}\n", c.n);
+    return;
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() == sys.frees() { @print("balanced\n"); }
+    else { @print("leaked\n"); }
+    return 0;
+}
