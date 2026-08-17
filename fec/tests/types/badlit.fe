@@ -1,0 +1,10 @@
+// ERROR:8:integer literal out of range
+unit badlit;
+
+// SPEC 4.1: an integer literal takes the type its context asks for. 300 is not
+// a u8, and truncating it silently is the one thing that must not happen.
+
+fn bad() -> u8 {
+    let n: u8 = 300;
+    return n;
+}

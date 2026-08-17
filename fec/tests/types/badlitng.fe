@@ -1,0 +1,8 @@
+// ERROR:6:integer literal out of range
+unit badlitng;
+
+// An unsigned type has no negative values to truncate to.
+fn bad() -> u8 {
+    let n: u8 = -1;
+    return n;
+}

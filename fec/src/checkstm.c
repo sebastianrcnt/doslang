@@ -549,6 +549,62 @@ int m7_actual_compatible(FeType *want, FeType *got, FeNode *value)
     return compatible(want,got,value);
 }
 
+/* The magnitude an integer literal spells, ignoring any sign. The same shape
+   lowering uses on the same text, so the two cannot disagree about what was
+   written. */
+static unsigned long literal_magnitude(const char *s)
+{
+    unsigned long v = 0;
+    if (!s) return 0;
+    if (s[0]=='0' && (s[1]=='x' || s[1]=='X')) {
+        for (s += 2; *s; ++s) {
+            int d = *s>='0'&&*s<='9' ? *s-'0' :
+                    *s>='a'&&*s<='f' ? *s-'a'+10 :
+                    *s>='A'&&*s<='F' ? *s-'A'+10 : -1;
+            if (d < 0) { if (*s=='_') continue; break; }
+            v = v*16UL + (unsigned long)d;
+        }
+        return v;
+    }
+    for (; *s; ++s) {
+        if (*s=='_') continue;
+        if (*s<'0' || *s>'9') break;
+        v = v*10UL + (unsigned long)(*s-'0');
+    }
+    return v;
+}
+
+/* SPEC 4.1: an integer literal takes the type its context asks for, and a
+   value that does not fit that type is a mistake where it is written rather
+   than a truncation nobody sees. */
+static int literal_fits(const FeType *want, const char *text, int negative)
+{
+    unsigned long v;
+    unsigned long limit;
+    unsigned bits;
+    if (!want || want->kind != FE_TYPE_INT || !text) return 1;
+    bits = want->bits ? want->bits : 32U;
+    if (bits > 32U) bits = 32U;
+    v = literal_magnitude(text);
+    if (want->is_unsigned) {
+        if (negative) return v == 0UL;
+        if (bits >= 32U) return 1;
+        return v <= (1UL << bits) - 1UL;
+    }
+    limit = bits >= 32U ? 2147483647UL : (1UL << (bits - 1U)) - 1UL;
+    return v <= (negative ? limit + 1UL : limit);
+}
+
+/* Is this node a plain integer literal, rather than a character, a string, or
+   one of the word-shaped literals? */
+static int plain_int_literal(const FeNode *n)
+{
+    return n && n->kind==FE_N_LITERAL && n->text &&
+           n->text[0]!='\'' && n->text[0]!='"' &&
+           strcmp(n->text,"true") && strcmp(n->text,"false") &&
+           strcmp(n->text,"null") && strcmp(n->text,"undefined");
+}
+
 FeType *m7_check_expected(FeCheckerState *s, FeNode *value,
                                  FeType *expected)
 {
@@ -572,6 +628,21 @@ FeType *m7_check_expected(FeCheckerState *s, FeNode *value,
         value->sem_type=expected;
         value->sem_context=expected;
         return expected;
+    }
+    /* An integer literal is `i32` on its own; where an integer type is asked
+       for it is that type instead, and it has to fit in it. */
+    if (expected && expected->kind==FE_TYPE_INT) {
+        FeNode *lit = plain_int_literal(value) ? value :
+            (value->kind==FE_N_UNARY && value->text &&
+             !strcmp(value->text,"-") && plain_int_literal(value->a)
+             ? value->a : 0);
+        if (lit) {
+            if (!literal_fits(expected, lit->text, lit!=value))
+                err(s->c,value->loc,"integer literal out of range for its type");
+            lit->sem_type=expected;
+            value->sem_type=expected;
+            return expected;
+        }
     }
     actual=check_expr(s,value);
     if (!expected) return actual;

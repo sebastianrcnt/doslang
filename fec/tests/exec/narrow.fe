@@ -1,0 +1,32 @@
+// EXIT:0
+// OUTPUT:a 5 b 200 c 44 d 9
+// OUTPUT:e 5 f 1 g 65535
+// OUTPUT:sum 253
+unit narrow;
+
+import std.io;
+
+// How wide a store is belongs to the place, not to the value. An integer
+// literal is `i32` until something narrower asks for it, so `let b: u8 = 200;`
+// arrives at the store as four bytes going into one -- and writing four wipes
+// out whatever the frame put beside it.
+//
+// Several locals of mixed width, next to each other, is what it takes to see
+// it: each narrow store used to reach back over the one declared before it.
+
+fn main() -> i32 {
+    let a: i32 = 5;
+    let b: u8 = 200;
+    let c: u8 = 44;
+    let d: i16 = 9;
+    @print("a {} b {} c {} d {}\n", a, b, c, d);
+
+    let e = 5;              // no annotation: i32 (SPEC 4.1)
+    let f: i8 = 1;
+    let g: u16 = 65535;
+    @print("e {} f {} g {}\n", e, f as i32, g);
+
+    // And the values are still there after everything else was written.
+    @print("sum {}\n", (b as i32) + (c as i32) + (d as i32) + e - (a as i32));
+    return 0;
+}

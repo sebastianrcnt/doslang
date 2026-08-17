@@ -1,0 +1,17 @@
+unit oklit;
+
+// The edges of each type are in range, and a literal with no context is i32.
+
+fn ok() -> i32 {
+    let a: u8 = 255;
+    let b: i8 = -128;
+    let c: i8 = 127;
+    let d: u16 = 65535;
+    let e: i32 = 2147483647;
+    let f: i32 = -2147483648;
+    let g: u8 = 0xFF;
+    let h = 5;
+    let i: usize = 4294967295;
+    return h + (a as i32) + (b as i32) + (c as i32) + (d as i32) +
+           (e - e) + (f - f) + (g as i32) + (i as i32);
+}

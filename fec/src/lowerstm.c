@@ -8,7 +8,13 @@ void store_into(Lower *L, FeIrPlace dst, Slot value, FeNode *n,
         fe_ir_copy(L->m, L->b, dst, value.place, size);
         return;
     }
-    fe_ir_store(L->m, L->b, dst, as_value(L, value, n), value.type);
+    /* How wide the store is belongs to the place, not to the value. An
+       integer literal is `i32` until something narrower asks for it, so
+       `let b: u8 = 200;` arrives here as four bytes going into one -- and
+       writing four wipes out whatever the frame put next to it. */
+    fe_ir_store(L->m, L->b, dst, as_value(L, value, n),
+                size == 1UL ? FE_IR_I8 :
+                size == 2UL ? FE_IR_I16 : value.type);
 }
 
 void lower_return(Lower *L, FeNode *n)
