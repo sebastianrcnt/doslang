@@ -1,0 +1,9 @@
+// ERROR:7:match requires an enum or optional value
+unit badmatin;
+// SPEC 7.7: match takes an enum or a `?T`, nothing else. The EBNF once listed
+// integer, char and bool patterns; none of them were ever accepted, so the
+// grammar promised a language the compiler did not have.
+fn main() -> i32 {
+    match 3 { 1 => 1; _ => 0; }
+    return 0;
+}

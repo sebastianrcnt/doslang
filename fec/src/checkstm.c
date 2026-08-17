@@ -13,7 +13,9 @@ void check_match(FeCheckerState *s, FeNode *n)
     unsigned i;
     for(i=0;i<256U;i++) seen[i]=0;
     value=check_expr(s,n->a);
-    if(!value || value->kind!=FE_TYPE_ENUM) { err(s->c,n->loc,"match requires an enum value"); return; }
+    /* Optionals reach `match` too and are handled before this point
+       (m7_check_match_stmt), so the message names both -- SPEC 7.7. */
+    if(!value || value->kind!=FE_TYPE_ENUM) { err(s->c,n->loc,"match requires an enum or optional value"); return; }
     flow_count=flow_capture(s->scope,base,64);
     for(arm=n->children;arm;arm=arm->next) {
         FeScope *old=s->scope;
