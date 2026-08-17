@@ -42,7 +42,7 @@ static void *ir_alloc(FeIrModule *m, unsigned long size)
 }
 
 FeIrFunc *fe_ir_func(FeIrModule *m, const char *name, FeIrType ret,
-                     unsigned long ret_size)
+                     FeU32 ret_size)
 {
     FeIrFunc *f = (FeIrFunc *)ir_alloc(m, sizeof(FeIrFunc));
     if (!f) return 0;
@@ -60,7 +60,7 @@ FeIrFunc *fe_ir_func(FeIrModule *m, const char *name, FeIrType ret,
 }
 
 unsigned fe_ir_local(FeIrModule *m, FeIrFunc *f, FeIrType type,
-                     unsigned long size, unsigned align, const char *name)
+                     FeU32 size, unsigned align, const char *name)
 {
     if (f->local_count == f->local_capacity) {
         unsigned cap = f->local_capacity ? f->local_capacity * 2U : 8U;
@@ -100,7 +100,7 @@ FeIrBlock *fe_ir_block(FeIrModule *m, FeIrFunc *f)
 }
 
 FeIrGlobal *fe_ir_global(FeIrModule *m, const char *name, FeIrType type,
-                         unsigned long size, unsigned align,
+                         FeU32 size, unsigned align,
                          const unsigned char *init)
 {
     FeIrGlobal *g;
@@ -120,7 +120,7 @@ FeIrGlobal *fe_ir_global(FeIrModule *m, const char *name, FeIrType type,
     return g;
 }
 
-void fe_ir_global_ref(FeIrModule *m, FeIrGlobal *g, unsigned long at,
+void fe_ir_global_ref(FeIrModule *m, FeIrGlobal *g, FeU32 at,
                       const char *symbol)
 {
     FeIrReloc *grown;
@@ -134,7 +134,7 @@ void fe_ir_global_ref(FeIrModule *m, FeIrGlobal *g, unsigned long at,
     ++g->reloc_count;
 }
 
-const char *fe_ir_string(FeIrModule *m, const char *bytes, unsigned long length)
+const char *fe_ir_string(FeIrModule *m, const char *bytes, FeU32 length)
 {
     FeIrGlobal *g;
     unsigned char *copy;
@@ -157,21 +157,21 @@ const char *fe_ir_string(FeIrModule *m, const char *bytes, unsigned long length)
     return g ? g->name : 0;
 }
 
-FeIrPlace fe_ir_at_local(unsigned index, long offset)
+FeIrPlace fe_ir_at_local(unsigned index, FeI32 offset)
 {
     FeIrPlace p;
     p.base = FE_PLACE_LOCAL; p.index = index; p.name = 0; p.offset = offset;
     return p;
 }
 
-FeIrPlace fe_ir_at_global(const char *name, long offset)
+FeIrPlace fe_ir_at_global(const char *name, FeI32 offset)
 {
     FeIrPlace p;
     p.base = FE_PLACE_GLOBAL; p.index = 0; p.name = name; p.offset = offset;
     return p;
 }
 
-FeIrPlace fe_ir_at_temp(unsigned temp, long offset)
+FeIrPlace fe_ir_at_temp(unsigned temp, FeI32 offset)
 {
     FeIrPlace p;
     p.base = FE_PLACE_TEMP; p.index = temp; p.name = 0; p.offset = offset;
@@ -201,7 +201,7 @@ static unsigned result(FeIrModule *m, FeIrBlock *b, FeIrValue *v)
     return v->dest;
 }
 
-unsigned fe_ir_const(FeIrModule *m, FeIrBlock *b, FeIrType t, long value)
+unsigned fe_ir_const(FeIrModule *m, FeIrBlock *b, FeIrType t, FeI32 value)
 {
     FeIrValue *v = emit(m, b, FE_IR_CONST, t);
     if (!v) return 0;
@@ -279,7 +279,7 @@ unsigned fe_ir_call(FeIrModule *m, FeIrBlock *b, FeIrType ret,
 }
 
 void fe_ir_copy(FeIrModule *m, FeIrBlock *b, FeIrPlace dst, FeIrPlace src,
-                unsigned long size)
+                FeU32 size)
 {
     FeIrValue *v = emit(m, b, FE_IR_COPY, FE_IR_VOID);
     if (!v) return;
@@ -315,7 +315,7 @@ void fe_ir_ret(FeIrBlock *b, unsigned value, int has_value)
     b->has_ret_value = has_value;
 }
 
-void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, unsigned long line,
+void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, FeU32 line,
                 unsigned file)
 {
     if (b->terminated) return;
@@ -388,7 +388,7 @@ static void dump_place(const FeIrPlace *p, FILE *out)
     case FE_PLACE_GLOBAL: fprintf(out, "@%s", p->name ? p->name : "?"); break;
     case FE_PLACE_TEMP:   fprintf(out, "%%%u", p->index); break;
     }
-    if (p->offset) fprintf(out, " + %ld", p->offset);
+    if (p->offset) fprintf(out, " + %d", p->offset);
 }
 
 static void dump_value(const FeIrValue *v, FILE *out)
@@ -398,7 +398,7 @@ static void dump_value(const FeIrValue *v, FILE *out)
     if (v->has_dest) fprintf(out, "%%%u = ", v->dest);
     switch (v->op) {
     case FE_IR_CONST:
-        fprintf(out, "const %s %ld", fe_ir_type_name(v->type), v->imm);
+        fprintf(out, "const %s %d", fe_ir_type_name(v->type), v->imm);
         break;
     case FE_IR_LOAD:
         fprintf(out, "load %s ", fe_ir_type_name(v->type));
@@ -429,7 +429,7 @@ static void dump_value(const FeIrValue *v, FILE *out)
         dump_place(&v->place, out);
         fputs(", ", out);
         dump_place(&v->place2, out);
-        fprintf(out, ", %ld", v->imm);
+        fprintf(out, ", %d", v->imm);
         break;
     default:
         fprintf(out, "%s %s %%%u, %%%u", fe_ir_op_name(v->op),
@@ -451,7 +451,7 @@ void fe_ir_dump(const FeIrModule *m, FILE *out)
     for (i = 0; i < m->file_count; ++i)
         fprintf(out, "; file %u %s\n", i, m->files[i]);
     for (g = m->globals; g; g = g->next)
-        fprintf(out, "global @%s : %s %lu\n", g->name,
+        fprintf(out, "global @%s : %s %u\n", g->name,
                 fe_ir_type_name(g->type), g->size);
     for (f = m->funcs; f; f = f->next) {
         if (f->is_extern) {
@@ -464,7 +464,7 @@ void fe_ir_dump(const FeIrModule *m, FILE *out)
         for (i = 0; i < f->local_count; ++i) {
             fprintf(out, "  $%u: %s", i, fe_ir_type_name(f->locals[i].type));
             if (f->locals[i].type == FE_IR_MEM)
-                fprintf(out, "<%lu>", f->locals[i].size);
+                fprintf(out, "<%u>", f->locals[i].size);
             if (i < f->param_count) fputs("  ; parameter", out);
             if (f->locals[i].name) fprintf(out, "  ; %s", f->locals[i].name);
             fputc('\n', out);
@@ -483,7 +483,7 @@ void fe_ir_dump(const FeIrModule *m, FILE *out)
                 else fputs("    ret\n", out);
                 break;
             case FE_IR_TRAP:
-                fprintf(out, "    trap %s %lu\n", trap_name(b->trap),
+                fprintf(out, "    trap %s %u\n", trap_name(b->trap),
                         b->trap_line);
                 break;
             }

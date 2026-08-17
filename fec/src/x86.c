@@ -224,11 +224,11 @@ static void place_addr(const Frame *fr, const FeIrPlace *p, char *buf)
         sprintf(buf, "[ebp%+ld]", fr->local_off[p->index] + p->offset);
         break;
     case FE_PLACE_GLOBAL:
-        if (p->offset) sprintf(buf, "[%s%+ld]", p->name, p->offset);
+        if (p->offset) sprintf(buf, "[%s%+d]", p->name, p->offset);
         else sprintf(buf, "[%s]", p->name);
         break;
     case FE_PLACE_TEMP:
-        sprintf(buf, "[edx%+ld]", p->offset);
+        sprintf(buf, "[edx%+d]", p->offset);
         break;
     }
 }
@@ -390,7 +390,7 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
     switch (v->op) {
     case FE_IR_CONST: {
         const char *d = reg_home(fr, v->dest);
-        fprintf(out, "        mov     %s, %ld\n", d ? d : "eax", v->imm);
+        fprintf(out, "        mov     %s, %d\n", d ? d : "eax", v->imm);
         if (!d) store_temp(fr, v->dest, "eax", out);
         break;
     }
@@ -464,7 +464,7 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
         if (v->place2.base == FE_PLACE_TEMP) {
             load_temp(fr, v->place2.index, "eax", out);
             if (v->place2.offset)
-                fprintf(out, "        add     eax, %ld\n", v->place2.offset);
+                fprintf(out, "        add     eax, %d\n", v->place2.offset);
         } else {
             place_addr(fr, &v->place2, src);
             fprintf(out, "        lea     eax, %s\n", src);
@@ -472,7 +472,7 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
         if (v->place.base == FE_PLACE_TEMP) {
             load_temp(fr, v->place.index, "edx", out);
             if (v->place.offset)
-                fprintf(out, "        add     edx, %ld\n", v->place.offset);
+                fprintf(out, "        add     edx, %d\n", v->place.offset);
         } else {
             place_addr(fr, &v->place, dst);
             fprintf(out, "        lea     edx, %s\n", dst);
@@ -481,7 +481,7 @@ static void emit_value(const Frame *fr, const FeIrValue *v, FILE *out)
         fprintf(out, "        push    edi\n");
         fprintf(out, "        mov     esi, eax\n");
         fprintf(out, "        mov     edi, edx\n");
-        fprintf(out, "        mov     ecx, %ld\n", v->imm);
+        fprintf(out, "        mov     ecx, %d\n", v->imm);
         fprintf(out, "        cld\n");
         fprintf(out, "        rep movsb\n");
         fprintf(out, "        pop     edi\n        pop     esi\n");
@@ -547,7 +547,7 @@ static void emit_func(const FeIrModule *m, const FeIrFunc *f, FILE *out)
             fprintf(out, "        ret\n");
             break;
         case FE_IR_TRAP:
-            fprintf(out, "        push    %lu\n", b->trap_line);
+            fprintf(out, "        push    %u\n", b->trap_line);
             fprintf(out, "        push    offset FE_FILE_%u\n",
                     b->trap_file);
             fprintf(out, "        push    %u\n", (unsigned)b->trap);

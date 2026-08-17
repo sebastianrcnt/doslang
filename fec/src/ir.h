@@ -2,6 +2,7 @@
 #define FE_IR_H
 
 #include "arena.h"
+#include "word.h"
 #include <stdio.h>
 
 /* How many source files one build can trap from. */
@@ -55,7 +56,7 @@ typedef struct FeIrPlace {
     FeIrBase base;
     unsigned index;          /* local or temp number */
     const char *name;        /* global name */
-    long offset;
+    FeI32 offset;
 } FeIrPlace;
 
 typedef struct FeIrValue {
@@ -65,14 +66,14 @@ typedef struct FeIrValue {
     int has_dest;
     /* operands, by role -- only the ones the op uses are set */
     unsigned a, b;           /* temporaries */
-    long imm;                /* const, cast width, copy size */
+    FeI32 imm;               /* const, cast width, copy size */
     FeIrPlace place;         /* load / store / addr / copy destination */
     FeIrPlace place2;        /* copy source */
     const char *callee;
     unsigned *args;
     unsigned arg_count;
     int is_unsigned;         /* picks the signed or unsigned instruction */
-    unsigned long line;      /* for diagnostics that survive into the backend */
+    FeU32 line;              /* for diagnostics that survive into the backend */
     struct FeIrValue *next;
 } FeIrValue;
 
@@ -90,7 +91,7 @@ typedef struct FeIrBlock {
     unsigned ret_value;      /* ret */
     int has_ret_value;
     FeIrTrap trap;
-    unsigned long trap_line;
+    FeU32 trap_line;
     unsigned trap_file;      /* index into the module's file table */
     /* Set once a terminator is chosen. Lowering asks before appending a
        jump, so a `return` inside a branch is not overwritten by the jump
@@ -101,7 +102,7 @@ typedef struct FeIrBlock {
 
 typedef struct FeIrLocal {
     FeIrType type;
-    unsigned long size;      /* for FE_IR_MEM */
+    FeU32 size;              /* for FE_IR_MEM */
     unsigned align;
     const char *name;        /* the Ferro name, for reading the dump */
 } FeIrLocal;
@@ -109,7 +110,7 @@ typedef struct FeIrLocal {
 struct FeIrFunc {
     const char *name;        /* unit.name */
     FeIrType ret;
-    unsigned long ret_size;  /* when ret is FE_IR_MEM */
+    FeU32 ret_size;          /* when ret is FE_IR_MEM */
     /* A function returning mem<N> takes the address to write as a hidden
        first parameter, so the caller owns the storage. */
     int returns_by_address;
@@ -129,14 +130,14 @@ struct FeIrFunc {
    The value is not known until the linker places it, so the bytes carry a hole
    and this says what fills it. */
 typedef struct FeIrReloc {
-    unsigned long at;
+    FeU32 at;
     const char *symbol;
 } FeIrReloc;
 
 typedef struct FeIrGlobal {
     const char *name;
     FeIrType type;
-    unsigned long size;
+    FeU32 size;
     unsigned align;
     const unsigned char *init;   /* size bytes, or null for zero */
     FeIrReloc *relocs;
@@ -164,29 +165,29 @@ void fe_ir_module_init(FeIrModule *m);
 void fe_ir_module_destroy(FeIrModule *m);
 
 FeIrFunc *fe_ir_func(FeIrModule *m, const char *name, FeIrType ret,
-                     unsigned long ret_size);
+                     FeU32 ret_size);
 unsigned fe_ir_local(FeIrModule *m, FeIrFunc *f, FeIrType type,
-                     unsigned long size, unsigned align, const char *name);
+                     FeU32 size, unsigned align, const char *name);
 unsigned fe_ir_temp(FeIrFunc *f);
 FeIrBlock *fe_ir_block(FeIrModule *m, FeIrFunc *f);
 /* Static storage. `init` is `size` bytes to place there, or null for zero. */
 FeIrGlobal *fe_ir_global(FeIrModule *m, const char *name, FeIrType type,
-                         unsigned long size, unsigned align,
+                         FeU32 size, unsigned align,
                          const unsigned char *init);
 /* Say that `at` bytes into `g` there is the address of `symbol`. */
-void fe_ir_global_ref(FeIrModule *m, FeIrGlobal *g, unsigned long at,
+void fe_ir_global_ref(FeIrModule *m, FeIrGlobal *g, FeU32 at,
                       const char *symbol);
 /* A string literal's bytes, interned so the same text is stored once. */
 const char *fe_ir_string(FeIrModule *m, const char *bytes,
-                         unsigned long length);
+                         FeU32 length);
 
 /* Places */
-FeIrPlace fe_ir_at_local(unsigned index, long offset);
-FeIrPlace fe_ir_at_global(const char *name, long offset);
-FeIrPlace fe_ir_at_temp(unsigned temp, long offset);
+FeIrPlace fe_ir_at_local(unsigned index, FeI32 offset);
+FeIrPlace fe_ir_at_global(const char *name, FeI32 offset);
+FeIrPlace fe_ir_at_temp(unsigned temp, FeI32 offset);
 
 /* Instructions. Each returns the destination temporary where there is one. */
-unsigned fe_ir_const(FeIrModule *m, FeIrBlock *b, FeIrType t, long v);
+unsigned fe_ir_const(FeIrModule *m, FeIrBlock *b, FeIrType t, FeI32 v);
 unsigned fe_ir_load(FeIrModule *m, FeIrBlock *b, FeIrType t, FeIrPlace p);
 /* `t` is how wide the write is. Without it a one-byte value would be stored
    four bytes wide and take its neighbours with it. */
@@ -200,13 +201,13 @@ unsigned fe_ir_cast(FeIrModule *m, FeIrBlock *b, FeIrType from, FeIrType to,
 unsigned fe_ir_call(FeIrModule *m, FeIrBlock *b, FeIrType ret,
                     const char *callee, unsigned *args, unsigned count);
 void     fe_ir_copy(FeIrModule *m, FeIrBlock *b, FeIrPlace dst, FeIrPlace src,
-                    unsigned long size);
+                    FeU32 size);
 
 /* Terminators */
 void fe_ir_jmp(FeIrBlock *b, unsigned target);
 void fe_ir_br(FeIrBlock *b, unsigned cond, unsigned t, unsigned f);
 void fe_ir_ret(FeIrBlock *b, unsigned value, int has_value);
-void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, unsigned long line,
+void fe_ir_trap(FeIrBlock *b, FeIrTrap reason, FeU32 line,
                 unsigned file);
 
 void fe_ir_dump(const FeIrModule *m, FILE *out);
