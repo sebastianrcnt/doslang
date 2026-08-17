@@ -121,7 +121,22 @@ static FeNode *postfix(FeParser *p)
     FeNode *n=primary(p);
     for(;;) {
         FeToken t=p->current; FeNode *m;
-        if(eat(p,FE_TOK_LPAREN)) { m=toknode(p,FE_N_CALL,t); m->a=n; while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(m,delimited_expr(p));if(!eat(p,FE_TOK_COMMA))break;} want(p,FE_TOK_RPAREN,"expected ')' after call"); n=m; }
+        if(eat(p,FE_TOK_LPAREN)) { m=toknode(p,FE_N_CALL,t); m->a=n; while(!is(p,FE_TOK_RPAREN)&&!is(p,FE_TOK_EOF)){fe_node_add(m,delimited_expr(p));if(!eat(p,FE_TOK_COMMA))break;} want(p,FE_TOK_RPAREN,"expected ')' after call"); n=m;
+            /* `Name(args){...}` builds an instance of a generic struct. Without
+               this the arguments have nowhere to go and only `Self{...}` or a
+               constructor can name one. Same `{` ambiguity as `Name{...}`
+               above, and the same guard settles it. */
+            if(is(p,FE_TOK_LBRACE) && !p->forbid_struct_literal) {
+                FeNode *s=toknode(p,FE_N_STRUCT_INIT,t); s->a=n; next(p);
+                while(!is(p,FE_TOK_RBRACE)&&!is(p,FE_TOK_EOF)) { FeNode *f;
+                    if(!is_name(p)){error(p,"expected field name");recover(p);break;}
+                    f=toknode(p,FE_N_FIELD,p->current);next(p);
+                    want(p,FE_TOK_COLON,"expected ':' after field");
+                    f->a=expr(p,0);fe_node_add(s,f);
+                    if(!eat(p,FE_TOK_COMMA))break;
+                }
+                want(p,FE_TOK_RBRACE,"expected '}' in struct literal"); n=s;
+            } }
         else if(eat(p,FE_TOK_LBRACKET)) {
             m=toknode(p,FE_N_INDEX,t);m->a=n;
             if(is(p,FE_TOK_DOTDOT)) { m->b=0; m->flags|=FE_NODE_SLICE; } else m->b=delimited_expr(p);

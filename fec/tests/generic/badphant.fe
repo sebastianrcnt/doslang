@@ -1,0 +1,15 @@
+// ERROR:14:argument type mismatch
+unit badphant;
+
+// A type parameter that the body never mentions still tells two instances
+// apart. `Handle(Node)` and `Handle(Kind)` are different nominal types.
+struct Handle(T) { raw: u32, }
+
+struct Node { v: i32, }
+struct Kind { v: i32, }
+
+fn only_node(h: Handle(Node)) -> u32 { return h.raw; }
+
+fn bad() -> u32 {
+    return only_node(Handle(Kind){ raw: 1 });
+}

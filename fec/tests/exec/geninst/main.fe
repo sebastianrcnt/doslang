@@ -1,0 +1,38 @@
+// EXIT:0
+// OUTPUT:cell 7 41
+// OUTPUT:handle 3 4 sum 7
+// OUTPUT:local 9
+unit main;
+
+import std.io;
+import hold;
+
+struct Node { v: i32, }
+struct Kind { v: i32, }
+
+// A generic declared here, instantiated with an explicit argument below.
+struct Boxed(T) {
+    v: T,
+}
+
+// Two instances of the same phantom generic are different nominal types, so
+// this only accepts one of them.
+fn only_node(h: hold.Handle(Node)) -> u32 { return h.raw; }
+fn only_kind(h: hold.Handle(Kind)) -> u32 { return h.raw; }
+
+fn main() -> i32 {
+    // `binding.Name(args){...}` -- a generic instance from another unit.
+    let a: hold.Cell(i32) = hold.Cell(i32){ v: 7 };
+    let b: hold.Cell(u8) = hold.Cell(u8){ v: 41 };
+    @print("cell {} {}\n", a.v, b.v);
+
+    let n: hold.Handle(Node) = hold.Handle(Node){ raw: 3 };
+    let k: hold.Handle(Kind) = hold.Handle(Kind){ raw: 4 };
+    @print("handle {} {} sum {}\n", only_node(n), only_kind(k),
+           only_node(n) + only_kind(k));
+
+    // `Name(args){...}` -- a generic declared in this unit.
+    let c: Boxed(i32) = Boxed(i32){ v: 9 };
+    @print("local {}\n", c.v);
+    return 0;
+}

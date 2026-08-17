@@ -1,0 +1,14 @@
+unit hold;
+
+// Fields are `pub` so another unit can write the literal directly. A generic
+// with a `pub` field is the only way to reach `binding.Name(args){...}`.
+pub struct Cell(T) {
+    pub v: T,
+}
+
+// `T` is never used in the body. That is the natural shape of a typed handle:
+// the parameter is there to keep `Handle(Node)` and `Handle(Type)` apart, not
+// to describe any storage.
+pub struct Handle(T) {
+    pub raw: u32,
+}

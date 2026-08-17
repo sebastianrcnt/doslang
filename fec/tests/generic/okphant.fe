@@ -1,0 +1,16 @@
+unit okphant;
+
+// The parameter is used nowhere in the body. That is legal, and it is the
+// natural shape of a typed handle.
+struct Handle(T) { raw: u32, }
+
+struct Node { v: i32, }
+struct Kind { v: i32, }
+
+fn only_node(h: Handle(Node)) -> u32 { return h.raw; }
+fn only_kind(h: Handle(Kind)) -> u32 { return h.raw; }
+
+fn ok() -> u32 {
+    return only_node(Handle(Node){ raw: 1 }) +
+           only_kind(Handle(Kind){ raw: 2 });
+}

@@ -249,6 +249,17 @@ FeType *check_struct_init(FeCheckerState *s, FeNode *n)
         } else if (n->children) err(s->c,n->loc,"empty enum variant cannot have payload");
         n->sem_type=et; return et;
     }
+    if (n->a && n->a->kind==FE_N_CALL) {
+        /* `Name(args){...}` -- the same spelling a type annotation uses, so
+           the same resolver answers it. */
+        int ok=0;
+        t=type_from_expr(s,n->a,&ok);
+        if (!ok || !t || t->kind!=FE_TYPE_STRUCT) {
+            err(s->c,n->a->loc,"unknown struct type");
+            return unknown(s->c);
+        }
+        return check_struct_fields(s,n,t);
+    }
     t=fe_type_intern(&s->c->types,n->text ? n->text : "<unknown>");
     if (!t || t->kind!=FE_TYPE_STRUCT) { err(s->c,n->loc,"unknown struct type"); return unknown(s->c); }
     return check_struct_fields(s,n,t);
