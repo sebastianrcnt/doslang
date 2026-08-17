@@ -31,6 +31,12 @@ def _run(cmd, cwd) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, timeout=120)
 
 
+def _rel(p: Path) -> str:
+    """ROOT-relative, with forward slashes, so the spelling does not depend on
+    which machine or shell ran the build."""
+    return Path(p).resolve().relative_to(ROOT).as_posix()
+
+
 def build(fec: Path, source: Path, out_dir: Path, no_checks: bool = False):
     """Returns (exe_path, log). exe_path is None when a step failed."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -40,10 +46,15 @@ def build(fec: Path, source: Path, out_dir: Path, no_checks: bool = False):
 
     # `std` ships with the compiler, so it is looked for beside it rather
     # than beside the program.
-    cmd = [fec, "--emit-asm", source, "-o", asm, f"--std={ROOT / 'fec'}"]
+    #
+    # The paths go in relative, from ROOT. `fec` records the path it was told
+    # -- that is what a trap prints and so what lands in the executable -- so
+    # an absolute path would put this machine's directory layout in the binary
+    # and no two machines would build the same bytes. See `tests/determ.py`.
+    cmd = [fec, "--emit-asm", _rel(source), "-o", asm.resolve(), "--std=fec"]
     if no_checks:
         cmd.append("--no-checks")
-    step = _run(cmd, out_dir)
+    step = _run(cmd, ROOT)
     log.append(("fec", step.returncode, step.stdout + step.stderr))
     if step.returncode != 0 or not asm.is_file():
         return None, log
