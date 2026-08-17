@@ -574,7 +574,15 @@ pub fn main() -> !void {
 
 트랩 발생 조건: 배열/슬라이스 경계 초과, 정수 오버플로, 0 나눗셈, `?T`의 `.?` 실패, `@trap()`.
 
-동작: `core.panic(msg: str, file: str, line: u32)` 호출 → 등록된 `sys.on_exit(fn)` 정리 함수를 역순 호출 → 메시지 출력 → `sys.exit(3)`. 사용자가 `core.set_panic_handler`로 교체 가능. 일반 panic unwind나 defer 실행은 없지만 프로세스 종료 전에 반드시 복원해야 하는 자원은 allocation 없는 고정 크기 `on_exit` registry에 등록한다.
+동작: 런타임의 `fe_trap(이유, 파일, 줄)` 호출 → 이유와 위치 출력 → 종료 코드 3.
+
+```
+ferro: index out of bounds at fec/tests/exec/trapsrc/pick.fe:6
+```
+
+**이 경로는 바꿔 끼울 수 없다.** 경계 검사가 약속을 하는 것은 트랩이 반드시 따라오기 때문이고, 교체 가능한 핸들러가 있으면 검사 자체가 아무것도 보장하지 못한다 (§11). unwind도 `defer` 실행도 없다 — 트랩은 스코프 정리 경로를 건너뛴다.
+
+따라서 프로세스가 죽기 전에 반드시 되돌려야 하는 자원 — DOS에서 비디오 모드나 가로챈 인터럽트 벡터 — 을 복원할 수단이 v0.1에는 없다. `TODO.md`의 `on_exit` 항목이며, 인터럽트 핸들러(§11)와 같은 시점에 온다.
 
 `--no-checks` 빌드에서 제거되는 것: 경계 검사, 오버플로 검사, `.?` 검사. **오버플로 검사가 없을 때 `+ - * /`의 결과는 랩어라운드로 정의된다** — 타깃의 정수 연산이 그대로 하는 일이며, 미정의 동작으로 두지 않는다. 즉 `--no-checks`에서 `a + b`는 `a +% b`와 같은 값을 낸다.
 **절대 제거되지 않는 것:** 소유권/참조 검사, 옵셔널 타입 검사, `match` 완전성 — 전부 컴파일타임이므로.
@@ -765,7 +773,7 @@ binding은 마지막 segment라 `io.write`, `mem.replace` 형태로 사용한다
 표면만 남긴 것이다. `std.list`, `std.map`, `std.io.File`의 전체 API, `std.sys`의 OS
 접근 함수 등 나머지 모듈의 정확한 시그니처는 표준 라이브러리 명세가 정의한다.
 
-- **`std.core`**: `panic`, `set_panic_handler`, `Error`(기본 에러 집합, §4.6), `assert`. `panic`/`set_panic_handler`는 §7.4 트랩 동작이 참조한다.
+- **`std.core`**: `Error`(기본 에러 집합, §4.6), `assert`, `min`/`max`/`abs`. 트랩은 std를 거치지 않는다 — §7.4는 런타임으로 바로 내려간다.
 - **`std.mem`**: `create(value: T) -> !^T`(T는 값에서 추론), `destroy(p)`, `alloc_slice(T, n) -> !^[]T`, `replace(dst: &mut T, value: T) -> T`, `copy(dst: []mut u8, src: []u8)`, `set(dst: []mut u8, v: u8)`, `Arena{ init, alloc, reset, drop }`. 초기화되지 않은 힙을 안전 코드에 반환하는 `create(T)` 형태는 없다. `replace`는 이전 값을 이동해 반환하고 새 값으로 자리를 초기화하며 부분 이동과 재귀 구조의 반복 drop에 사용한다(§4.5, §5 R3·R7·R11).
 - **문자열/바이트**: `str`은 `[]u8` alias다(§4.2). 내장 alias 메서드 `eq`, `find`, `starts_with`, `split_at`, `parse_int`, `trim`, `to_cstr`, `from_cstr`를 `line.trim()`처럼 호출하며(§6.4 예제) `str` 이름의 import 유닛은 두지 않는다.
 - **`std.fmt`**: sink를 소유하지 않는 순수 변환 함수 모음이며 `@print`/`@fprint`/`@sprint`(§6.3.1)가 의존한다. `fmt_int_i8/i16/i32/u8/u16/u32(buf: []mut u8, v) -> str`, `fmt_hex_*`, `fmt_char`, `fmt_bool`, `fmt_error`, `fmt_int_pad`를 제공한다. 반환 slice는 buf에서 파생된 R8(a) 결과다. `fmt_error`는 `--strip-error-names`를 따른다.
@@ -775,7 +783,7 @@ binding은 마지막 segment라 `io.write`, `mem.replace` 형태로 사용한다
   pub enum Reader { Stdin, File(u16) }
   ```
   둘 다 정수 payload만 가진 Copy handle이며 참조나 raw context pointer를 저장하지 않는다(§5 R8 예제). `io.write(w: Writer, buf: []u8) -> !usize`, `io.read(r: Reader, buf: []mut u8) -> !usize`가 실제 I/O를 수행한다.
-- **`std.sys`**: `exit`, `on_exit(f: fn() -> void) -> !void`. `on_exit`은 §7.4 트랩 동작이 참조하는 allocation 없는 고정 크기 callback registry이며 가득 차면 오류를 반환한다.
+- **`std.sys`**: `exit`, 그리고 런타임을 그대로 여는 `raw_*` (`raw_write`, `raw_alloc`, `raw_free`, `raw_open`, `raw_read`, `raw_close`, `raw_cmdline`)과 할당 계수기 `allocs`/`frees`. `raw_*`는 `unsafe` 안에서만 부른다.
 
 ---
 
@@ -792,6 +800,7 @@ binding은 마지막 segment라 `io.write`, `mem.replace` 형태로 사용한다
 | 트레잇/인터페이스 (`dyn`) | **v0.2 (1순위)** | 부트스트랩에 불필요, 타입 시스템 전반에 영향 | Copy handle enum (`io.Writer`, §10) |
 | 인터럽트 핸들러와 공유 상태 (`interrupt fn`, `shared`, `atomic`, `critical`) | v0.2 | 벡터 설치·복원과 배리어가 백엔드 지원을 요구하고, 타깃마다 다르다 | polling |
 | far 포인터와 세그먼트 주소 지정 | **영구** | x86 리얼모드에만 있는 개념이고 평평한 주소 공간에는 대응물이 없다 (§2) | 없음. 리얼모드 타깃이 생기면 그때 다시 본다 |
+| 교체 가능한 트랩 핸들러 (`set_panic_handler`) | **영구** | 경계 검사가 약속을 하는 것은 트랩이 반드시 따라오기 때문이다. 바꿔 끼울 수 있으면 검사가 아무것도 보장하지 못한다. 임의 시점에 도는 교체 가능한 전역은 함수 하나만 보는 검사(§1 철학 2)가 추론할 수도 없다 | 없다. 트랩은 트랩이다. 복구할 수 있는 실패는 애초에 에러 유니온이다 (§4.6) |
 | 클로저 | v0.2 | 캡처 = 참조 저장 = R4 위반 소지 | 콜백에 `ctx: *void` 전달 |
 | 연산자 오버로딩 | v0.2 (인터페이스 이후) | 숨은 비용. 넣더라도 특정 인터페이스 구현으로만 제한 | 메서드 |
 | 튜플 / 다중 반환 | 편의 | 이름 없는 필드는 가독성 손해 | struct |
