@@ -308,7 +308,10 @@ FeType *check_identifier(FeCheckerState *s, FeNode *n)
     n->cname = sym->cname;
     n->sem_type = sym->type;
     if (!sym->fn) {
-        fe_own_access(s->c->diags,&sym->own,FE_OWN_READ,n->loc);
+        /* When this identifier is the base of a projection, the read reaches
+           one field and not the whole value. The chain above left word. */
+        const char *field = s->proj_base==n ? s->proj_field : 0;
+        fe_own_access_field(s->c->diags,&sym->own,field,FE_OWN_READ,n->loc);
         sym->moved=sym->own.move;
     }
     return sym->type;
@@ -482,6 +485,10 @@ FeType *check_expr_core(FeCheckerState *s, FeNode *n)
                 if(a && a->kind==FE_TYPE_REF && !compatible(a->elem,b,value))
                     err(c,value->loc,"mem.replace value type mismatch");
                 if(value) mark_moved(s,value,b);
+                /* The destination is lent for the length of the call, the same
+                   as any other argument. Without this the borrow stays live to
+                   the end of the function and the place can never be read. */
+                own_release_temporary_borrow(s,arg);
                 n->sem_type=a && a->kind==FE_TYPE_REF ? a->elem : unknown(c);
                 fe_type_require_replace(&c->types,n->sem_type);
                 return n->sem_type;

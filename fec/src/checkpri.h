@@ -30,6 +30,8 @@ struct FeSym {
        release the root borrow without a separate alias engine. */
     FeOwnState own;
     FeSym *borrow_root;
+    /* Which field of the root this binding borrowed, or null for all of it. */
+    const char *borrow_field;
     int borrow_mut;
     int borrow_defer;
     FeScope *owner;
@@ -52,6 +54,11 @@ typedef struct FeCheckerState {
     unsigned defer_depth;
     FeOwnLiveness liveness;
     FeNode *fn_node;
+    /* While a projection is being checked, which field of which base it
+       reaches. The read happens down at the identifier, which cannot see the
+       chain above it, so the chain leaves word here on the way down. */
+    const char *proj_field;
+    FeNode *proj_base;
 } FeCheckerState;
 
 /* The type bindings in force, saved across a nested instantiation. */
@@ -70,6 +77,7 @@ typedef struct FeFlowSlot {
 
 typedef struct FeFlowBorrow {
     FeSym *root;
+    const char *field;
     int mutable;
 } FeFlowBorrow;
 
@@ -114,6 +122,7 @@ void flow_restore(FeFlowSlot *slots, unsigned count);
 void flow_merge(FeFlowSlot *base, FeFlowSlot *left, FeFlowSlot *right,
                        unsigned count);
 FeSym *own_root_symbol(FeCheckerState *s, FeNode *expr);
+const char *own_projected_field(FeNode *expr, FeNode **root_out);
 int own_is_global(FeCheckerState *s, FeSym *sym);
 void own_borrow_expr(FeCheckerState *s, FeNode *expr, int mutable);
 void own_release_temporary_borrow(FeCheckerState *s, FeNode *expr);

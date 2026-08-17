@@ -272,6 +272,7 @@ void check_stmt_core(FeCheckerState *s, FeNode *n)
         if (sym && n->b && n->b->kind==FE_N_UNARY && n->b->text &&
             (strcmp(n->b->text,"&")==0 || strcmp(n->b->text,"&mut")==0)) {
             sym->borrow_root=own_root_symbol(s,n->b->a);
+            sym->borrow_field=own_projected_field(n->b->a,0);
             sym->borrow_mut=strcmp(n->b->text,"&mut")==0;
             sym->borrow_defer=s->defer_depth != 0 ||
                 own_defer_uses(s->fn_node ? s->fn_node->c : 0,n->text);
@@ -297,6 +298,7 @@ void check_stmt_core(FeCheckerState *s, FeNode *n)
         if (sym && n->b && n->b->kind==FE_N_UNARY && n->b->text &&
             (strcmp(n->b->text,"&")==0 || strcmp(n->b->text,"&mut")==0)) {
             sym->borrow_root=own_root_symbol(s,n->b->a);
+            sym->borrow_field=own_projected_field(n->b->a,0);
             sym->borrow_mut=strcmp(n->b->text,"&mut")==0;
             sym->borrow_defer=s->defer_depth != 0 ||
                 own_defer_uses(s->fn_node ? s->fn_node->c : 0,n->text);

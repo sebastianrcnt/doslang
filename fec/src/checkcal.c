@@ -139,6 +139,7 @@ FeType *check_call(FeCheckerState *s, FeNode *n)
                 !m7_actual_compatible(expected,b,value))
                 err(c,value->loc,"mem.replace value type mismatch");
             mark_moved(s,value,value->sem_type ? value->sem_type : b);
+            own_release_temporary_borrow(s,arg);
             n->sem_type=expected ? expected : unknown(c);
             fe_type_require_replace(&c->types,n->sem_type);
             return n->sem_type;
@@ -351,7 +352,24 @@ FeType *m7_check_lazy(FeCheckerState *s, FeNode *n,
     return payload;
 }
 
+static FeType *check_expr_dispatch(FeCheckerState *s, FeNode *n);
+
+/* Every expression goes through here, which is where a projection can tell
+   the identifier underneath it which field is actually being reached. */
 FeType *check_expr(FeCheckerState *s, FeNode *n)
+{
+    const char *save_field=s->proj_field;
+    FeNode *save_base=s->proj_base;
+    FeType *t;
+    if (n && (n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX))
+        s->proj_field=own_projected_field(n,&s->proj_base);
+    t=check_expr_dispatch(s,n);
+    s->proj_field=save_field;
+    s->proj_base=save_base;
+    return t;
+}
+
+static FeType *check_expr_dispatch(FeCheckerState *s, FeNode *n)
 {
     FeType *a;
     FeType *b;
@@ -486,7 +504,24 @@ FeType *check_expr(FeCheckerState *s, FeNode *n)
     return check_expr_core(s,n);
 }
 
+static FeType *check_lvalue_dispatch(FeCheckerState *s, FeNode *n, int read);
+
+/* An assignment target is a projection too, so it leaves the same word for the
+   identifier underneath: `self.room = x` reaches `room` and nothing else. */
 FeType *check_lvalue(FeCheckerState *s, FeNode *n, int read)
+{
+    const char *save_field=s->proj_field;
+    FeNode *save_base=s->proj_base;
+    FeType *t;
+    if (n && (n->kind==FE_N_MEMBER || n->kind==FE_N_INDEX))
+        s->proj_field=own_projected_field(n,&s->proj_base);
+    t=check_lvalue_dispatch(s,n,read);
+    s->proj_field=save_field;
+    s->proj_base=save_base;
+    return t;
+}
+
+static FeType *check_lvalue_dispatch(FeCheckerState *s, FeNode *n, int read)
 {
     FeType *base=0;
     FeFieldType *field;
@@ -786,6 +821,7 @@ void m7_check_decl_stmt(FeCheckerState *s, FeNode *n, int mutable)
     if (sym && n->b && n->b->kind==FE_N_UNARY && n->b->text &&
         (strcmp(n->b->text,"&")==0 || strcmp(n->b->text,"&mut")==0)) {
         sym->borrow_root=own_root_symbol(s,n->b->a);
+        sym->borrow_field=own_projected_field(n->b->a,0);
         sym->borrow_mut=strcmp(n->b->text,"&mut")==0;
         sym->borrow_defer=s->defer_depth!=0 ||
             own_defer_uses(s->fn_node ? s->fn_node->c : 0,n->text);

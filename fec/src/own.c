@@ -92,6 +92,7 @@ int fe_own_place_from_expr(FeNode *expr, FeOwnPlace *place)
 
 void fe_own_state_init(FeOwnState *state, int initialized)
 {
+    unsigned i;
     if (!state) return;
     state->move = FE_OWN_AVAILABLE;
     state->initialized = initialized != 0;
@@ -100,6 +101,12 @@ void fe_own_state_init(FeOwnState *state, int initialized)
     state->borrow_conflict = 0;
     state->move_loc = fe_own_no_loc();
     state->borrow_loc = fe_own_no_loc();
+    for (i = 0; i < FE_OWN_FIELD_MAX; ++i) {
+        state->fields[i].name = 0;
+        state->fields[i].shared = 0;
+        state->fields[i].exclusive = 0;
+        state->fields[i].loc = fe_own_no_loc();
+    }
 }
 
 static int fe_own_require_value(FeDiags *diags, FeOwnState *state, FeLoc loc)
@@ -130,8 +137,187 @@ static int fe_own_require_stable_borrow(FeDiags *diags, FeOwnState *state,
     return 0;
 }
 
+/* Whole-value state only: what a field access has to get past before it looks
+   at its own entry. `check` reports and decides; `apply` also records. */
+static int fe_own_access_whole(FeDiags *diags, FeOwnState *state,
+                               FeOwnAccessKind access, FeLoc loc);
+static int fe_own_access_whole_check(FeDiags *diags, FeOwnState *state,
+                                     FeOwnAccessKind access, FeLoc loc);
+
+/* The entry for this field, or null. `make` asks for one to be created. */
+static FeOwnField *fe_own_field_slot(FeOwnState *state, const char *field,
+                                     int make)
+{
+    unsigned i;
+    unsigned free_slot = FE_OWN_FIELD_MAX;
+    if (!state || !field) return 0;
+    for (i = 0; i < FE_OWN_FIELD_MAX; ++i) {
+        if (state->fields[i].name &&
+            strcmp(state->fields[i].name, field) == 0) return &state->fields[i];
+        if (!state->fields[i].name && free_slot == FE_OWN_FIELD_MAX)
+            free_slot = i;
+    }
+    if (!make || free_slot == FE_OWN_FIELD_MAX) return 0;
+    state->fields[free_slot].name = field;
+    state->fields[free_slot].shared = 0;
+    state->fields[free_slot].exclusive = 0;
+    state->fields[free_slot].loc = fe_own_no_loc();
+    return &state->fields[free_slot];
+}
+
+/* A live borrow of some field, for the accesses that reach the whole value. */
+static const FeOwnField *fe_own_field_live(const FeOwnState *state,
+                                           int mut_only)
+{
+    unsigned i;
+    if (!state) return 0;
+    for (i = 0; i < FE_OWN_FIELD_MAX; ++i) {
+        const FeOwnField *f = &state->fields[i];
+        if (!f->name) continue;
+        if (f->exclusive) return f;
+        if (!mut_only && f->shared) return f;
+    }
+    return 0;
+}
+
+void fe_own_release_shared_field(FeOwnState *state, const char *field)
+{
+    FeOwnField *f = fe_own_field_slot(state, field, 0);
+    if (!f || !f->shared) { fe_own_release_shared(state); return; }
+    --f->shared;
+    if (!f->shared && !f->exclusive) f->name = 0;
+}
+
+void fe_own_release_exclusive_field(FeOwnState *state, const char *field)
+{
+    FeOwnField *f = fe_own_field_slot(state, field, 0);
+    if (!f || !f->exclusive) { fe_own_release_exclusive(state); return; }
+    f->exclusive = 0;
+    if (!f->shared) f->name = 0;
+}
+
 int fe_own_access(FeDiags *diags, FeOwnState *state,
                   FeOwnAccessKind access, FeLoc loc)
+{
+    return fe_own_access_field(diags, state, 0, access, loc);
+}
+
+int fe_own_access_field(FeDiags *diags, FeOwnState *state, const char *field,
+                        FeOwnAccessKind access, FeLoc loc)
+{
+    FeOwnField *f;
+    const FeOwnField *other;
+    if (!state) return 0;
+    if (access == FE_OWN_PROJECTION) return 1;
+    if (!field) {
+        /* Reaching the whole value: a borrow of any part of it is in the way.
+           A shared borrow of a field still lets the whole be read. */
+        other = fe_own_field_live(state, access == FE_OWN_READ);
+        if (other) {
+            fe_own_error_note(diags, loc,
+                access == FE_OWN_WRITE ? "cannot write while value is borrowed" :
+                access == FE_OWN_MOVE ? "cannot move while value is borrowed" :
+                access == FE_OWN_READ ?
+                    "cannot read directly while value is mutably borrowed" :
+                    "cannot borrow while a field of the value is borrowed",
+                other->loc, "borrow originated here");
+            return 0;
+        }
+        return fe_own_access_whole(diags, state, access, loc);
+    }
+    /* Reaching one field: a borrow of the whole value is in the way, and so is
+       a borrow of this same field. A borrow of a different field is not. */
+    if (!fe_own_access_whole_check(diags, state, access, loc)) return 0;
+    f = fe_own_field_slot(state, field,
+                          access == FE_OWN_BORROW_SHARED ||
+                          access == FE_OWN_BORROW_MUT);
+    if (!f) {
+        /* No room left in the table, so this borrow covers the whole value.
+           That reports more than it has to and never less. */
+        if (access == FE_OWN_BORROW_SHARED || access == FE_OWN_BORROW_MUT)
+            return fe_own_access_whole(diags, state, access, loc);
+        return 1;
+    }
+    switch (access) {
+    case FE_OWN_READ:
+        if (f->exclusive) {
+            fe_own_error_note(diags, loc,
+                "cannot read directly while value is mutably borrowed",
+                f->loc, "mutable borrow originated here");
+            return 0;
+        }
+        return 1;
+    case FE_OWN_WRITE:
+    case FE_OWN_MOVE:
+        if (f->shared || f->exclusive) {
+            fe_own_error_note(diags, loc,
+                access == FE_OWN_WRITE ? "cannot write while value is borrowed"
+                                       : "cannot move while value is borrowed",
+                f->loc, "borrow originated here");
+            return 0;
+        }
+        return 1;
+    case FE_OWN_BORROW_SHARED:
+        if (f->exclusive) {
+            fe_own_error_note(diags, loc,
+                "cannot create shared borrow while mutable borrow is live",
+                f->loc, "mutable borrow originated here");
+            return 0;
+        }
+        if (!f->shared) f->loc = loc;
+        ++f->shared;
+        return 1;
+    case FE_OWN_BORROW_MUT:
+        if (f->shared || f->exclusive) {
+            fe_own_error_note(diags, loc,
+                "cannot create mutable borrow while another borrow is live",
+                f->loc, "existing borrow originated here");
+            return 0;
+        }
+        f->exclusive = 1;
+        f->loc = loc;
+        return 1;
+    default:
+        break;
+    }
+    return 1;
+}
+
+static int fe_own_access_whole_check(FeDiags *diags, FeOwnState *state,
+                                     FeOwnAccessKind access, FeLoc loc)
+{
+    if (!fe_own_require_stable_borrow(diags, state, loc)) return 0;
+    if (access == FE_OWN_WRITE) {
+        if (state->shared || state->exclusive) {
+            fe_own_error_note(diags, loc, "cannot write while value is borrowed",
+                              state->borrow_loc, "borrow originated here");
+            return 0;
+        }
+        return 1;
+    }
+    if (!fe_own_require_value(diags, state, loc)) return 0;
+    if (access == FE_OWN_READ || access == FE_OWN_BORROW_SHARED) {
+        if (state->exclusive) {
+            fe_own_error_note(diags, loc, access == FE_OWN_READ ?
+                "cannot read directly while value is mutably borrowed" :
+                "cannot create shared borrow while mutable borrow is live",
+                state->borrow_loc, "mutable borrow originated here");
+            return 0;
+        }
+        return 1;
+    }
+    if (state->shared || state->exclusive) {
+        fe_own_error_note(diags, loc, access == FE_OWN_MOVE ?
+            "cannot move while value is borrowed" :
+            "cannot create mutable borrow while another borrow is live",
+            state->borrow_loc, "existing borrow originated here");
+        return 0;
+    }
+    return 1;
+}
+
+static int fe_own_access_whole(FeDiags *diags, FeOwnState *state,
+                               FeOwnAccessKind access, FeLoc loc)
 {
     if (!state) return 0;
     if (access == FE_OWN_PROJECTION) return 1;
@@ -225,9 +411,38 @@ void fe_own_release_exclusive(FeOwnState *state)
     if (!state->shared) state->borrow_loc = fe_own_no_loc();
 }
 
+/* Merging two paths through the code: a borrow that is live on either side is
+   live after, because the checker cannot know which side ran. */
+static void fe_own_merge_fields(FeOwnState *out, const FeOwnState *left,
+                                const FeOwnState *right)
+{
+    unsigned i;
+    unsigned j;
+    for (i = 0; i < FE_OWN_FIELD_MAX; ++i) out->fields[i] = left->fields[i];
+    for (i = 0; i < FE_OWN_FIELD_MAX; ++i) {
+        const FeOwnField *r = &right->fields[i];
+        if (!r->name) continue;
+        for (j = 0; j < FE_OWN_FIELD_MAX; ++j) {
+            if (out->fields[j].name &&
+                strcmp(out->fields[j].name, r->name) != 0) continue;
+            if (!out->fields[j].name) out->fields[j] = *r;
+            else {
+                if (r->shared > out->fields[j].shared)
+                    out->fields[j].shared = r->shared;
+                if (r->exclusive && !out->fields[j].exclusive) {
+                    out->fields[j].exclusive = 1;
+                    out->fields[j].loc = r->loc;
+                }
+            }
+            break;
+        }
+    }
+}
+
 FeOwnState fe_own_merge_state(FeOwnState left, FeOwnState right)
 {
     FeOwnState out;
+    fe_own_merge_fields(&out, &left, &right);
     out.move = left.move == right.move ? left.move :
         fe_own_merge_move(left.move, right.move);
     out.initialized = left.initialized && right.initialized;
@@ -246,6 +461,17 @@ FeOwnState fe_own_merge_state(FeOwnState left, FeOwnState right)
 int fe_own_state_equal(const FeOwnState *left, const FeOwnState *right)
 {
     if (!left || !right) return 0;
+    {
+        unsigned i;
+        for (i = 0; i < FE_OWN_FIELD_MAX; ++i) {
+            const FeOwnField *a = &left->fields[i];
+            const FeOwnField *b = &right->fields[i];
+            if (!a->name != !b->name) return 0;
+            if (a->name && strcmp(a->name, b->name) != 0) return 0;
+            if (a->shared != b->shared || a->exclusive != b->exclusive)
+                return 0;
+        }
+    }
     return left->move == right->move &&
            left->initialized == right->initialized &&
            left->shared == right->shared &&

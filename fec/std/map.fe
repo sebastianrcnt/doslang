@@ -92,33 +92,22 @@ pub struct Map(V) {
         return;
     }
 
-    /// Make sure `need` bytes fit, moving to a bigger buffer if they do not.
-    ///
-    /// Kept apart from `keep` because the borrow that swaps the buffer in is
-    /// a borrow of the whole of `self` -- borrowing is tracked at the root --
-    /// and it has to be over before any field is read again.
-    fn ensure_room(self: &mut Self, need: usize) -> !void {
-        let have: usize = self.bytes.^.n;
-        if need <= have { return; }
-        var room: usize = have;
-        while room < need { room = room * 2; }
-        let bigger: ^[]mut u8 = try mem.alloc_slice(u8, room);
-        var k: usize = 0;
-        let filled: usize = self.used_bytes;
-        while k < filled {
-            bigger.^[k] = self.bytes.^[k];
-            k = k + 1;
-        }
-        let old: ^[]mut u8 = mem.replace(&mut self.bytes, bigger);
-        mem.destroy(old);
-        return;
-    }
-
-    /// Copy `key` into the byte buffer and point the slot at it.
+    /// Copy `key` into the byte buffer and point the slot at it, moving to a
+    /// bigger buffer first if it does not fit.
     fn keep(self: &mut Self, key: []u8, slot: usize) -> !void {
         let at: usize = self.used_bytes;
-        let need: usize = at + key.n;
-        try self.ensure_room(need);
+        if at + key.n > self.bytes.^.n {
+            var room: usize = self.bytes.^.n;
+            while room < at + key.n { room = room * 2; }
+            let bigger: ^[]mut u8 = try mem.alloc_slice(u8, room);
+            var k: usize = 0;
+            while k < at {
+                bigger.^[k] = self.bytes.^[k];
+                k = k + 1;
+            }
+            let old: ^[]mut u8 = mem.replace(&mut self.bytes, bigger);
+            mem.destroy(old);
+        }
         var i: usize = 0;
         while i < key.n {
             self.bytes.^[at + i] = key[i];

@@ -1,0 +1,14 @@
+// ERROR:11:borrow
+unit badrall;
+
+struct Pair { a: i32, b: i32, }
+
+fn take(q: Pair) -> i32 { return q.a; }
+
+fn bad() -> i32 {
+    var p = Pair{ a: 1, b: 2 };
+    let left = &mut p.a;
+    let n = take(p);
+    left.^ = 4;
+    return n;
+}

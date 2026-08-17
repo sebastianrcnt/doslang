@@ -260,6 +260,7 @@ FeSym *add_symbol(FeCheckerState *s, FeScope *scope,
     sym->decl = decl;
     fe_own_state_init(&sym->own, initialized);
     sym->borrow_root = 0;
+    sym->borrow_field = 0;
     sym->borrow_mut = 0;
     sym->borrow_defer = 0;
     sym->owner = scope;
@@ -506,9 +507,47 @@ int own_is_global(FeCheckerState *s, FeSym *sym)
     return 0;
 }
 
+/* Strip the `&`/`&mut` off an expression; the place underneath is what is
+   being reached. */
+static FeNode *own_strip_ref(FeNode *e)
+{
+    while (e && e->kind==FE_N_UNARY && e->text &&
+           (strcmp(e->text,"&")==0 || strcmp(e->text,"&mut")==0))
+        e=e->a;
+    return e;
+}
+
+/* The first field projected off the root of `expr`, and that root.
+   `self.bytes.^[i]` projects `bytes` off `self`. An index (`arr[i]`) and a
+   dereference (`p.^`) name no field, so they answer for the whole value --
+   which is what the checker did for everything before. */
+const char *own_projected_field(FeNode *expr, FeNode **root_out)
+{
+    FeNode *inner;
+    FeNode *outer=0;
+    if (root_out) *root_out=0;
+    inner=own_strip_ref(expr);
+    while (inner && (inner->kind==FE_N_MEMBER || inner->kind==FE_N_INDEX)) {
+        outer=inner;
+        inner=own_strip_ref(inner->a);
+    }
+    if (!inner || inner->kind!=FE_N_IDENT || !outer) return 0;
+    if (outer->kind!=FE_N_MEMBER) return 0;
+    /* A member node's own text is the token the postfix chain started at, not
+       the operator, so the spelling of the projection is what to look at:
+       `.?` carries nothing on the right and `.^` carries a caret. */
+    if (outer->text && (strcmp(outer->text,".?")==0 ||
+                        strcmp(outer->text,".^")==0)) return 0;
+    if (!outer->b || !outer->b->text) return 0;
+    if (strcmp(outer->b->text,"^")==0) return 0;
+    if (root_out) *root_out=inner;
+    return outer->b->text;
+}
+
 void own_borrow_expr(FeCheckerState *s, FeNode *expr, int mutable)
 {
     FeSym *root=own_root_symbol(s,expr);
+    const char *field=own_projected_field(expr,0);
     if (!root) return;
     if (mutable && root->type && root->type->kind==FE_TYPE_REF &&
         !root->type->ref_mut) {
@@ -521,9 +560,9 @@ void own_borrow_expr(FeCheckerState *s, FeNode *expr, int mutable)
         err(s->c,expr->loc,"cannot borrow a mutable global");
         return;
     }
-    fe_own_access(s->c->diags,&root->own,
-                  mutable ? FE_OWN_BORROW_MUT : FE_OWN_BORROW_SHARED,
-                  expr->loc);
+    fe_own_access_field(s->c->diags,&root->own,field,
+                        mutable ? FE_OWN_BORROW_MUT : FE_OWN_BORROW_SHARED,
+                        expr->loc);
 }
 
 void own_release_temporary_borrow(FeCheckerState *s, FeNode *expr)
@@ -533,8 +572,12 @@ void own_release_temporary_borrow(FeCheckerState *s, FeNode *expr)
     if (strcmp(expr->text,"&")!=0 && strcmp(expr->text,"&mut")!=0) return;
     root=own_root_symbol(s,expr->a);
     if (!root) return;
-    if (strcmp(expr->text,"&mut")==0) fe_own_release_exclusive(&root->own);
-    else fe_own_release_shared(&root->own);
+    {
+        const char *field=own_projected_field(expr->a,0);
+        if (strcmp(expr->text,"&mut")==0)
+            fe_own_release_exclusive_field(&root->own,field);
+        else fe_own_release_shared_field(&root->own,field);
+    }
 }
 
 /* Return-reference provenance is represented at call sites by retaining a
@@ -577,6 +620,7 @@ void own_bind_derived_call(FeCheckerState *s, FeSym *binding,
     else
         fe_own_access(s->c->diags,&root->own,FE_OWN_BORROW_SHARED,value->loc);
     binding->borrow_root=root;
+    binding->borrow_field=0;
     binding->borrow_mut=value->sem_type->kind==FE_TYPE_REF && value->sem_type->ref_mut;
 }
 
@@ -631,9 +675,13 @@ void own_release_after_stmt(FeCheckerState *s, FeScope *scope,
             ref->decl && ref->decl->text ? ref->decl->text : ref->name);
         if (!scope_end && (ref->borrow_defer || !last || last->defer_extended ||
             !own_contains_node(stmt,last->last_node))) continue;
-        if (ref->borrow_mut) fe_own_release_exclusive(&ref->borrow_root->own);
-        else fe_own_release_shared(&ref->borrow_root->own);
+        if (ref->borrow_mut)
+            fe_own_release_exclusive_field(&ref->borrow_root->own,
+                                           ref->borrow_field);
+        else fe_own_release_shared_field(&ref->borrow_root->own,
+                                         ref->borrow_field);
         ref->borrow_root=0;
+        ref->borrow_field=0;
     }
 }
 
@@ -687,6 +735,7 @@ void flow_borrow_capture(FeFlowSlot *slots, FeFlowBorrow *states,
     if (!states) return;
     for (i=0;i<count;++i) {
         states[i].root=slots[i].sym->borrow_root;
+        states[i].field=slots[i].sym->borrow_field;
         states[i].mutable=slots[i].sym->borrow_mut;
     }
 }
@@ -698,6 +747,7 @@ void flow_borrow_restore(FeFlowSlot *slots, FeFlowBorrow *states,
     if (!states) return;
     for (i=0;i<count;++i) {
         slots[i].sym->borrow_root=states[i].root;
+        slots[i].sym->borrow_field=states[i].field;
         slots[i].sym->borrow_mut=states[i].mutable;
     }
 }
@@ -709,6 +759,7 @@ void flow_borrow_merge(FeFlowSlot *slots, FeFlowBorrow *left,
     if (!left || !right) return;
     for (i=0;i<count;++i) {
         slots[i].sym->borrow_root=left[i].root ? left[i].root : right[i].root;
+        slots[i].sym->borrow_field=left[i].root ? left[i].field : right[i].field;
         slots[i].sym->borrow_mut=left[i].mutable || right[i].mutable;
     }
 }

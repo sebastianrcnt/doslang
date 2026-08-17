@@ -1,0 +1,81 @@
+// EXIT:0
+// OUTPUT:a 40 b 3
+// OUTPUT:used 5 room 8
+// OUTPUT:first 9
+// OUTPUT:balanced
+unit fieldbrw;
+
+import std.io;
+import std.sys;
+import std.mem;
+
+// Borrowing is per field. `p.a` and `p.b` are different places, so lending one
+// out has to leave the other readable -- otherwise a method cannot write
+// through one field while reading another, which is most of what a method
+// does.
+
+struct Pair { a: i32, b: i32, }
+
+fn scale(v: &mut i32, by: i32) -> void {
+    v.^ = v.^ * by;
+    return;
+}
+
+struct Box {
+    bytes: ^[]mut u8,
+    used: usize,
+    room: usize,
+
+    fn with_capacity(n: usize) -> !Self {
+        let room: ^[]mut u8 = try mem.alloc_slice(u8, n);
+        return Self{ bytes: room, used: 0, room: n };
+    }
+
+    /// Move to a bigger buffer, then go on reading the other fields. The
+    /// borrow that hands over the buffer covers `bytes` and nothing else.
+    fn grow(self: &mut Self, want: usize) -> !void {
+        let bigger: ^[]mut u8 = try mem.alloc_slice(u8, want);
+        var i: usize = 0;
+        while i < self.used {
+            bigger.^[i] = self.bytes.^[i];
+            i = i + 1;
+        }
+        let old: ^[]mut u8 = mem.replace(&mut self.bytes, bigger);
+        mem.destroy(old);
+        self.room = want;
+        return;
+    }
+
+    fn push(self: &mut Self, v: u8) -> !void {
+        if self.used == self.room { try self.grow(self.room * 2); }
+        self.bytes.^[self.used] = v;
+        self.used = self.used + 1;
+        return;
+    }
+}
+
+fn run() -> !void {
+    var p: Pair = Pair{ a: 4, b: 2 };
+    let left: &mut i32 = &mut p.a;
+    // Writing another field while `a` is lent out.
+    p.b = 3;
+    scale(left, 10);
+    @print("a {} b {}\n", p.a, p.b);
+
+    var box: Box = try Box.with_capacity(4);
+    try box.push(9);
+    try box.push(8);
+    try box.push(7);
+    try box.push(6);
+    try box.push(5);
+    @print("used {} room {}\n", box.used, box.room);
+    @print("first {}\n", box.bytes.^[0]);
+    return;
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() == sys.frees() { @print("balanced\n"); }
+    else { @print("leaked\n"); }
+    return 0;
+}

@@ -1,0 +1,14 @@
+unit okrfld;
+
+// Borrowing one field leaves the others alone. `p.a` and `p.b` are different
+// places, so a borrow of one says nothing about the other.
+
+struct Pair { a: i32, b: i32, }
+
+fn ok() -> i32 {
+    var p = Pair{ a: 1, b: 2 };
+    let left = &mut p.a;
+    p.b = 3;
+    left.^ = 4;
+    return p.a + p.b;
+}

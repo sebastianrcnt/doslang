@@ -34,6 +34,22 @@ typedef struct FeOwnPlace {
     int projected;
 } FeOwnPlace;
 
+/* How many distinct fields of one value can be borrowed at once. Past this
+   a borrow falls back to covering the whole value, which reports more than it
+   has to but never less. */
+#define FE_OWN_FIELD_MAX 4
+
+/* A borrow of one field rather than of the whole value. `self.bytes` and
+   `self.used_bytes` are different places, so borrowing one has to leave the
+   other readable -- otherwise a method cannot write through one field while
+   reading another, which is most of what a method does. */
+typedef struct FeOwnField {
+    const char *name;
+    unsigned shared;
+    int exclusive;
+    FeLoc loc;
+} FeOwnField;
+
 typedef struct FeOwnState {
     int move;
     int initialized;
@@ -42,6 +58,10 @@ typedef struct FeOwnState {
     int borrow_conflict;
     FeLoc move_loc;
     FeLoc borrow_loc;
+    /* Whole-value state is above; these cover one field each. A whole-value
+       borrow conflicts with every field, and a field borrow conflicts with
+       the whole value and with itself. */
+    FeOwnField fields[FE_OWN_FIELD_MAX];
 } FeOwnState;
 
 typedef struct FeOwnProvenance {
@@ -72,9 +92,15 @@ int fe_own_place_from_expr(FeNode *expr, FeOwnPlace *place);
 void fe_own_state_init(FeOwnState *state, int initialized);
 int fe_own_access(FeDiags *diags, FeOwnState *state,
                   FeOwnAccessKind access, FeLoc loc);
+/* The same, but reaching only one field of the value. A null `field` is the
+   whole value and behaves exactly as `fe_own_access`. */
+int fe_own_access_field(FeDiags *diags, FeOwnState *state, const char *field,
+                        FeOwnAccessKind access, FeLoc loc);
 int fe_own_call_shared_view(FeDiags *diags, FeOwnState *state, FeLoc loc);
 void fe_own_release_shared(FeOwnState *state);
 void fe_own_release_exclusive(FeOwnState *state);
+void fe_own_release_shared_field(FeOwnState *state, const char *field);
+void fe_own_release_exclusive_field(FeOwnState *state, const char *field);
 FeOwnState fe_own_merge_state(FeOwnState left, FeOwnState right);
 int fe_own_state_equal(const FeOwnState *left, const FeOwnState *right);
 int fe_own_loop_merge_state(FeOwnState entry, FeOwnState backedge,

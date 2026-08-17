@@ -1,11 +1,12 @@
 // ERROR:9:borrow
-unit badrfld;
+unit badrsame;
 
 struct Pair { a: i32, b: i32, }
 
 fn bad() -> void {
     var p = Pair{ a: 1, b: 2 };
-    let left = &mut p.a;
-    p.a = 3;
-    left.^ = 4;
+    let one = &mut p.a;
+    let two = &mut p.a;
+    one.^ = 1;
+    two.^ = 2;
 }
