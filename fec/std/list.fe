@@ -1,8 +1,10 @@
 unit std.list;
 
 // A growable sequence. The buffer is owned, so a List owns its elements and
-// releasing it releases them (SPEC 5 R1). Growth doubles, which keeps the
-// total copying proportional to the number of pushes.
+// releasing it releases them (SPEC 5 R1) -- which is also why there is no
+// `drop` here: letting go of a List lets go of its buffer on its own. Growth
+// doubles, which keeps the total copying proportional to the number of
+// pushes.
 
 pub struct List(T) {
     items: ^[]mut T,
@@ -45,9 +47,5 @@ pub struct List(T) {
         let old: ^[]mut T = mem.replace(&mut self.items, bigger);
         mem.destroy(old);
         return;
-    }
-
-    pub fn drop(self: &mut Self) -> void {
-        mem.destroy(self.items);
     }
 }

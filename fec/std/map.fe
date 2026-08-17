@@ -6,7 +6,8 @@ unit std.map;
 // wrong shape for that. Keys are copied into one buffer the map owns and each
 // slot records where in it the key sits -- the arena-and-handle shape R11 asks
 // for, which also means letting go of the map is two frees and not one per
-// entry.
+// entry. Both buffers are owned, so R1 does the letting go and no `drop` is
+// written here.
 //
 // Open addressing with linear probing. The table is a power of two so the
 // index is a mask rather than a division, and it grows at three quarters full
@@ -154,11 +155,6 @@ pub struct Map(V) {
         let old: ^[]mut Slot(V) = mem.replace(&mut self.slots, bigger);
         mem.destroy(old);
         return;
-    }
-
-    pub fn drop(self: &mut Self) -> void {
-        mem.destroy(self.slots);
-        mem.destroy(self.bytes);
     }
 }
 

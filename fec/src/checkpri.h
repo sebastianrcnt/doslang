@@ -104,6 +104,7 @@ FeUnit *binding_unit(FeCheckerState *s, FeNode *base);
 int decl_is_public(const FeNode *decl);
 FeSym *unit_member(FeCheck *c, FeUnit *u, const char *name);
 FeType *unit_type(FeCheck *c, FeUnit *u, const char *name);
+int enter_declaring_unit(FeCheck *c, const char *unit_name);
 FeNode *unit_type_decl(FeCheck *c, FeUnit *u, const char *name);
 FeType *node_type_in(FeCheck *c, const char *unit, FeNode *node);
 FeNode *find_method(FeCheck *c, FeType *owner, const char *name);

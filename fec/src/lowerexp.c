@@ -171,6 +171,12 @@ Slot lower_expr_core(Lower *L, FeNode *n)
             if (base && (base->kind == FE_TYPE_REF ||
                          base->kind == FE_TYPE_OWNED)) base = base->elem;
             field = fe_type_field(base, n->b && n->b->text ? n->b->text : "");
+            /* `binding.name` is not a field of anything: it is a constant or a
+               global in another unit, and the checker already turned it into a
+               link name. */
+            if (!field && n->cname)
+                return slot_place(fe_ir_at_global(n->cname, 0), it,
+                                  ir_size(t));
             if (!field) { fail(L, "an unresolved field", n); return slot_void(); }
             b = lower_expr(L, n->a);
             if (n->a->sem_type && (n->a->sem_type->kind == FE_TYPE_REF ||
@@ -305,6 +311,37 @@ const char *drop_name(Lower *L, const FeType *t)
     return method->cname;
 }
 
+/* Let go of one value sitting at `at`. A type that says how to let go of
+   itself is asked first; then whatever it holds is let go of in turn, so a
+   struct that owns a struct that owns a buffer settles all three without
+   anyone writing a `drop` (SPEC 5 R1). */
+void release_at(Lower *L, const FeType *t, FeIrPlace at)
+{
+    unsigned args[1];
+    unsigned i;
+    if (!t) return;
+    if (t->has_drop) {
+        const char *how = drop_name(L, t);
+        args[0] = fe_ir_addr(L->m, L->b, at);
+        if (how) fe_ir_call(L->m, L->b, FE_IR_VOID, how, args, 1);
+    }
+    if (t->kind == FE_TYPE_OWNED) {
+        FeIrPlace p = at;
+        if (t->elem && t->elem->kind == FE_TYPE_SLICE)
+            p.offset += SLICE_PTR_OFFSET;
+        args[0] = fe_ir_load(L->m, L->b, FE_IR_PTR, p);
+        fe_ir_call(L->m, L->b, FE_IR_VOID, "fe_rt_free", args, 1);
+        return;
+    }
+    if (t->kind == FE_TYPE_STRUCT)
+        for (i = 0; i < t->field_count; ++i) {
+            FeIrPlace p = at;
+            if (!needs_release(t->fields[i].type)) continue;
+            p.offset += (long)t->fields[i].offset;
+            release_at(L, t->fields[i].type, p);
+        }
+}
+
 /* Settle what a scope owes, most recent first. A `return` in the middle of a
    function still owes everything, so every exit path calls this. */
 void run_deferred(Lower *L, unsigned from)
@@ -321,29 +358,10 @@ void run_deferred(Lower *L, unsigned from)
                                        fe_ir_at_local(L->owed[i - 1].flag, 0));
             FeIrBlock *doit = new_block(L);
             FeIrBlock *skip = new_block(L);
-            unsigned args[1];
             FeType *t = L->owed[i - 1].type;
             fe_ir_br(L->b, live, doit->id, skip->id);
             L->b = doit;
-            if (t && t->kind == FE_TYPE_OWNED && t->elem &&
-                t->elem->kind == FE_TYPE_SLICE) {
-                FeIrPlace at = fe_ir_at_local(L->owed[i - 1].local,
-                                              SLICE_PTR_OFFSET);
-                args[0] = fe_ir_load(L->m, L->b, FE_IR_PTR, at);
-            } else {
-                args[0] = fe_ir_load(L->m, L->b, FE_IR_PTR,
-                                     fe_ir_at_local(L->owed[i - 1].local, 0));
-            }
-            if (t && t->has_drop) {
-                /* A type that says how to let go of itself is asked to; the
-                   name is the one its instance was given. */
-                const char *how = drop_name(L, t);
-                args[0] = fe_ir_addr(L->m, L->b,
-                                     fe_ir_at_local(L->owed[i - 1].local, 0));
-                if (how) fe_ir_call(L->m, L->b, FE_IR_VOID, how, args, 1);
-            } else {
-                fe_ir_call(L->m, L->b, FE_IR_VOID, "fe_rt_free", args, 1);
-            }
+            release_at(L, t, fe_ir_at_local(L->owed[i - 1].local, 0));
             fe_ir_jmp(L->b, skip->id);
             L->b = skip;
         }

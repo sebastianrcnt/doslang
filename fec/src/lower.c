@@ -113,9 +113,18 @@ unsigned as_address(Lower *L, Slot s, FeNode *n)
 /* Does letting go of this type have to do something? */
 int needs_release(const FeType *t)
 {
+    unsigned i;
     if (!t) return 0;
     if (t->kind == FE_TYPE_OWNED) return 1;
-    return t->has_drop != 0;
+    if (t->has_drop) return 1;
+    /* SPEC 5 R1: letting go of an owner lets go of what it owns. A struct that
+       holds an owner has something to do even when it says nothing itself --
+       which is what lets one type hold another that has a `drop`, since
+       calling `drop` by hand is not allowed. */
+    if (t->kind == FE_TYPE_STRUCT)
+        for (i = 0; i < t->field_count; ++i)
+            if (needs_release(t->fields[i].type)) return 1;
+    return 0;
 }
 
 int lower_reserve(Lower *L, void **items, unsigned *capacity, unsigned needed,

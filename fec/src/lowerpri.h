@@ -145,6 +145,7 @@ Slot lower_call(Lower *L, FeNode *n);
 Slot lower_expr(Lower *L, FeNode *n);
 Slot lower_expr_core(Lower *L, FeNode *n);
 const char *drop_name(Lower *L, const FeType *t);
+void release_at(Lower *L, const FeType *t, FeIrPlace at);
 void run_deferred(Lower *L, unsigned from);
 Slot wrap_context(Lower *L, Slot v, FeNode *n);
 unsigned wrapper_tag(Lower *L, Slot w, const FeType *t, FeNode *n);

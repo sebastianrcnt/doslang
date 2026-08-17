@@ -284,6 +284,9 @@ void enter_unit(FeCheck *c, unsigned index)
 
 
 
+static int enter_decl_hook(void *owner, const char *unit);
+static void leave_decl_hook(void *owner, int back);
+
 void fe_check_init(FeCheck *c, FeBuild *build, FeDiags *diags,
                    unsigned pointer_bits, int no_checks)
 {
@@ -301,6 +304,8 @@ void fe_check_init(FeCheck *c, FeBuild *build, FeDiags *diags,
     c->types.unit_name = "unit";
     c->types.instantiate = instantiate_type_node;
     c->types.instantiate_owner = c;
+    c->types.enter_decl = enter_decl_hook;
+    c->types.leave_decl = leave_decl_hook;
     c->instances = (FeInstance *)fe_arena_alloc(&c->arena,
         (unsigned long)FE_GENERIC_INSTANCE_MAX * sizeof(FeInstance));
     c->instance_count = 0;
@@ -352,6 +357,36 @@ FeType *unit_type(FeCheck *c, FeUnit *u, const char *name)
         if (t->unit && strcmp(t->name,name)==0 &&
             strcmp(t->unit,u->name)==0 && t->kind!=FE_TYPE_UNKNOWN) return t;
     return 0;
+}
+
+/* A field type is written in the unit that declared the type, so it has to be
+   resolved with that unit's imports in scope -- not with whichever unit
+   happens to be current when the walk reaches it. Returns the index to go back
+   to, or -1 when there is nowhere to go. */
+int enter_declaring_unit(FeCheck *c, const char *unit_name)
+{
+    unsigned i;
+    unsigned here;
+    if (!unit_name || !c->build || !c->unit) return -1;
+    here = unit_index(c,c->unit);
+    for (i=0;i<c->build->count;++i)
+        if (strcmp(c->build->units[i].name,unit_name)==0) {
+            if (i==here) return -1;
+            enter_unit(c,i);
+            return (int)here;
+        }
+    return -1;
+}
+
+/* The type layer calls these; it knows nothing about units beyond a name. */
+static int enter_decl_hook(void *owner, const char *unit)
+{
+    return enter_declaring_unit((FeCheck *)owner, unit);
+}
+
+static void leave_decl_hook(void *owner, int back)
+{
+    enter_unit((FeCheck *)owner, (unsigned)back);
 }
 
 /* The AST declaration of a type another unit declares, for its visibility and

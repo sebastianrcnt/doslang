@@ -140,18 +140,25 @@ void check_type_cycle(FeCheck *c, FeType *t)
     if (t->kind == FE_TYPE_ARRAY) {
         check_type_cycle(c,t->elem);
     } else if (t->kind == FE_TYPE_STRUCT) {
-        for (i=0;i<t->field_count;i++) {
+        int back=enter_declaring_unit(c,t->unit);
+        for (i=0;i<t->field_count;i++)
             if (!t->fields[i].type && t->fields[i].ast_node)
                 t->fields[i].type=fe_type_from_ast(&c->types,t->fields[i].ast_node->a);
-            check_type_cycle(c,t->fields[i].type);
-        }
+        if (back>=0) enter_unit(c,(unsigned)back);
+        for (i=0;i<t->field_count;i++) check_type_cycle(c,t->fields[i].type);
     } else if (t->kind == FE_TYPE_ENUM) {
+        int back=enter_declaring_unit(c,t->unit);
         for (i=0;i<t->variant_count;i++) {
             unsigned j;
-            for (j=0;j<t->variants[i].field_count;j++) {
+            for (j=0;j<t->variants[i].field_count;j++)
                 if (!t->variants[i].fields[j].type && t->variants[i].fields[j].ast_node)
                     t->variants[i].fields[j].type=fe_type_from_ast(&c->types,
                         t->variants[i].fields[j].ast_node->a);
+        }
+        if (back>=0) enter_unit(c,(unsigned)back);
+        for (i=0;i<t->variant_count;i++) {
+            unsigned j;
+            for (j=0;j<t->variants[i].field_count;j++) {
                 next=t->variants[i].fields[j].type;
                 check_type_cycle(c,next);
             }

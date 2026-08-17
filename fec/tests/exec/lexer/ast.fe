@@ -1,0 +1,49 @@
+unit ast;
+
+// The tree the parser builds.
+//
+// Nodes live in one growing array and refer to each other by index, which is
+// what SPEC R11 asks for: an owner that holds the values and handles that
+// point at them. A node cannot hold a `^Node` for its children because a node
+// has several and they are not each owned once; it cannot hold a `&Node`
+// because R4 keeps borrows out of aggregate storage. An index is neither.
+
+pub enum Shape {
+    Unit,       // a: name
+    Fn,         // a: name, b: first statement
+    Let,        // a: name, b: value
+    Return,     // a: value, or NONE
+    Binary,     // a: left, b: right, from/len: the operator
+    Number,
+    Name,
+    Text,
+    Error,
+}
+
+/// No node. Zero is a real index, so the empty handle is the largest one.
+pub const NONE: usize = 4294967295;
+
+pub struct Node {
+    pub shape: Shape,
+    pub from: usize,        // where in the source this came from
+    pub len: usize,
+    pub line: usize,
+    pub a: usize,           // handles into the same tree
+    pub b: usize,
+    pub next: usize,        // the following statement, when there is one
+}
+
+pub fn name_of(s: Shape) -> []u8 {
+    match s {
+        Unit => { return "unit"; }
+        Fn => { return "fn"; }
+        Let => { return "let"; }
+        Return => { return "return"; }
+        Binary => { return "binary"; }
+        Number => { return "number"; }
+        Name => { return "name"; }
+        Text => { return "text"; }
+        Error => { return "error"; }
+    }
+    return "?";
+}

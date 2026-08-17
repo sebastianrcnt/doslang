@@ -98,6 +98,11 @@ struct FeType {
     FeType *next;
     int emit_state;
     int cycle_state;
+    /* Separate from `cycle_state`: the checker's by-value recursion walk and
+       this layer's size computation run inside one another, and sharing one
+       marker made a struct in the middle of the first look complete to the
+       second -- one byte wide, with every field on top of the next. */
+    int layout_state;
 };
 
 typedef struct FeTypeCtx {
@@ -114,6 +119,12 @@ typedef struct FeTypeCtx {
        so it installs this and the type layer calls back into it. */
     FeType *(*instantiate)(void *owner, const FeNode *node);
     void *instantiate_owner;
+    /* A field type is written in the unit that declared it, so resolving one
+       has to happen with that unit's imports in scope. The checker owns that
+       knowledge, so it installs this pair and the type layer calls back.
+       `enter` answers with what to hand `leave`, or -1 for "stayed put". */
+    int (*enter_decl)(void *owner, const char *unit);
+    void (*leave_decl)(void *owner, int back);
 } FeTypeCtx;
 
 void fe_types_init(FeTypeCtx *ctx, FeArena *arena, unsigned pointer_bits);

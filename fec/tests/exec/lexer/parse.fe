@@ -1,0 +1,256 @@
+unit parse;
+
+import std.list;
+import std.str;
+import tok;
+import scan;
+import ast;
+
+// Recursive descent over the lexer's tokens.
+//
+// The source is not a field: R4 keeps borrows out of aggregate storage, so
+// `src` is passed to every step, the same way the lexer passes it. What the
+// parser does own is the node array, and every parent points at its children
+// by index into it.
+//
+// One token of lookahead lives in `cur`. That is all this grammar needs.
+
+pub struct Parser {
+    nodes: list.List(ast.Node),
+    at: usize,
+    line: usize,
+    cur: tok.Token,
+    pub errors: usize,
+
+    pub fn on(src: []u8) -> !Self {
+        let nodes: list.List(ast.Node) =
+            try list.List(ast.Node).with_capacity(16);
+        var p: Self = Self{
+            nodes: nodes,
+            at: 0,
+            line: 1,
+            cur: tok.Token{ kind: tok.Kind.End, from: 0, len: 0, line: 1 },
+            errors: 0,
+        };
+        p.bump(src);
+        return p;
+    }
+
+    fn bump(self: &mut Self, src: []u8) -> void {
+        self.cur = scan.next(src, &mut self.at, &mut self.line);
+        return;
+    }
+
+    fn done(self: &Self) -> bool { return self.cur.kind == tok.Kind.End; }
+
+    /// Is the token in hand this exact spelling?
+    fn is(self: &Self, src: []u8, want: []u8) -> bool {
+        return str.eq(tok.text(src, self.cur), want);
+    }
+
+    /// Take the token in hand if it is this spelling; say whether it was.
+    fn eat(self: &mut Self, src: []u8, want: []u8) -> bool {
+        if not self.is(src, want) { return false; }
+        self.bump(src);
+        return true;
+    }
+
+    /// Demand this spelling. A miss is counted and the token stays put, so the
+    /// caller decides how to get back on its feet.
+    fn want(self: &mut Self, src: []u8, w: []u8) -> bool {
+        if self.eat(src, w) { return true; }
+        self.errors = self.errors + 1;
+        return false;
+    }
+
+    fn add(self: &mut Self, s: ast.Shape, t: tok.Token, a: usize,
+           b: usize) -> !usize {
+        let n: ast.Node = ast.Node{
+            shape: s, from: t.from, len: t.len, line: t.line,
+            a: a, b: b, next: ast.NONE,
+        };
+        let i: usize = self.nodes.count();
+        try self.nodes.push(n);
+        return i;
+    }
+
+    // -- reading the tree back ------------------------------------------
+
+    pub fn count(self: &Self) -> usize { return self.nodes.count(); }
+
+    pub fn node(self: &Self, i: usize) -> ast.Node {
+        return self.nodes.at(i);
+    }
+
+
+    // -- the grammar ----------------------------------------------------
+    //
+    //   unit   := "unit" NAME ";" item*
+    //   item   := "fn" NAME "(" ")" block
+    //   block  := "{" stmt* "}"
+    //   stmt   := "let" NAME "=" expr ";" | "return" expr? ";"
+    //   expr   := term (("+" | "-") term)*
+    //   term   := factor (("*" | "/") factor)*
+    //   factor := NUMBER | NAME | TEXT | "(" expr ")"
+
+    pub fn unit_decl(self: &mut Self, src: []u8) -> !usize {
+        let ok: bool = self.want(src, "unit");
+        let name: tok.Token = self.cur;
+        if ok { self.bump(src); }
+        let semi: bool = self.want(src, ";");
+        let root: usize = try self.add(ast.Shape.Unit, name, ast.NONE,
+                                       ast.NONE);
+        var first: usize = ast.NONE;
+        var last: usize = ast.NONE;
+        while not self.done() {
+            let it: usize = try self.item(src);
+            if first == ast.NONE { first = it; }
+            else { self.link(last, it); }
+            last = it;
+        }
+        self.set_a(root, first);
+        return root;
+    }
+
+    /// Point one statement or item at the one after it.
+    fn link(self: &mut Self, from: usize, to: usize) -> void {
+        var n: ast.Node = self.nodes.at(from);
+        n.next = to;
+        self.nodes.set(from, n);
+        return;
+    }
+
+    fn set_a(self: &mut Self, at: usize, a: usize) -> void {
+        var n: ast.Node = self.nodes.at(at);
+        n.a = a;
+        self.nodes.set(at, n);
+        return;
+    }
+
+    fn item(self: &mut Self, src: []u8) -> !usize {
+        if not self.is(src, "fn") {
+            let bad: tok.Token = self.cur;
+            self.errors = self.errors + 1;
+            self.skip_stmt(src);
+            return try self.add(ast.Shape.Error, bad, ast.NONE, ast.NONE);
+        }
+        self.bump(src);
+        let name: tok.Token = self.cur;
+        self.bump(src);
+        let open: bool = self.want(src, "(");
+        let close: bool = self.want(src, ")");
+        let body: usize = try self.block(src);
+        return try self.add(ast.Shape.Fn, name, ast.NONE, body);
+    }
+
+    fn block(self: &mut Self, src: []u8) -> !usize {
+        let open: bool = self.want(src, "{");
+        var first: usize = ast.NONE;
+        var last: usize = ast.NONE;
+        while true {
+            if self.done() { break; }
+            if self.is(src, "}") { break; }
+            let s: usize = try self.stmt(src);
+            if first == ast.NONE { first = s; }
+            else { self.link(last, s); }
+            last = s;
+        }
+        let close: bool = self.want(src, "}");
+        return first;
+    }
+
+    fn stmt(self: &mut Self, src: []u8) -> !usize {
+        if self.is(src, "let") {
+            self.bump(src);
+            let name: tok.Token = self.cur;
+            self.bump(src);
+            let has_eq: bool = self.want(src, "=");
+            let value: usize = try self.expr(src);
+            let semi: bool = self.want(src, ";");
+            return try self.add(ast.Shape.Let, name, ast.NONE, value);
+        }
+        if self.is(src, "return") {
+            let head: tok.Token = self.cur;
+            self.bump(src);
+            if self.is(src, ";") {
+                self.bump(src);
+                return try self.add(ast.Shape.Return, head, ast.NONE,
+                                    ast.NONE);
+            }
+            let value: usize = try self.expr(src);
+            let semi: bool = self.want(src, ";");
+            return try self.add(ast.Shape.Return, head, value, ast.NONE);
+        }
+        let bad: tok.Token = self.cur;
+        self.errors = self.errors + 1;
+        self.skip_stmt(src);
+        return try self.add(ast.Shape.Error, bad, ast.NONE, ast.NONE);
+    }
+
+    /// Get back to a statement boundary after something unrecognised. Stopping
+    /// at `;` or `}` means one bad statement costs one diagnostic, not a run
+    /// of them.
+    fn skip_stmt(self: &mut Self, src: []u8) -> void {
+        while not self.done() {
+            if self.is(src, "}") { return; }
+            if self.is(src, ";") { self.bump(src); return; }
+            self.bump(src);
+        }
+        return;
+    }
+
+    fn expr(self: &mut Self, src: []u8) -> !usize {
+        var left: usize = try self.term(src);
+        while true {
+            if self.done() { break; }
+            let plus: bool = self.is(src, "+");
+            let minus: bool = self.is(src, "-");
+            if not plus and not minus { break; }
+            let op: tok.Token = self.cur;
+            self.bump(src);
+            let right: usize = try self.term(src);
+            left = try self.add(ast.Shape.Binary, op, left, right);
+        }
+        return left;
+    }
+
+    fn term(self: &mut Self, src: []u8) -> !usize {
+        var left: usize = try self.factor(src);
+        while true {
+            if self.done() { break; }
+            let star: bool = self.is(src, "*");
+            let slash: bool = self.is(src, "/");
+            if not star and not slash { break; }
+            let op: tok.Token = self.cur;
+            self.bump(src);
+            let right: usize = try self.factor(src);
+            left = try self.add(ast.Shape.Binary, op, left, right);
+        }
+        return left;
+    }
+
+    fn factor(self: &mut Self, src: []u8) -> !usize {
+        let t: tok.Token = self.cur;
+        if t.kind == tok.Kind.Number {
+            self.bump(src);
+            return try self.add(ast.Shape.Number, t, ast.NONE, ast.NONE);
+        }
+        if t.kind == tok.Kind.Name {
+            self.bump(src);
+            return try self.add(ast.Shape.Name, t, ast.NONE, ast.NONE);
+        }
+        if t.kind == tok.Kind.Text {
+            self.bump(src);
+            return try self.add(ast.Shape.Text, t, ast.NONE, ast.NONE);
+        }
+        if self.is(src, "(") {
+            self.bump(src);
+            let inner: usize = try self.expr(src);
+            let close: bool = self.want(src, ")");
+            return inner;
+        }
+        self.errors = self.errors + 1;
+        self.bump(src);
+        return try self.add(ast.Shape.Error, t, ast.NONE, ast.NONE);
+    }
+}

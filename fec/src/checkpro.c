@@ -79,7 +79,6 @@ void declare_unit(FeCheck *c)
             fe_type_declare_enum(&c->types,n);
     for (n=c->ast->root ? c->ast->root->children : 0;n;n=n->next)
         if (n->kind==FE_N_ERROR_DECL) fe_type_declare_error(&c->types,n);
-    check_type_cycles(c);
 }
 
 /* The unit's top-level names, in a scope of their own so that another unit
@@ -166,6 +165,9 @@ int fe_check_program(FeCheck *c)
     s.fn_node=0;
     fe_own_liveness_init(&s.liveness,&c->arena);
     for (u=0;u<c->build->count;++u) { enter_unit(c,u); declare_unit(c); }
+    /* Only now: a field may name a type in a unit that had not declared it
+       yet, and resolving it early would freeze the wrong answer in place. */
+    for (u=0;u<c->build->count;++u) { enter_unit(c,u); check_type_cycles(c); }
     fe_type_layout_all(&c->types);
     for (u=0;u<c->build->count;++u) {
         enter_unit(c,u);

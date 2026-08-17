@@ -1,0 +1,107 @@
+// EXIT:0
+// OUTPUT:unit demo
+// OUTPUT:fn answer @2
+// OUTPUT:  let n = (+ 1 (* 2 3))
+// OUTPUT:  return n
+// OUTPUT:fn greet @3
+// OUTPUT:  let s = "hi"
+// OUTPUT:  return
+// OUTPUT:fn muddle @4
+// OUTPUT:  let x = <error>
+// OUTPUT:nodes 17 errors 2
+// OUTPUT:balanced
+unit tree;
+
+import std.io;
+import std.sys;
+import tok;
+import ast;
+import parse;
+
+// The Ferro parser, written in Ferro.
+//
+// The lexer next to this file showed that a token can say where it came from
+// instead of holding the text. A tree is the same idea one level up: a node
+// cannot hold `^Node` children -- it has several and owns none of them once --
+// and R4 keeps `&Node` out of aggregate storage. So the parser owns one array
+// of nodes and every child is an index into it.
+//
+// Printing the expressions back in prefix form is the point of the test: it is
+// the only way to see that `1 + 2 * 3` bound the way the grammar says.
+
+const SOURCE: str = "unit demo;\nfn answer() { let n = 1 + 2 * 3; return n; }\nfn greet() { let s = \"hi\"; return; }\nfn muddle() { let x = ; }\n";
+
+fn show_expr(p: &parse.Parser, src: []u8, i: usize) -> void {
+    if i == ast.NONE { return; }
+    let n: ast.Node = p.node(i);
+    match n.shape {
+        Binary => {
+            @print("({} ", src[n.from..n.from + n.len]);
+            show_expr(p, src, n.a);
+            @print(" ");
+            show_expr(p, src, n.b);
+            @print(")");
+        }
+        Error => { @print("<error>"); }
+        _ => { @print("{}", src[n.from..n.from + n.len]); }
+    }
+    return;
+}
+
+fn show_stmt(p: &parse.Parser, src: []u8, i: usize) -> void {
+    let n: ast.Node = p.node(i);
+    match n.shape {
+        Let => {
+            @print("  let {} = ", src[n.from..n.from + n.len]);
+            show_expr(p, src, n.b);
+            @print("\n");
+        }
+        Return => {
+            if n.a == ast.NONE { @print("  return\n"); }
+            else {
+                @print("  return ");
+                show_expr(p, src, n.a);
+                @print("\n");
+            }
+        }
+        _ => { @print("  <error>\n"); }
+    }
+    return;
+}
+
+fn show_item(p: &parse.Parser, src: []u8, i: usize) -> void {
+    let n: ast.Node = p.node(i);
+    match n.shape {
+        Fn => {
+            @print("fn {} @{}\n", src[n.from..n.from + n.len], n.line);
+            var s: usize = n.b;
+            while s != ast.NONE {
+                show_stmt(p, src, s);
+                s = p.node(s).next;
+            }
+        }
+        _ => { @print("  <error>\n"); }
+    }
+    return;
+}
+
+fn run() -> !void {
+    var p: parse.Parser = try parse.Parser.on(SOURCE);
+    let root: usize = try p.unit_decl(SOURCE);
+    let head: ast.Node = p.node(root);
+    @print("unit {}\n", SOURCE[head.from..head.from + head.len]);
+    var it: usize = head.a;
+    while it != ast.NONE {
+        show_item(&p, SOURCE, it);
+        it = p.node(it).next;
+    }
+    @print("nodes {} errors {}\n", p.count(), p.errors);
+    return;
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("out of memory\n"); return 1; };
+    if sys.allocs() == sys.frees() { @print("balanced\n"); }
+    else { @print("leaked {}\n", sys.allocs() - sys.frees()); }
+    return 0;
+}

@@ -47,6 +47,7 @@ static FeType *new_type(FeTypeCtx *ctx, const char *name, FeTypeKind kind)
     t->next = ctx->types;
     t->emit_state = 0;
     t->cycle_state = 0;
+    t->layout_state = 0;
     ctx->types = t;
     return t;
 }
@@ -61,6 +62,8 @@ void fe_types_init(FeTypeCtx *ctx, FeArena *arena, unsigned pointer_bits)
     ctx->param_count = 0;
     ctx->instantiate = 0;
     ctx->instantiate_owner = 0;
+    ctx->enter_decl = 0;
+    ctx->leave_decl = 0;
 }
 
 /* Does this type answer to `name` for someone checking `unit`? A type with no
@@ -452,6 +455,26 @@ unsigned fe_type_align(const FeType *t)
     return t && t->align ? t->align : 1U;
 }
 
+/* Resolve this type's fields where they were written. Without the callback
+   installed -- or for a type nobody declared -- everything stays where it is,
+   which is what the non-checking users of this layer want. */
+static int enter_decl_unit(FeTypeCtx *ctx, const char *unit, const char **was)
+{
+    *was = ctx->unit_name;
+    if (!ctx->enter_decl || !unit) return -1;
+    return ctx->enter_decl(ctx->instantiate_owner, unit);
+}
+
+/* Put back both halves: the unit the checker was in, and the name this layer
+   was interning under -- an instantiation moves the second without the
+   first, so restoring one is not restoring the other. */
+static void leave_decl_unit(FeTypeCtx *ctx, int back, const char *was)
+{
+    if (back >= 0 && ctx->leave_decl)
+        ctx->leave_decl(ctx->instantiate_owner, back);
+    ctx->unit_name = was;
+}
+
 static void layout_type(FeTypeCtx *ctx, FeType *t)
 {
     unsigned i;
@@ -460,14 +483,14 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
     unsigned long max_size;
     unsigned max_align;
     if (!t || t->size) return;
-    if (t->cycle_state == 1) {
+    if (t->layout_state == 1) {
         t->size = 1;
         t->align = 1;
         return;
     }
-    t->cycle_state = 1;
+    t->layout_state = 1;
     if (t->kind == FE_TYPE_VOID || t->kind == FE_TYPE_UNKNOWN ||
-        t->kind == FE_TYPE_ERROR) { t->size = 0; t->align = 1; t->cycle_state = 2; return; }
+        t->kind == FE_TYPE_ERROR) { t->size = 0; t->align = 1; t->layout_state = 2; return; }
     if (t->kind == FE_TYPE_ERROR_UNION) {
         if (t->error_value && t->error_value->kind != FE_TYPE_VOID) {
             layout_type(ctx,t->error_value);
@@ -478,7 +501,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             t->size=2;
             t->align=2U;
         }
-        t->cycle_state = 2; return;
+        t->layout_state = 2; return;
     }
     if (t->kind == FE_TYPE_OPTIONAL) {
         layout_type(ctx,t->elem);
@@ -490,44 +513,48 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
             t->size=round_up(1UL,t->align)+fe_type_size(t->elem);
             t->size=round_up(t->size,t->align);
         }
-        t->cycle_state=2; return;
+        t->layout_state=2; return;
     }
     if (t->kind == FE_TYPE_BOOL || t->kind == FE_TYPE_CHAR) {
-        t->size = 1; t->align = 1; t->cycle_state = 2; return;
+        t->size = 1; t->align = 1; t->layout_state = 2; return;
     }
     if (t->kind == FE_TYPE_INT) {
         t->size = (t->bits + 7U) / 8U;
         t->align = t->size;
         if (t->size > 4UL) t->size = 4UL;
-        t->cycle_state = 2; return;
+        t->layout_state = 2; return;
     }
     if (t->kind == FE_TYPE_REF || t->kind == FE_TYPE_RAW) {
         t->size = FE_PTR_SIZE;
         t->align = FE_PTR_ALIGN;
-        t->cycle_state = 2; return;
+        t->layout_state = 2; return;
     }
     if (t->kind == FE_TYPE_OWNED) {
         t->size = t->elem && t->elem->kind==FE_TYPE_SLICE ?
             2UL * FE_PTR_SIZE : FE_PTR_SIZE;
         t->align = FE_PTR_ALIGN;
-        t->cycle_state = 2; return;
+        t->layout_state = 2; return;
     }
     if (t->kind == FE_TYPE_SLICE || t->kind == FE_TYPE_STR) {
         t->size = 2UL * FE_PTR_SIZE;
         t->align = FE_PTR_ALIGN;
-        t->cycle_state = 2; return;
+        t->layout_state = 2; return;
     }
     if (t->kind == FE_TYPE_ARRAY) {
         layout_type(ctx, t->elem);
         t->align = t->packed ? 1U : fe_type_align(t->elem);
         t->size = t->length * fe_type_size(t->elem);
-        t->cycle_state = 2; return;
+        t->layout_state = 2; return;
     }
     if (t->kind == FE_TYPE_STRUCT) {
-        off = 0; max_align = 1;
-        for (i = 0; i < t->field_count; ++i) {
+        const char *was;
+        int back = enter_decl_unit(ctx, t->unit, &was);
+        for (i = 0; i < t->field_count; ++i)
             if (!t->fields[i].type && t->fields[i].ast_node)
                 t->fields[i].type = fe_type_from_ast(ctx, t->fields[i].ast_node->a);
+        leave_decl_unit(ctx, back, was);
+        off = 0; max_align = 1;
+        for (i = 0; i < t->field_count; ++i) {
             layout_type(ctx, t->fields[i].type);
             align = t->packed ? 1U : fe_type_align(t->fields[i].type);
             if (align > max_align) max_align = align;
@@ -537,18 +564,25 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
         }
         t->align = max_align;
         t->size = round_up(off, max_align);
-        t->cycle_state = 2;
+        t->layout_state = 2;
         return;
     }
     if (t->kind == FE_TYPE_ENUM) {
+        const char *was;
+        int back = enter_decl_unit(ctx, t->unit, &was);
+        for (i = 0; i < t->variant_count; ++i) {
+            unsigned j;
+            for (j = 0; j < t->variants[i].field_count; ++j)
+                if (!t->variants[i].fields[j].type && t->variants[i].fields[j].ast_node)
+                    t->variants[i].fields[j].type = fe_type_from_ast(
+                        ctx, t->variants[i].fields[j].ast_node->a);
+        }
+        leave_decl_unit(ctx, back, was);
         max_size = 0; max_align = 1;
         for (i = 0; i < t->variant_count; ++i) {
             unsigned j;
             off = 0;
             for (j = 0; j < t->variants[i].field_count; ++j) {
-                if (!t->variants[i].fields[j].type && t->variants[i].fields[j].ast_node)
-                    t->variants[i].fields[j].type = fe_type_from_ast(
-                        ctx, t->variants[i].fields[j].ast_node->a);
                 layout_type(ctx, t->variants[i].fields[j].type);
                 if (fe_type_align(t->variants[i].fields[j].type) > max_align)
                     max_align = fe_type_align(t->variants[i].fields[j].type);
@@ -564,7 +598,7 @@ static void layout_type(FeTypeCtx *ctx, FeType *t)
         off = round_up(t->bits / 8U, max_align);
         t->size = round_up(off + max_size, max_align);
         t->align = max_align;
-        t->cycle_state = 2;
+        t->layout_state = 2;
     }
 }
 

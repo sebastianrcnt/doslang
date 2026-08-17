@@ -10,7 +10,8 @@ import std.sys;
 /// SPEC R11 answers recursive and graph-shaped data with an arena that owns
 /// the values and integer handles that reference them. This is that arena. A
 /// handle is an offset, so it stays valid while the arena does, and comparing
-/// two handles is comparing two numbers.
+/// two handles is comparing two numbers. The block itself is owned, so nothing
+/// here says how to let go of it -- R1 already does.
 pub struct Arena {
     bytes: ^[]mut u8,
     used: usize,
@@ -56,5 +57,4 @@ pub struct Arena {
     /// that is the trade an arena makes.
     pub fn reset(self: &mut Self) -> void { self.used = 0; }
 
-    pub fn drop(self: &mut Self) -> void { mem.destroy(self.bytes); }
 }
