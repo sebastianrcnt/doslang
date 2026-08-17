@@ -1016,7 +1016,8 @@ void check_stmt(FeCheckerState *s, FeNode *n)
                  expected->error_value &&
                  expected->error_value->kind==FE_TYPE_VOID) { }
         else if (!fe_type_equal(expected,stored) &&
-                 !m7_actual_compatible(expected,stored,n->a))
+                 !m7_actual_compatible(expected,stored,n->a) &&
+                 !return_weakens(expected,stored))
             err(s->c,n->loc,"return type mismatch");
         if (n->a) mark_moved(s,n->a,actual);
         break;

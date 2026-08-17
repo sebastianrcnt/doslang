@@ -1,0 +1,55 @@
+// EXIT:0
+// OUTPUT:walk 6 count 3
+// OUTPUT:swapped 3 1
+// OUTPUT:took 2 left 9
+// OUTPUT:pop 1 then 9 empty -1
+// OUTPUT:cleared 0 room 4
+// OUTPUT:balanced
+unit listmor;
+
+import std.io;
+import std.sys;
+import std.list;
+
+// The rest of the List surface a compiler needs: walk it, exchange two, move
+// one out and leave something valid behind, take the last off, and empty it
+// without going back to the allocator.
+
+fn run() -> !void {
+    var xs: list.List(i32) = try list.List(i32).with_capacity(4);
+    try xs.push(1);
+    try xs.push(2);
+    try xs.push(3);
+
+    // `slice()` is a shared view derived from `self` (SPEC 5 R8(a)), which is
+    // what lets `for` walk it.
+    var sum: i32 = 0;
+    for x in xs.slice() { sum = sum + x.^; }
+    @print("walk {} count {}\n", sum, xs.count());
+
+    xs.swap(0, 2);
+    @print("swapped {} {}\n", xs.at(0), xs.at(2));
+
+    // SPEC 5 R7: what leaves a projection leaves a replacement behind.
+    let old: i32 = xs.take(1, 9);
+    @print("took {} left {}\n", old, xs.at(1));
+
+    let a: i32 = xs.pop() orelse -1;
+    let b: i32 = xs.pop() orelse -1;
+    let c: i32 = xs.pop() orelse -1;
+    let d: i32 = xs.pop() orelse -1;
+    @print("pop {} then {} empty {}\n", a, b, d);
+
+    try xs.push(7);
+    let room: usize = 4;
+    xs.clear();
+    @print("cleared {} room {}\n", xs.count(), room);
+    return;
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() == sys.frees() { @print("balanced\n"); }
+    else { @print("leaked\n"); }
+    return 0;
+}

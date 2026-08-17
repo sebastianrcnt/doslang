@@ -32,6 +32,42 @@ pub struct List(T) {
         return;
     }
 
+    /// Take the last one off. Nothing to take is `null`, not a trap.
+    pub fn pop(self: &mut Self) -> ?T {
+        if self.len == 0 { return null; }
+        self.len = self.len - 1;
+        return self.items.^[self.len];
+    }
+
+    /// Move one out and leave `replacement` where it was (SPEC 5 R7). This is
+    /// how a `T` that owns something leaves the list without the list ending
+    /// up with a hole in it.
+    pub fn take(self: &mut Self, i: usize, replacement: T) -> T {
+        return mem.replace(&mut self.items.^[i], replacement);
+    }
+
+    /// Exchange two elements.
+    pub fn swap(self: &mut Self, i: usize, j: usize) -> void {
+        if i == j { return; }
+        let first: T = self.items.^[i];
+        let second: T = mem.replace(&mut self.items.^[j], first);
+        self.items.^[i] = second;
+        return;
+    }
+
+    /// The elements as a slice, so `for x in xs.slice()` walks them. R8(a):
+    /// derived from `self`, so the borrow belongs to the caller.
+    pub fn slice(self: &Self) -> []T {
+        return self.items.^[0..self.len];
+    }
+
+    pub fn slice_mut(self: &mut Self) -> []mut T {
+        return self.items.^[0..self.len];
+    }
+
+    /// Forget the elements and keep the buffer.
+    pub fn clear(self: &mut Self) -> void { self.len = 0; return; }
+
     /// Move to a buffer twice the size. Kept apart from `push` because the
     /// borrow that hands over the old buffer must not be live while the old
     /// buffer is still being read (SPEC 5 R6).

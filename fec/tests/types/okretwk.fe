@@ -1,0 +1,12 @@
+unit okretwk;
+
+// R8 이 파생을 허용한 뒤라면 가진 것보다 적게 넘기는 것은 안전하다.
+
+struct Buf {
+    items: ^[]mut i32,
+
+    fn all(self: &Self) -> []i32 { return self.items.^[0..2]; }
+    fn all_mut(self: &mut Self) -> []mut i32 { return self.items.^[0..2]; }
+}
+
+fn one(p: &mut i32) -> &i32 { return p; }

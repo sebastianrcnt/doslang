@@ -1,0 +1,8 @@
+// ERROR:6:cannot rebind a mut borrow
+unit badletwk;
+
+// 반환은 약화해도 `let` 은 여전히 안 된다 (SPEC §4.2).
+fn bad(m: &mut i32) -> i32 {
+    let s: &i32 = m;
+    return s.^;
+}

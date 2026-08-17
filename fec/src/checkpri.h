@@ -95,6 +95,7 @@ int in_own_drop(FeCheckerState *s, FeNode *n);
 void mark_moved(FeCheckerState *s, FeNode *n, FeType *t);
 int compatible(FeType *want, FeType *got, FeNode *value);
 int call_reborrows(const FeType *param, const FeType *arg);
+int return_weakens(const FeType *want, const FeType *got);
 int explicit_castable(FeType *a, FeType *b);
 FeType *node_type(FeCheck *c, FeNode *n);
 char *unit_cname(FeCheck *c, const char *name);

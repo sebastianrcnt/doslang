@@ -482,6 +482,7 @@ void check_stmt_core(FeCheckerState *s, FeNode *n)
         mark_moved(s,n->a,b);
         if (known(b) && b->kind == FE_TYPE_VOID && s->ret->kind != FE_TYPE_VOID)
             err(c, n->loc, "void expression returned from value function");
+        else if (return_weakens(s->ret,b)) { }
         else if (known(s->ret) && known(b) && !fe_type_equal(s->ret, b) &&
                  b->kind != FE_TYPE_UNKNOWN &&
                  !compatible(s->ret,b,n->a))

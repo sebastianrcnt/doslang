@@ -120,6 +120,23 @@ int call_reborrows(const FeType *param, const FeType *arg)
     return 0;
 }
 
+/* Handing back less than you hold. R8 says a returned reference has to be
+   derived from a parameter or a static; given that, returning the shared form
+   of an exclusive one is safe -- the caller cannot do anything with `[]T` that
+   it could not do with `[]mut T`. Without this a method on `&Self` cannot hand
+   out a read-only view of what it owns. */
+int return_weakens(const FeType *want, const FeType *got)
+{
+    if (!want || !got) return 0;
+    if (want->kind==FE_TYPE_SLICE && got->kind==FE_TYPE_SLICE &&
+        !want->ref_mut && got->ref_mut)
+        return fe_type_equal(want->elem,got->elem);
+    if (want->kind==FE_TYPE_REF && got->kind==FE_TYPE_REF &&
+        !want->ref_mut && got->ref_mut)
+        return fe_type_equal(want->elem,got->elem);
+    return 0;
+}
+
 int explicit_castable(FeType *a, FeType *b)
 {
     if (!a || !b) return 0;
