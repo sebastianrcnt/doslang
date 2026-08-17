@@ -1,0 +1,10 @@
+// ERROR:8:cannot return from inside defer
+unit bdefret;
+
+// A deferred block runs during scope cleanup, on the way out of a function
+// that has already decided what it returns.
+
+fn bad() -> i32 {
+    defer { return 1; }
+    return 0;
+}

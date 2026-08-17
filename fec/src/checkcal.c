@@ -986,6 +986,11 @@ void check_stmt(FeCheckerState *s, FeNode *n)
         m7_check_match_stmt(s,n);
         break;
     case FE_N_RETURN:
+        /* A deferred block runs during scope cleanup, on the way out of a
+           function that has already decided what it returns. There is nothing
+           for a `return` in there to mean. */
+        if (s->defer_depth != 0)
+            err(s->c, n->loc, "cannot return from inside defer");
         expected=s->ret;
         if (n->a)
             stored=m7_check_expected(s,n->a,expected);

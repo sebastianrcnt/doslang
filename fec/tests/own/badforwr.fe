@@ -1,0 +1,12 @@
+// ERROR:9:borrow
+unit badforwr;
+
+// Walking a container borrows it: the item is a reference into it, so writing
+// the container underneath moves what that reference points at.
+
+fn bad(xs: []mut i32) -> void {
+    for x in xs {
+        xs[0] = 9;
+    }
+    return;
+}

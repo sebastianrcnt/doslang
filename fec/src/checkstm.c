@@ -101,7 +101,18 @@ void check_for(FeCheckerState *s, FeNode *n)
                        item_cname,n);
             n->cname=item_cname;
         }
+        /* Walking a container borrows it for the length of the walk: the
+           item is a reference into it, so writing the container underneath
+           would move what that reference points at (SPEC 5 R6). */
+        if (iter_sym)
+            fe_own_access(s->c->diags,&iter_sym->own,
+                          iter_mut ? FE_OWN_BORROW_MUT : FE_OWN_BORROW_SHARED,
+                          n->loc);
         check_stmt(s,n->b);
+        if (iter_sym) {
+            if (iter_mut) fe_own_release_exclusive(&iter_sym->own);
+            else fe_own_release_shared(&iter_sym->own);
+        }
         s->scope=old;
         return;
     }
@@ -459,6 +470,11 @@ void check_stmt_core(FeCheckerState *s, FeNode *n)
         if (!s->loop_depth) err(c,n->loc,"break or continue outside loop");
         break;
     case FE_N_RETURN:
+        /* A deferred block runs during scope cleanup, on the way out of a
+           function that has already decided what it returns. There is nothing
+           for a `return` in there to mean. */
+        if (s->defer_depth != 0)
+            err(c, n->loc, "cannot return from inside defer");
         b = n->a ? check_expr(s, n->a) : fe_type_intern(&c->types, "void");
         if (s->ret && fe_own_is_reference_like(s->ret) &&
             !own_return_from_allowed_root(s,n->a))

@@ -1,0 +1,11 @@
+unit okforrd;
+
+// A shared walk still allows reading -- of the item and of the container.
+
+fn ok(xs: []i32) -> i32 {
+    var sum: i32 = 0;
+    for x in xs {
+        sum = sum + x.^ + (xs.n as i32);
+    }
+    return sum;
+}
