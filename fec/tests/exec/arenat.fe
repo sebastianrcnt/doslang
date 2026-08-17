@@ -1,0 +1,81 @@
+// EXIT:0
+// OUTPUT:alloc 10 20 30 len 3
+// OUTPUT:freed len 2 stale -1 live 30
+// OUTPUT:reused index 1 old -1 new 99
+// OUTPUT:swap 99 10
+// OUTPUT:set 77 take 77 after 5
+// OUTPUT:reset len 0 before -1
+// OUTPUT:other -1
+// OUTPUT:full yes
+// OUTPUT:balanced
+unit arenat;
+
+import std.io;
+import std.sys;
+import std.arena;
+
+// SPEC R11: the arena owns the values and a handle is a number. The point of
+// the number carrying a generation is that using it after the slot was given
+// back answers `null` rather than whatever moved in afterwards.
+
+fn run() -> !void {
+    var a: arena.Arena(i32) = try arena.Arena(i32).with_capacity(1, 3);
+    let x: arena.Handle(i32) = try a.alloc(10);
+    let y: arena.Handle(i32) = try a.alloc(20);
+    let z: arena.Handle(i32) = try a.alloc(30);
+    @print("alloc {} {} {} len {}\n", a.get(x) orelse -1, a.get(y) orelse -1,
+           a.get(z) orelse -1, a.len());
+
+    // Give one back. Its handle stops meaning anything; the others do not.
+    let gone: bool = a.free(y);
+    @print("freed len {} stale {} live {}\n", a.len(), a.get(y) orelse -1,
+           a.get(z) orelse -1);
+
+    // The slot comes back on the free list, and the old handle still does not
+    // match the new occupant.
+    let again: arena.Handle(i32) = try a.alloc(99);
+    @print("reused index {} old {} new {}\n", again.index,
+           a.get(y) orelse -1, a.get(again) orelse -1);
+
+    let ok: bool = a.swap(x, again);
+    @print("swap {} {}\n", a.get(x) orelse -1, a.get(again) orelse -1);
+
+    let wrote: bool = a.set(x, 77);
+    let took: i32 = a.take(x, 5) orelse -1;
+    @print("set {} take {} after {}\n", 77, took, a.get(x) orelse -1);
+
+    // Reset moves the epoch, so every handle made before it is stale without
+    // a single slot being touched.
+    a.reset();
+    @print("reset len {} before {}\n", a.len(), a.get(x) orelse -1);
+
+    // A handle from one arena means nothing to another.
+    var b: arena.Arena(i32) = try arena.Arena(i32).with_capacity(2, 2);
+    let h: arena.Handle(i32) = try b.alloc(41);
+    @print("other {}\n", a.get(h) orelse -1);
+
+    // Running out of room is an error, not a trap.
+    var full: bool = false;
+    fill(&mut b) catch |e| { full = true; };
+    @print("full {}\n", yesno(full));
+    return;
+}
+
+/// Two more into an arena that has room for one.
+fn fill(b: &mut arena.Arena(i32)) -> !void {
+    let p: arena.Handle(i32) = try b.alloc(1);
+    let q: arena.Handle(i32) = try b.alloc(2);
+    return;
+}
+
+fn yesno(b: bool) -> []u8 {
+    if b { return "yes"; }
+    return "no";
+}
+
+fn main() -> i32 {
+    run() catch |e| { @print("failed\n"); return 1; };
+    if sys.allocs() == sys.frees() { @print("balanced\n"); }
+    else { @print("leaked\n"); }
+    return 0;
+}

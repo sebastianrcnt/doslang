@@ -445,7 +445,15 @@ FeType *method_type(FeCheck *c, FeNode *node, FeType *owner)
        (strcmp(node->text,"&")==0 || strcmp(node->text,"&mut")==0) &&
        node->a && node->a->text && strcmp(node->a->text,"Self")==0)
         return fe_type_ref(&c->types,owner,strcmp(node->text,"&mut")==0);
-    return node_type(c,node);
+    /* The rest of a method's signature is written in the unit that declared
+       the type, so a name in it means what that unit means by it and not what
+       the caller happens to mean. */
+    {
+        int back=enter_declaring_unit(c,owner ? owner->unit : 0);
+        FeType *t=node_type(c,node);
+        if (back>=0) enter_unit(c,(unsigned)back);
+        return t;
+    }
 }
 
 

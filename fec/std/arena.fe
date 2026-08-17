@@ -1,0 +1,166 @@
+unit std.arena;
+
+import std.mem;
+
+// An arena of `T` reached by handle, and the handle that reaches it.
+//
+// This is the shape SPEC R11 asks for when data points at data: the arena owns
+// the values and a handle is a number, so nothing here is a reference and R4
+// has nothing to object to. `mem.Arena` next door is a different structure --
+// a block of bytes handed out by offset, for data whose size varies. This one
+// holds a fixed `T` per slot and can take slots back.
+//
+// A handle is checked, not trusted. It carries the generation of the slot it
+// was made from, the epoch of the arena, and which arena it came from, so
+// using it after the slot was freed, after the arena was reset, or against
+// some other arena all answer `null` rather than a neighbouring value.
+//
+// `T` is expected to be Copy -- integers, handles, small records. `get`
+// answers with a copy, which is the whole reason a borrow never outlives the
+// statement it was taken in. For a `T` that owns something, `take` moves it
+// out and leaves a replacement (SPEC 5 R7).
+
+/// No slot. Every real index is smaller.
+pub const NONE: u32 = 4294967295;
+
+/// Eight bytes, and the same eight in every build: `--no-checks` skips the
+/// comparison, never the layout. A handle that changed shape with a flag
+/// would not survive being written down.
+pub struct Handle(T) {
+    pub index: u32,
+    /// `arena 8 | epoch 8 | generation 16`
+    pub tag: u32,
+
+    pub fn none() -> Self { return Self{ index: NONE, tag: 0 }; }
+
+    pub fn is_none(self: &Self) -> bool { return self.index == NONE; }
+
+    pub fn same(self: &Self, other: Handle(T)) -> bool {
+        return self.index == other.index and self.tag == other.tag;
+    }
+}
+
+struct Slot(T) {
+    value: T,
+    /// Bumped every time the slot is freed, so old handles stop matching.
+    gen: u32,
+    live: bool,
+    /// The next slot on the free list, or `NONE`.
+    next: u32,
+}
+
+pub struct Arena(T) {
+    slots: ^[]mut Slot(T),
+    /// How many slots have ever been handed out; slots past this are untouched.
+    high: usize,
+    /// How many are live right now.
+    count: usize,
+    free: u32,
+    id: u32,
+    epoch: u32,
+
+    /// `id` tells one arena from another in a handle. A program with a handful
+    /// of arenas numbers them itself; eight bits is more than that needs.
+    pub fn with_capacity(id: u32, n: usize) -> !Self {
+        let room: ^[]mut Slot(T) = try mem.alloc_slice(Slot(T), n);
+        return Self{ slots: room, high: 0, count: 0, free: NONE,
+                     id: id % 256, epoch: 0 };
+    }
+
+    pub fn len(self: &Self) -> usize { return self.count; }
+
+    pub fn room(self: &Self) -> usize { return self.slots.^.n; }
+
+    fn tag_of(self: &Self, gen: u32) -> u32 {
+        return (self.id * 16777216) + (self.epoch * 65536) + gen;
+    }
+
+    /// Is this handle still talking about a live slot in this arena?
+    pub fn valid(self: &Self, h: Handle(T)) -> bool {
+        if h.index == NONE { return false; }
+        if (h.index as usize) >= self.high { return false; }
+        if not self.slots.^[h.index as usize].live { return false; }
+        return self.slots.^[h.index as usize].gen == h.tag;
+    }
+
+    pub fn alloc(self: &mut Self, v: T) -> !Handle(T) {
+        var at: usize = 0;
+        if self.free != NONE {
+            at = self.free as usize;
+            self.free = self.slots.^[at].next;
+        } else {
+            if self.high == self.slots.^.n { return error.OutOfMemory; }
+            at = self.high;
+            self.high = self.high + 1;
+            self.slots.^[at].gen = self.tag_of(0);
+        }
+        self.slots.^[at].value = v;
+        self.slots.^[at].live = true;
+        self.slots.^[at].next = NONE;
+        self.count = self.count + 1;
+        return Handle(T){ index: at as u32, tag: self.slots.^[at].gen };
+    }
+
+    /// A copy of what the slot holds, or nothing when the handle is stale.
+    /// The borrow of the arena ends with this statement, which is what lets a
+    /// caller read one slot while writing another.
+    pub fn get(self: &Self, h: Handle(T)) -> ?T {
+        if not self.valid(h) { return null; }
+        return self.slots.^[h.index as usize].value;
+    }
+
+    /// Overwrite in place. Says whether the handle was good.
+    pub fn set(self: &mut Self, h: Handle(T), v: T) -> bool {
+        if not self.valid(h) { return false; }
+        self.slots.^[h.index as usize].value = v;
+        return true;
+    }
+
+    /// Move the value out and leave `replacement` behind (SPEC 5 R7). This is
+    /// how a `T` that owns something leaves the arena.
+    pub fn take(self: &mut Self, h: Handle(T), replacement: T) -> ?T {
+        if not self.valid(h) { return null; }
+        return mem.replace(&mut self.slots.^[h.index as usize].value,
+                           replacement);
+    }
+
+    /// Exchange what two slots hold. Both handles have to be good.
+    pub fn swap(self: &mut Self, a: Handle(T), b: Handle(T)) -> bool {
+        if not self.valid(a) { return false; }
+        if not self.valid(b) { return false; }
+        let ai: usize = a.index as usize;
+        let bi: usize = b.index as usize;
+        if ai == bi { return true; }
+        let first: T = self.slots.^[ai].value;
+        let second: T = mem.replace(&mut self.slots.^[bi].value, first);
+        self.slots.^[ai].value = second;
+        return true;
+    }
+
+    /// Give the slot back. Every handle to it stops matching. A slot whose
+    /// generation has run out is retired rather than reused -- wrapping around
+    /// would make an old handle valid again, which is the one thing the
+    /// generation is there to prevent.
+    pub fn free(self: &mut Self, h: Handle(T)) -> bool {
+        if not self.valid(h) { return false; }
+        let at: usize = h.index as usize;
+        self.slots.^[at].live = false;
+        self.count = self.count - 1;
+        let gen: u32 = self.slots.^[at].gen % 65536;
+        if gen == 65535 { return true; }
+        self.slots.^[at].gen = self.slots.^[at].gen + 1;
+        self.slots.^[at].next = self.free;
+        self.free = h.index;
+        return true;
+    }
+
+    /// Forget everything at once. The epoch moves, so every handle made before
+    /// now is stale without having to touch a single slot.
+    pub fn reset(self: &mut Self) -> void {
+        self.epoch = (self.epoch + 1) % 256;
+        self.high = 0;
+        self.count = 0;
+        self.free = NONE;
+        return;
+    }
+}
